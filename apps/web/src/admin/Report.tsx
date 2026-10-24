@@ -6,6 +6,9 @@ interface Daily {
   sales_count: number;
   total_minor: number;
   discount_minor: number;
+  returns_count: number;
+  returns_minor: number;
+  customerPayments: Record<string, number>;
   gross_profit_minor: number;
   byMethod: Record<string, number>;
   byCashier: { name: string; sales_count: number; total_minor: number }[];
@@ -35,12 +38,15 @@ export function Report({ call, storeId }: { call: Call; storeId: string }) {
       {r && (
         <>
           <div className="kpis">
-            <div className="kpi"><span className="muted">المبيعات</span><b className="num">{formatMoney(r.total_minor)}</b></div>
+            <div className="kpi"><span className="muted">صافي المبيعات</span><b className="num">{formatMoney(r.total_minor)}</b></div>
             <div className="kpi"><span className="muted">عدد الفواتير</span><b className="num">{r.sales_count}</b></div>
             <div className="kpi"><span className="muted">متوسط الفاتورة</span><b className="num">{formatMoney(r.sales_count ? Math.round(r.total_minor / r.sales_count) : 0)}</b></div>
             <div className="kpi"><span className="muted">الربح التقريبي</span><b className="num">{formatMoney(r.gross_profit_minor)}</b></div>
             <div className="kpi"><span className="muted">كاش</span><b className="num">{formatMoney(r.byMethod.cash ?? 0)}</b></div>
             <div className="kpi"><span className="muted">بطاقة</span><b className="num">{formatMoney(r.byMethod.card ?? 0)}</b></div>
+            <div className="kpi"><span className="muted">آجل</span><b className="num">{formatMoney(r.byMethod.credit ?? 0)}</b></div>
+            <div className="kpi"><span className="muted">المرتجعات ({r.returns_count})</span><b className="num">{formatMoney(r.returns_minor)}</b></div>
+            <div className="kpi"><span className="muted">تسديد ديون</span><b className="num">{formatMoney((r.customerPayments.cash ?? 0) + (r.customerPayments.card ?? 0))}</b></div>
             <div className="kpi"><span className="muted">الخصومات</span><b className="num">{formatMoney(r.discount_minor)}</b></div>
           </div>
           <div className="card stack">

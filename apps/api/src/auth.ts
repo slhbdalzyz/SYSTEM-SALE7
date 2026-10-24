@@ -1,3 +1,4 @@
+import bcrypt from "bcryptjs";
 import { createHash, randomBytes } from "node:crypto";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { Role } from "@pos/shared";
@@ -49,4 +50,18 @@ export function requireRole(...roles: Role[]) {
 export async function requireDevice(req: FastifyRequest) {
   await authenticate(req);
   if (!req.user.did || !req.user.sid) throw new HttpError(403, "هذه العملية تحتاج جهاز كاشير معتمد");
+}
+
+/** Checks a manager's PIN typed on a cashier's device. Returns the approver's id. */
+export async function verifyApproval(
+  db: { query: (q: string, a: unknown[]) => Promise<{ rows: { id: string; pin_hash: string | null; role: Role }[] }> },
+  tenantId: string,
+  approval: { userId: string; pin: string } | undefined,
+): Promise<string> {
+  if (!approval) throw new HttpError(403, "تحتاج موافقة المدير");
+  const u = (await db.query(`SELECT id, pin_hash, role FROM users WHERE id = $1 AND tenant_id = $2 AND active`, [approval.userId, tenantId])).rows[0];
+  if (!u || !["owner", "manager"].includes(u.role) || !u.pin_hash || !(await bcrypt.compare(approval.pin, u.pin_hash))) {
+    throw new HttpError(403, "موافقة المدير غير صحيحة");
+  }
+  return u.id;
 }

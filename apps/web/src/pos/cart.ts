@@ -46,7 +46,7 @@ export function lineTotal(l: CartLine) {
 }
 
 export function toSaleInput(
-  a: { id: string; number: string; shiftId: string | null; lines: CartLine[]; invoiceDiscountMinor: number; payments: SaleInput["payments"] },
+  a: { id: string; number: string; shiftId: string | null; lines: CartLine[]; invoiceDiscountMinor: number; payments: SaleInput["payments"]; customerId?: string | null },
 ): SaleInput {
   const totals = computeTotals(a.lines, a.invoiceDiscountMinor);
   return {
@@ -66,5 +66,6 @@ export function toSaleInput(
     invoiceDiscountMinor: a.invoiceDiscountMinor,
     payments: a.payments,
     totalMinor: totals.total,
+    customerId: a.customerId ?? null,
   };
 }

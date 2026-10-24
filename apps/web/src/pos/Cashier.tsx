@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { formatMoney, formatQty, type CatalogProduct, type PaymentMethod } from "@pos/shared";
+import { formatMoney, formatQty, type CatalogCustomer, type CatalogProduct, type PaymentMethod } from "@pos/shared";
 import { api } from "../api";
 import { db, getMeta, nextInvoiceNumber, setMeta, type HeldCart, type LocalShift } from "../localdb";
 import { findByCode, searchProducts } from "../lookup";
@@ -9,6 +9,8 @@ import type { Screen } from "../App";
 import { addLine, cartTotals, lineFor, lineTotal, toSaleInput, type CartLine } from "./cart";
 import { AmountDialog, Modal, PayDialog } from "./dialogs";
 import { Receipt, type ReceiptData } from "./Receipt";
+import { CustomerDialog } from "./CustomerDialog";
+import { ReturnDialog, type ReturnDone } from "./ReturnDialog";
 
 type Dialog =
   | { kind: "pay" }
@@ -19,6 +21,8 @@ type Dialog =
   | { kind: "openShift" }
   | { kind: "closeShift"; expected: number }
   | { kind: "held"; carts: HeldCart[] }
+  | { kind: "customer" }
+  | { kind: "return" }
   | null;
 
 export function Cashier({ go }: { go: (s: Screen) => void }) {
@@ -35,6 +39,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   const [cashierName, setCashierName] = useState("");
   const [receipt, setReceipt] = useState<ReceiptData | null>(null);
   const [catalogSize, setCatalogSize] = useState(0);
+  const [customer, setCustomer] = useState<CatalogCustomer | null>(null);
   const scanRef = useRef<HTMLInputElement>(null);
   const device = session.device;
   const role = tokenClaims(session.staffToken)?.role;
@@ -143,13 +148,15 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     setLines([]);
     setInvoiceDiscount(0);
     setSelected(null);
+    setCustomer(null);
   }
 
   async function pay(payments: { method: PaymentMethod; amountMinor: number }[]) {
     if (!device) return;
     const id = crypto.randomUUID();
     const number = await nextInvoiceNumber(device.prefix);
-    const sale = toSaleInput({ id, number, shiftId: shift?.id ?? null, lines, invoiceDiscountMinor: invoiceDiscount, payments });
+    const sale = toSaleInput({ id, number, shiftId: shift?.id ?? null, lines, invoiceDiscountMinor: invoiceDiscount, payments, customerId: customer?.id });
+    const credit = payments.filter((p) => p.method === "credit").reduce((a, p) => a + p.amountMinor, 0);
     const paid = payments.reduce((a, p) => a + p.amountMinor, 0);
     const change = paid - sale.totalMinor;
     const cashIn = payments.filter((p) => p.method === "cash").reduce((a, p) => a + p.amountMinor, 0);
@@ -158,13 +165,42 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
       await db.sales.put({ id, number, shiftId: sale.shiftId ?? null, createdAt: sale.createdAt, totalMinor: sale.totalMinor, cashInMinor: cashIn, changeMinor: change, cashierName, input: sale });
       await db.outbox.add({ kind: "sale", refId: id, payload: sale, createdAt: sale.createdAt });
     });
+    // Until the next sync, count the new debt locally so the credit limit still holds offline.
+    if (customer && credit > 0) await db.customers.update(customer.id, { balanceMinor: customer.balanceMinor + credit });
     const store = await getMeta<{ footer?: string }>("store");
-    setReceipt({ storeName: device.storeName, footer: store?.footer, deviceName: device.name, cashierName, sale, changeMinor: change });
+    setReceipt({ storeName: device.storeName, footer: store?.footer, deviceName: device.name, cashierName, sale, changeMinor: change, customerName: customer?.name });
     clearCart();
     setDialog(null);
     flash(change > 0 ? `الباقي ${formatMoney(change)}` : "تم البيع");
     await refreshCounts();
     void syncNow();
+    focusScan();
+  }
+
+  async function returnDone(r: ReturnDone) {
+    if (!device) return;
+    await db.sales.put({
+      id: crypto.randomUUID(), number: r.number, shiftId: shift?.id ?? null, createdAt: new Date().toISOString(), totalMinor: -r.totalMinor,
+      cashInMinor: r.method === "cash" ? -r.totalMinor : 0, changeMinor: 0, cashierName, input: null, kind: "return",
+    });
+    setReceipt({ storeName: device.storeName, deviceName: device.name, cashierName, ret: r });
+    setDialog(null);
+    flash(r.method === "cash" ? `رجّع للزبون ${formatMoney(r.totalMinor)} كاش` : "تم المرتجع");
+    void syncNow();
+    focusScan();
+  }
+
+  async function customerPaid(c: CatalogCustomer, amountMinor: number, method: "cash" | "card") {
+    if (!device) return;
+    const at = new Date().toISOString();
+    await db.sales.put({
+      id: crypto.randomUUID(), number: "تسديد", shiftId: shift?.id ?? null, createdAt: at, totalMinor: 0,
+      cashInMinor: method === "cash" ? amountMinor : 0, changeMinor: 0, cashierName, input: null, kind: "payment",
+    });
+    setReceipt({ storeName: device.storeName, deviceName: device.name, cashierName, payment: { customerName: c.name, amountMinor, method, balanceMinor: c.balanceMinor, at } });
+    if (customer?.id === c.id) setCustomer(c);
+    setDialog(null);
+    flash(`تم تسديد ${formatMoney(amountMinor)}`);
     focusScan();
   }
 
@@ -353,6 +389,12 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
             {totals.discount > 0 && <div className="line"><span>الخصم</span><span className="num">−{formatMoney(totals.discount)}</span></div>}
             {totals.tax > 0 && <div className="line muted"><span>منها ضريبة</span><span className="num">{formatMoney(totals.tax)}</span></div>}
             <div className="grand num">{formatMoney(totals.total)}</div>
+            {customer && (
+              <div className="line" style={{ background: "var(--brand-soft)", padding: "6px 10px", borderRadius: 8 }}>
+                <span>👤 {customer.name}</span>
+                <span className="num">الرصيد {formatMoney(customer.balanceMinor)}</span>
+              </div>
+            )}
             {message && lines.length > 0 && <div className={message.bad ? "error" : "badge ok"} style={{ textAlign: "center" }}>{message.text}</div>}
           </div>
           <div className="keys">
@@ -362,6 +404,8 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
             <button onClick={() => selectedLine && removeLine(selectedLine.key)} disabled={!selected} className="danger">حذف الصنف</button>
             <button onClick={hold} disabled={!lines.length}>تعليق (F8)</button>
             <button onClick={async () => setDialog({ kind: "held", carts: await db.held.toArray() })}>الفواتير المعلقة</button>
+            <button onClick={() => setDialog({ kind: "customer" })}>{customer ? `العميل: ${customer.name}` : "العميل / تسديد"}</button>
+            <button onClick={() => setDialog({ kind: "return" })} disabled={!shift}>مرتجع</button>
             <button onClick={() => receipt && window.print()} disabled={!receipt}>إعادة طباعة</button>
             <button onClick={clearCart} disabled={!lines.length} className="danger">إلغاء الفاتورة</button>
             <button className="primary pay" disabled={!lines.length || !shift} onClick={() => setDialog({ kind: "pay" })}>
@@ -373,7 +417,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
 
       <Receipt data={receipt} />
 
-      {dialog?.kind === "pay" && <PayDialog totalMinor={totals.total} onPay={pay} onClose={() => { setDialog(null); focusScan(); }} />}
+      {dialog?.kind === "pay" && <PayDialog totalMinor={totals.total} customer={customer} onPay={pay} onClose={() => { setDialog(null); focusScan(); }} />}
       {dialog?.kind === "weight" && (
         <AmountDialog
           title={dialog.product.name}
@@ -443,6 +487,18 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
           onClose={() => setDialog(null)}
           onDone={(m) => void closeShift(m, dialog.expected)}
         />
+      )}
+      {dialog?.kind === "customer" && (
+        <CustomerDialog
+          current={customer}
+          shiftId={shift?.id ?? null}
+          onPick={(c) => { setCustomer(c); setDialog(null); focusScan(); }}
+          onPaid={customerPaid}
+          onClose={() => { setDialog(null); focusScan(); }}
+        />
+      )}
+      {dialog?.kind === "return" && device && (
+        <ReturnDialog shiftId={shift?.id ?? null} newNumber={() => nextInvoiceNumber(device.prefix)} onDone={returnDone} onClose={() => { setDialog(null); focusScan(); }} />
       )}
       {dialog?.kind === "held" && (
         <Modal title="الفواتير المعلقة" onClose={() => setDialog(null)}>

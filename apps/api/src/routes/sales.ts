@@ -37,7 +37,7 @@ export async function salesRoutes(app: FastifyInstance) {
   app.get("/sales", { preHandler: requireDevice }, async (req) => {
     const { limit } = z.object({ limit: z.coerce.number().int().min(1).max(200).default(50) }).parse(req.query);
     const r = await app.db.query(
-      `SELECT s.id, s.number, s.total_minor, s.created_at, u.name AS cashier FROM sales s JOIN users u ON u.id = s.user_id
+      `SELECT s.id, s.number, s.kind, s.total_minor, s.created_at, u.name AS cashier FROM sales s JOIN users u ON u.id = s.user_id
        WHERE s.tenant_id = $1 AND s.store_id = $2 ORDER BY s.created_at DESC LIMIT $3`,
       [req.user.tid, req.user.sid, limit],
     );
@@ -55,12 +55,22 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
 
   const totals = computeTotals(s.lines, s.invoiceDiscountMinor);
   if (totals.total !== s.totalMinor) throw new Reject(`الإجمالي غير مطابق (${s.totalMinor} ≠ ${totals.total})`);
-  if (s.payments.some((p) => p.method === "credit")) throw new Reject("البيع الآجل يحتاج وحدة العملاء (قريباً)");
+  const credit = s.payments.filter((p) => p.method === "credit").reduce((a, p) => a + p.amountMinor, 0);
+  let customer: { credit_limit_minor: number | null; balance_minor: number } | undefined;
+  if (s.customerId) {
+    customer = (await app.db.query(
+      `SELECT c.credit_limit_minor, b.balance_minor FROM customers c JOIN customer_balances b ON b.customer_id = c.id WHERE c.id = $1 AND c.tenant_id = $2`,
+      [s.customerId, tid],
+    )).rows[0];
+    if (!customer) throw new Reject("العميل غير موجود");
+  }
+  if (credit > 0 && !customer) throw new Reject("البيع الآجل يحتاج عميل");
   const paid = s.payments.reduce((a, p) => a + p.amountMinor, 0);
   const cash = s.payments.filter((p) => p.method === "cash").reduce((a, p) => a + p.amountMinor, 0);
   if (paid < totals.total) throw new Reject("المدفوع أقل من الإجمالي");
   const change = paid - totals.total;
   if (change > cash) throw new Reject("الباقي ما يكونش أكبر من المدفوع كاش");
+  if (credit > totals.total) throw new Reject("الآجل أكبر من الإجمالي");
 
   const unitIds = [...new Set(s.lines.map((l) => l.unitId))];
   const units = await app.db.query(
@@ -82,9 +92,9 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
   try {
     await inTx(app.db, async (tx) => {
       await tx.query(
-        `INSERT INTO sales (id, tenant_id, store_id, device_id, shift_id, user_id, number, subtotal_minor, discount_minor, tax_minor, total_minor, paid_minor, change_minor, created_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-        [s.id, tid, who.sid, who.did, s.shiftId ?? null, who.sub, s.number, totals.subtotal, totals.discount, totals.tax, totals.total, paid, change, s.createdAt],
+        `INSERT INTO sales (id, tenant_id, store_id, device_id, shift_id, user_id, number, subtotal_minor, discount_minor, tax_minor, total_minor, paid_minor, change_minor, created_at, customer_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+        [s.id, tid, who.sid, who.did, s.shiftId ?? null, who.sub, s.number, totals.subtotal, totals.discount, totals.tax, totals.total, paid, change, s.createdAt, s.customerId ?? null],
       );
       const overrides: { name: string; catalog: number; sold: number }[] = [];
       for (const l of s.lines) {
@@ -109,6 +119,10 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
       // A price different from the catalog is either an offline device with old prices or a manual override; both are worth a look.
       if (overrides.length) {
         await audit(tx, { tenantId: tid, userId: who.sub, deviceId: who.did, action: "sale.price_mismatch", entity: "sale", entityId: s.id, data: { overrides } });
+      }
+      // An offline device may have sold on credit past the limit; the sale already happened, so it is kept and flagged.
+      if (customer && credit > 0 && customer.credit_limit_minor !== null && customer.balance_minor + credit > customer.credit_limit_minor) {
+        await audit(tx, { tenantId: tid, userId: who.sub, deviceId: who.did, action: "customer.over_limit", entity: "customer", entityId: s.customerId!, data: { sale: s.number, balance: customer.balance_minor + credit, limit: customer.credit_limit_minor } });
       }
       if (totals.discount > 0) {
         await audit(tx, { tenantId: tid, userId: who.sub, deviceId: who.did, action: "sale.discount", entity: "sale", entityId: s.id, data: { discount: totals.discount } });

@@ -1,5 +1,5 @@
 import Dexie, { type Table } from "dexie";
-import type { CatalogProduct, SaleInput } from "@pos/shared";
+import type { CatalogCustomer, CatalogProduct, SaleInput } from "@pos/shared";
 
 export type OutboxKind = "shift_open" | "sale" | "shift_close";
 
@@ -22,7 +22,9 @@ export interface LocalSale {
   cashInMinor: number;
   changeMinor: number;
   cashierName: string;
-  input: SaleInput;
+  /** For returns there is no SaleInput; the receipt data is kept instead. */
+  input: SaleInput | null;
+  kind?: "sale" | "return" | "payment";
 }
 
 export interface LocalShift {
@@ -48,6 +50,7 @@ class PosDb extends Dexie {
   shifts!: Table<LocalShift, string>;
   held!: Table<HeldCart, string>;
   meta!: Table<{ key: string; value: unknown }, string>;
+  customers!: Table<CatalogCustomer, string>;
 
   constructor() {
     super("pos");
@@ -60,6 +63,7 @@ class PosDb extends Dexie {
       held: "id",
       meta: "key",
     });
+    this.version(2).stores({ customers: "id, name, phone" });
   }
 }
 

@@ -8,8 +8,9 @@ export async function shiftRoutes(app: FastifyInstance) {
     const r = await app.db.query(
       `SELECT sh.opening_cash_minor
          + COALESCE((SELECT sum(p.amount_minor) FROM payments p JOIN sales s ON s.id = p.sale_id WHERE s.shift_id = sh.id AND p.method = 'cash'), 0)
-         - COALESCE((SELECT sum(s.change_minor) FROM sales s WHERE s.shift_id = sh.id), 0) AS expected,
-         (SELECT count(*)::int FROM sales s WHERE s.shift_id = sh.id) AS sales_count,
+         - COALESCE((SELECT sum(s.change_minor) FROM sales s WHERE s.shift_id = sh.id), 0)
+         + COALESCE((SELECT sum(cp.amount_minor) FROM customer_payments cp WHERE cp.shift_id = sh.id AND cp.method = 'cash'), 0) AS expected,
+         (SELECT count(*)::int FROM sales s WHERE s.shift_id = sh.id AND s.kind = 'sale') AS sales_count,
          COALESCE((SELECT sum(s.total_minor) FROM sales s WHERE s.shift_id = sh.id), 0) AS sales_total
        FROM shifts sh WHERE sh.id = $1`,
       [shiftId],
