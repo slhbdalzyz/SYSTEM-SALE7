@@ -1,0 +1,14 @@
+{
+  "name": "pos",
+  "private": true,
+  "scripts": {
+    "dev:api": "pnpm --filter @pos/api dev",
+    "dev:web": "pnpm --filter @pos/web dev",
+    "migrate": "pnpm --filter @pos/api migrate",
+    "seed": "pnpm --filter @pos/api seed",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "build": "pnpm -r build"
+  },
+  "packageManager": "pnpm@10.28.0"
+}

@@ -1,0 +1,108 @@
+:root {
+  --bg: #f1f5f9;
+  --panel: #ffffff;
+  --ink: #0f172a;
+  --muted: #64748b;
+  --line: #e2e8f0;
+  --brand: #0f766e;
+  --brand-ink: #ffffff;
+  --brand-soft: #ccfbf1;
+  --danger: #b91c1c;
+  --danger-soft: #fee2e2;
+  --warn: #b45309;
+  --warn-soft: #fef3c7;
+  --ok: #15803d;
+  --radius: 10px;
+  font-family: "Cairo", system-ui, sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); }
+button, input, select { font: inherit; }
+button {
+  border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+  padding: 8px 14px; border-radius: var(--radius); cursor: pointer; font-weight: 600;
+}
+button:hover:not(:disabled) { border-color: var(--brand); }
+button:disabled { opacity: .5; cursor: not-allowed; }
+button.primary { background: var(--brand); color: var(--brand-ink); border-color: var(--brand); }
+button.danger { color: var(--danger); border-color: var(--danger-soft); }
+button.big { padding: 14px 18px; font-size: 1.15rem; }
+input, select {
+  border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 10px; background: var(--panel); color: var(--ink); width: 100%;
+}
+input:focus, select:focus { outline: 2px solid var(--brand); outline-offset: -1px; }
+label { display: grid; gap: 4px; font-size: .9rem; color: var(--muted); }
+.num { font-variant-numeric: tabular-nums; direction: ltr; unicode-bidi: isolate; }
+.muted { color: var(--muted); }
+.error { background: var(--danger-soft); color: var(--danger); padding: 8px 12px; border-radius: var(--radius); }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 20px; }
+.center { min-height: 100vh; display: grid; place-items: center; padding: 16px; }
+.stack { display: grid; gap: 12px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.spacer { flex: 1; }
+.badge { padding: 2px 10px; border-radius: 999px; font-size: .8rem; font-weight: 700; }
+.badge.ok { background: #dcfce7; color: var(--ok); }
+.badge.off { background: var(--warn-soft); color: var(--warn); }
+.badge.bad { background: var(--danger-soft); color: var(--danger); }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: start; }
+th { color: var(--muted); font-weight: 600; font-size: .85rem; }
+
+/* Cashier */
+.pos { display: grid; grid-template-rows: auto 1fr; height: 100vh; }
+.pos-top { display: flex; gap: 12px; align-items: center; padding: 8px 16px; background: var(--ink); color: #fff; }
+.pos-top button { background: transparent; color: #fff; border-color: #334155; }
+.pos-main { display: grid; grid-template-columns: 1fr 360px; gap: 12px; padding: 12px; min-height: 0; }
+.pos-left { display: grid; grid-template-rows: auto 1fr; gap: 12px; min-height: 0; }
+.scan { position: relative; }
+.scan input { font-size: 1.3rem; padding: 14px 16px; }
+.results { position: absolute; inset-inline: 0; top: 100%; z-index: 5; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 10px 30px rgba(0,0,0,.12); max-height: 50vh; overflow: auto; }
+.results button { display: flex; width: 100%; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; justify-content: space-between; padding: 12px 16px; }
+.results button.active { background: var(--brand-soft); }
+.cart { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; overflow: auto; }
+.cart tr.sel td { background: var(--brand-soft); }
+.cart td.qty { white-space: nowrap; }
+.cart td.qty button { padding: 2px 10px; }
+.pos-right { display: grid; grid-template-rows: 1fr auto; gap: 12px; min-height: 0; }
+.totals { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: grid; gap: 8px; align-content: start; }
+.totals .line { display: flex; justify-content: space-between; }
+.totals .grand { font-size: 2.2rem; font-weight: 800; color: var(--brand); text-align: center; padding: 12px 0; border-top: 1px dashed var(--line); }
+.keys { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.keys .pay { grid-column: span 2; font-size: 1.4rem; padding: 18px; }
+.empty { display: grid; place-items: center; height: 100%; color: var(--muted); }
+
+.modal-bg { position: fixed; inset: 0; background: rgba(15,23,42,.5); display: grid; place-items: center; z-index: 20; padding: 16px; }
+.modal { background: var(--panel); border-radius: 16px; padding: 20px; width: min(520px, 100%); display: grid; gap: 14px; max-height: 90vh; overflow: auto; }
+.modal h2 { margin: 0; }
+.pinpad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.pinpad button { font-size: 1.5rem; padding: 16px; }
+.users { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.users button.active { border-color: var(--brand); background: var(--brand-soft); }
+
+/* Admin */
+.admin { max-width: 1100px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.tabs button.active { background: var(--brand); color: var(--brand-ink); border-color: var(--brand); }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+.kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px; }
+.kpi b { display: block; font-size: 1.4rem; }
+.units-grid { display: grid; grid-template-columns: 1.2fr .7fr 1fr 2fr auto auto; gap: 6px; align-items: end; }
+
+/* Receipt: printed on 80mm thermal paper */
+.receipt { display: none; }
+@media print {
+  @page { size: 80mm auto; margin: 0; }
+  body * { visibility: hidden; }
+  .receipt, .receipt * { visibility: visible; }
+  .receipt { display: block; position: absolute; top: 0; right: 0; width: 76mm; padding: 2mm; font-size: 11px; color: #000; }
+  .receipt table td, .receipt table th { padding: 1px 0; border: 0; }
+  .receipt hr { border: 0; border-top: 1px dashed #000; }
+}
+
+@media (max-width: 900px) {
+  .pos { height: auto; min-height: 100vh; }
+  .pos-main { grid-template-columns: 1fr; }
+  .units-grid { grid-template-columns: 1fr 1fr; }
+}
