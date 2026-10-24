@@ -4,6 +4,7 @@ import { z } from "zod";
 import { ROLES } from "@pos/shared";
 import { audit } from "../db";
 import { HttpError, hashToken, newDeviceToken, requireRole } from "../auth";
+import { assertWithinPlan } from "../billing";
 
 const userSchema = z.object({
   name: z.string().min(2).max(120),
@@ -30,6 +31,7 @@ export async function adminRoutes(app: FastifyInstance) {
     const b = userSchema.parse(req.body);
     if (b.role === "owner" && req.user.role !== "owner") throw new HttpError(403, "فقط المالك يضيف مالك");
     if (!b.pin && !b.password) throw new HttpError(400, "لازم رقم سري أو كلمة سر");
+    await assertWithinPlan(app.db, req.user.tid, "users");
     const r = await app.db.query(
       `INSERT INTO users (tenant_id, name, role, email, password_hash, pin_hash) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
       [
@@ -48,9 +50,10 @@ export async function adminRoutes(app: FastifyInstance) {
   app.patch("/users/:id", managers, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const b = userSchema.partial().parse(req.body);
-    const target = (await app.db.query(`SELECT role FROM users WHERE id = $1 AND tenant_id = $2`, [id, req.user.tid])).rows[0];
+    const target = (await app.db.query(`SELECT role, active FROM users WHERE id = $1 AND tenant_id = $2`, [id, req.user.tid])).rows[0];
     if (!target) throw new HttpError(404, "المستخدم غير موجود");
     if ((target.role === "owner" || b.role === "owner") && req.user.role !== "owner") throw new HttpError(403, "ليس لديك صلاحية");
+    if (b.active && !target.active) await assertWithinPlan(app.db, req.user.tid, "users");
     await app.db.query(
       `UPDATE users SET name = COALESCE($3, name), role = COALESCE($4, role), active = COALESCE($5, active),
          pin_hash = COALESCE($6, pin_hash) WHERE id = $1 AND tenant_id = $2`,
@@ -73,6 +76,7 @@ export async function adminRoutes(app: FastifyInstance) {
     const b = z.object({ storeId: z.string().uuid(), name: z.string().min(1).max(60), kind: z.enum(["pos", "price_checker"]).default("pos") }).parse(req.body);
     const store = await app.db.query(`SELECT 1 FROM stores WHERE id = $1 AND tenant_id = $2`, [b.storeId, req.user.tid]);
     if (!store.rowCount) throw new HttpError(404, "الفرع غير موجود");
+    await assertWithinPlan(app.db, req.user.tid, "devices");
     const n = (await app.db.query(`SELECT count(*)::int AS n FROM devices WHERE tenant_id = $1`, [req.user.tid])).rows[0].n as number;
     const prefix = `P${n + 1}`;
     const token = newDeviceToken();
@@ -87,6 +91,8 @@ export async function adminRoutes(app: FastifyInstance) {
   app.patch("/devices/:id", owners, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const b = z.object({ active: z.boolean() }).parse(req.body);
+    const was = (await app.db.query(`SELECT active FROM devices WHERE id = $1 AND tenant_id = $2`, [id, req.user.tid])).rows[0];
+    if (b.active && was && !was.active) await assertWithinPlan(app.db, req.user.tid, "devices");
     await app.db.query(`UPDATE devices SET active = $3 WHERE id = $1 AND tenant_id = $2`, [id, req.user.tid, b.active]);
     await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: b.active ? "device.enable" : "device.disable", entity: "device", entityId: id });
     return { ok: true };

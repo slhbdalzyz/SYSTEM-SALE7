@@ -3,10 +3,13 @@ import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { audit, inTx } from "../db";
 import { HttpError, authenticate, hashToken, type TokenPayload } from "../auth";
+import { assertNotLocked } from "../billing";
 
 const registerSchema = z.object({
   businessName: z.string().min(2).max(120),
   storeName: z.string().min(2).max(120),
+  phone: z.string().max(40).optional(),
+  planCode: z.string().max(30).optional(),
   ownerName: z.string().min(2).max(120),
   email: z.string().email().max(200),
   password: z.string().min(8).max(200),
@@ -26,7 +29,12 @@ export async function authRoutes(app: FastifyInstance) {
     if (exists.rowCount) throw new HttpError(409, "البريد مسجل من قبل");
     const hash = await bcrypt.hash(b.password, 12);
     const out = await inTx(app.db, async (tx) => {
-      const t = await tx.query(`INSERT INTO tenants (name) VALUES ($1) RETURNING id`, [b.businessName]);
+      // Every new shop starts on a 14-day free trial of the plan it picked.
+      const plan = b.planCode && (await tx.query(`SELECT 1 FROM plans WHERE code = $1 AND active`, [b.planCode])).rowCount ? b.planCode : "basic";
+      const t = await tx.query(
+        `INSERT INTO tenants (name, phone, plan_code, status, paid_until) VALUES ($1,$2,$3,'trial', now() + interval '14 days') RETURNING id`,
+        [b.businessName, b.phone ?? null, plan],
+      );
       const tid = t.rows[0].id as string;
       const s = await tx.query(`INSERT INTO stores (tenant_id, name) VALUES ($1,$2) RETURNING id`, [tid, b.storeName]);
       const u = await tx.query(
@@ -58,6 +66,7 @@ export async function authRoutes(app: FastifyInstance) {
     const b = pinSchema.parse(req.body);
     const d = (await app.db.query(`SELECT id, tenant_id, store_id FROM devices WHERE token_hash = $1 AND active AND kind = 'pos'`, [hashToken(b.deviceToken)])).rows[0];
     if (!d) throw new HttpError(401, "الجهاز غير معتمد");
+    await assertNotLocked(app.db, d.tenant_id);
     const u = (await app.db.query(`SELECT id, role, pin_hash FROM users WHERE id = $1 AND tenant_id = $2 AND active`, [b.userId, d.tenant_id])).rows[0];
     if (!u?.pin_hash || !(await bcrypt.compare(b.pin, u.pin_hash))) {
       await audit(app.db, { tenantId: d.tenant_id, userId: b.userId, deviceId: d.id, action: "user.pin_failed" });

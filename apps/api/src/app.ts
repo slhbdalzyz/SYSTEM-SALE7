@@ -16,6 +16,9 @@ import { reportRoutes } from "./routes/reports";
 import { customerRoutes } from "./routes/customers";
 import { returnRoutes } from "./routes/returns";
 import { deviceRoutes } from "./routes/devices";
+import { platformRoutes } from "./routes/platform";
+import { subscriptionRoutes } from "./routes/subscription";
+import { subscriptionGuard } from "./billing";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -52,6 +55,7 @@ export async function buildApp(opts: AppOptions) {
   });
 
   app.get("/health", async () => ({ ok: true }));
+  subscriptionGuard(app);
   await app.register(authRoutes);
   await app.register(adminRoutes);
   await app.register(catalogRoutes);
@@ -62,5 +66,7 @@ export async function buildApp(opts: AppOptions) {
   await app.register(customerRoutes);
   await app.register(returnRoutes);
   await app.register(deviceRoutes);
+  await app.register(platformRoutes);
+  await app.register(subscriptionRoutes);
   return app;
 }

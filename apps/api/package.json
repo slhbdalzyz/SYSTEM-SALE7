@@ -8,6 +8,7 @@
     "start": "tsx src/server.ts",
     "migrate": "tsx src/migrate.ts",
     "seed": "tsx src/seed.ts",
+    "platform:admin": "tsx src/platform-admin.ts",
     "test": "vitest run",
     "typecheck": "tsc -p ."
   },

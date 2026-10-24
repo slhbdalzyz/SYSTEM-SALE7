@@ -3,6 +3,7 @@ import { z } from "zod";
 import { audit } from "../db";
 import { HttpError, hashToken, requireDevice } from "../auth";
 import { loadProducts } from "./catalog";
+import { assertNotLocked } from "../billing";
 
 export async function deviceRoutes(app: FastifyInstance) {
   /**
@@ -17,6 +18,7 @@ export async function deviceRoutes(app: FastifyInstance) {
       [hashToken(deviceToken)],
     )).rows[0];
     if (!d) throw new HttpError(401, "الجهاز غير معتمد كقارئ أسعار");
+    await assertNotLocked(app.db, d.tenant_id);
     await app.db.query(`UPDATE devices SET last_seen_at = now() WHERE id = $1`, [d.id]);
     const products = (await loadProducts(app.db, d.tenant_id)).filter((p) => p.active);
     // Cost is the shop's business, not the shop floor's.
