@@ -77,6 +77,7 @@ export function PinScreen({ go }: { go: (s: Screen) => void }) {
           <span className="spacer" />
           <span className="muted">{device?.storeName}</span>
         </div>
+        {users.length === 0 && !error && <div className="muted">جاري التحميل… (أول مرة تاخذ ثواني)</div>}
         <div className="users">
           {users.map((u) => (
             <button key={u.id} className={u.id === userId ? "active" : ""} onClick={() => { setUserId(u.id); setPin(""); }}>
