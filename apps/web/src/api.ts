@@ -10,7 +10,8 @@ export const DEMO = import.meta.env.VITE_DEMO === "1";
 
 /** status 0 means the server could not be reached (offline). */
 export async function api<T = unknown>(path: string, opts: { method?: string; body?: unknown; token?: string | null } = {}): Promise<T> {
-  if (DEMO) {
+  // Spelled out (not DEMO) so the real build drops the demo, and its 16 MB database, entirely.
+  if (import.meta.env.VITE_DEMO === "1") {
     const { handle } = await import("./demo/server");
     const r = await handle(opts.method ?? (opts.body === undefined ? "GET" : "POST"), path, opts.token, opts.body);
     if (r.status >= 400) throw new ApiError(r.status, (r.data as { error?: string }).error ?? `خطأ ${r.status}`);

@@ -86,6 +86,34 @@ cd apps/web && VITE_DEMO=1 npx vite build   # الناتج في apps/web/dist-de
   - سجل ما يتمسحش لكل اللي صار.
 - إنشاء حساب لإدارة المنصة: `PASSWORD='...' pnpm --filter @pos/api platform:admin admin@example.ly "الاسم"` (في بيانات التجربة: `admin@sale7.ly` / `platform12345`).
 
+## النشر (التشغيل الحقيقي)
+
+النشر جاهز بطريقتين، واختيار الطريقة لصاحب المشروع.
+
+**Vercel + قاعدة Neon**
+1. اربط المستودع بمشروع Vercel جديد. `vercel.json` و`scripts/vercel-build.mjs` يبنوا الموقع، والـ API كدالة واحدة على `/api`.
+2. من Storage في المشروع ضيف قاعدة Neon. هي تحط `DATABASE_URL` وحدها.
+3. ضيف في Environment Variables:
+   - `JWT_SECRET`: نص عشوائي طويل.
+   - `PLATFORM_ADMIN_EMAIL` و`PLATFORM_ADMIN_PASSWORD`: لأول حساب إدارة منصة.
+4. التحديثات على قاعدة البيانات تتطبق وحدها مع كل نشر.
+5. النسخة التجريبية تستعمل نفس الملفات، بس تحتاج المتغير `POS_DEMO=1`.
+
+**سيرفر خاص (VPS، أوبونتو)**
+1. وجّه الدومين للسيرفر.
+2. شغّل:
+   ```bash
+   git clone … && cd system-sale7
+   sudo bash deploy/install.sh pos.example.ly admin@example.ly
+   ```
+3. السكربت يثبت Docker، ويولّد كلمات السر في `deploy/.env`، ويشغّل:
+   - قاعدة البيانات.
+   - الـ API.
+   - Caddy، وهو يجيب شهادة HTTPS وحده.
+   - نسخة احتياطية كل ليلة في `deploy/backups`، ويخلي آخر 14. انسخها لمكان ثاني برا السيرفر.
+
+**تطبيق ويندوز لمحل حقيقي**: شغّل workflow «Windows app» يدوياً، وحط في `api_url` عنوان السيرفر مع `/api`.
+
 ## الاختبارات
 
 ```bash

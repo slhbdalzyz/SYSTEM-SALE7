@@ -1,0 +1,52 @@
+# Everything on one server: database, API, web + HTTPS, and nightly backups.
+#   cd deploy && cp .env.example .env  (fill it in)  &&  docker compose up -d --build
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: pos
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+      POSTGRES_DB: pos
+    volumes: [db:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pos"]
+      interval: 5s
+      retries: 20
+
+  api:
+    build: { context: .., target: api }
+    restart: unless-stopped
+    depends_on: { db: { condition: service_healthy } }
+    environment:
+      DATABASE_URL: postgres://pos:${DB_PASSWORD}@db:5432/pos
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      PLATFORM_ADMIN_EMAIL: ${PLATFORM_ADMIN_EMAIL:-}
+      PLATFORM_ADMIN_PASSWORD: ${PLATFORM_ADMIN_PASSWORD:-}
+
+  web:
+    build: { context: .., target: web }
+    restart: unless-stopped
+    depends_on: [api]
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+    ports: ["80:80", "443:443"]
+    volumes: [caddy:/data]
+
+  # One compressed dump a night, the last 14 kept. Copy the folder off the server too.
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    depends_on: { db: { condition: service_healthy } }
+    environment:
+      PGPASSWORD: ${DB_PASSWORD}
+    volumes: [./backups:/backups]
+    entrypoint: >
+      sh -c 'while true; do
+        pg_dump -h db -U pos -Fc pos > /backups/pos-$$(date +%F).dump &&
+        find /backups -name "pos-*.dump" -mtime +14 -delete;
+        sleep 86400; done'
+
+volumes:
+  db:
+  caddy:

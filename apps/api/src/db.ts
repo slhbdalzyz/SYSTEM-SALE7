@@ -8,8 +8,8 @@ pg.types.setTypeParser(1700, (v) => Number(v));
 export type Db = pg.Pool;
 export type Tx = pg.PoolClient;
 
-export function createPool(url = process.env.DATABASE_URL ?? "postgres://pos:pos@localhost:5432/pos"): Db {
-  return new pg.Pool({ connectionString: url, max: 10 });
+export function createPool(url = process.env.DATABASE_URL ?? "postgres://pos:pos@localhost:5432/pos", max = 10): Db {
+  return new pg.Pool({ connectionString: url, max });
 }
 
 export async function inTx<T>(db: Db, fn: (tx: Tx) => Promise<T>): Promise<T> {

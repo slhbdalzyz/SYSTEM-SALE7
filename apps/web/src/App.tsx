@@ -1,11 +1,14 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { session, tokenValid } from "./session";
 import { Setup } from "./Setup";
 import { PinScreen } from "./pos/PinScreen";
 import { Cashier } from "./pos/Cashier";
 import { Admin } from "./admin/Admin";
-import { DemoBar } from "./demo/DemoBar";
 import { DEMO } from "./api";
+
+// Loaded only in the demo build, so the real one carries none of the demo's code.
+const DemoBarLazy = import.meta.env.VITE_DEMO === "1" ? lazy(() => import("./demo/DemoBar").then((m) => ({ default: m.DemoBar }))) : null;
+const DemoBar = () => (DemoBarLazy ? <Suspense fallback={null}><DemoBarLazy /></Suspense> : null);
 import { CustomerDisplay } from "./display/CustomerDisplay";
 import { PriceChecker } from "./pricecheck/PriceChecker";
 import { Platform } from "./platform/Platform";

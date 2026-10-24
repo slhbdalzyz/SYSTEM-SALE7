@@ -31,11 +31,13 @@ export interface AppOptions {
   jwtSecret: string;
   corsOrigin?: string | string[];
   logger?: boolean;
+  /** Behind a proxy or a platform like Vercel: take the client IP from X-Forwarded-For (rate limits). */
+  trustProxy?: boolean;
 }
 
 export async function buildApp(opts: AppOptions) {
   if (opts.jwtSecret.length < 32) throw new Error("JWT_SECRET must be at least 32 characters");
-  const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 2 * 1024 * 1024 });
+  const app = Fastify({ logger: opts.logger ?? false, trustProxy: opts.trustProxy ?? false, bodyLimit: 2 * 1024 * 1024 });
   app.decorate("db", opts.db);
 
   await app.register(helmet);
