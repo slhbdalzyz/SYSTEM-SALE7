@@ -15,6 +15,7 @@ import { stockRoutes } from "./routes/stock";
 import { reportRoutes } from "./routes/reports";
 import { customerRoutes } from "./routes/customers";
 import { returnRoutes } from "./routes/returns";
+import { deviceRoutes } from "./routes/devices";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -60,5 +61,6 @@ export async function buildApp(opts: AppOptions) {
   await app.register(reportRoutes);
   await app.register(customerRoutes);
   await app.register(returnRoutes);
+  await app.register(deviceRoutes);
   return app;
 }

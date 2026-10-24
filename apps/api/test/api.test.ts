@@ -257,3 +257,33 @@ describe("customers, credit and returns", () => {
     expect(rep.customerPayments.cash).toBe(3000);
   });
 });
+
+describe("price checker and till events", () => {
+  let checkerToken: string;
+
+  it("registers a price checker that cannot be signed in on", async () => {
+    const d = await call("POST", "/devices", owner, { storeId, name: "قارئ 1", kind: "price_checker" });
+    expect(d.body.kind).toBe("price_checker");
+    checkerToken = d.body.deviceToken;
+    expect((await call("POST", "/auth/device-users", undefined, { deviceToken: checkerToken })).status).toBe(401);
+  });
+
+  it("gives the price checker prices but not costs", async () => {
+    const r = await call("POST", "/price-checker/catalog", undefined, { deviceToken: checkerToken });
+    expect(r.status).toBe(200);
+    const p = r.body.products.find((x: { id: string }) => x.id === pepsi.productId);
+    expect(p.units.map((u: { priceMinor: number }) => u.priceMinor)).toEqual([1500, 32000]);
+    expect(p.costMinor).toBe(0);
+  });
+
+  it("does not serve the catalog to a till's token", async () => {
+    expect((await call("POST", "/price-checker/catalog", undefined, { deviceToken })).status).toBe(401);
+  });
+
+  it("records a drawer opened with no sale", async () => {
+    expect((await call("POST", "/devices/events", cashierToken, { action: "drawer.open", reason: "فكة" })).status).toBe(200);
+    expect((await call("POST", "/devices/events", owner, { action: "drawer.open" })).status).toBe(403);
+    const a = await call("GET", "/audit", owner);
+    expect(a.body.map((x: { action: string }) => x.action)).toContain("drawer.open");
+  });
+});

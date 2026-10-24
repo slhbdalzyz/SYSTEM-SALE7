@@ -3,6 +3,7 @@
 import { PGlite } from "@electric-sql/pglite";
 import m001 from "../../../api/migrations/001_init.sql?raw";
 import m002 from "../../../api/migrations/002_customers_returns.sql?raw";
+import m003 from "../../../api/migrations/003_device_kinds.sql?raw";
 import { authRoutes } from "../../../api/src/routes/auth";
 import { adminRoutes } from "../../../api/src/routes/admin";
 import { catalogRoutes } from "../../../api/src/routes/catalog";
@@ -12,6 +13,7 @@ import { stockRoutes } from "../../../api/src/routes/stock";
 import { reportRoutes } from "../../../api/src/routes/reports";
 import { customerRoutes } from "../../../api/src/routes/customers";
 import { returnRoutes } from "../../../api/src/routes/returns";
+import { deviceRoutes } from "../../../api/src/routes/devices";
 import { seedDemo } from "./seed";
 // Type-only: brings in the server's Fastify type additions (app.db, req.user) for the route files.
 import type {} from "../../../api/src/app";
@@ -107,14 +109,14 @@ async function boot(): Promise<MiniApp> {
   }
   await pg.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY)`);
   const done = new Set((await pg.query<{ name: string }>(`SELECT name FROM schema_migrations`)).rows.map((r) => r.name));
-  for (const [name, sql] of [["001_init.sql", m001], ["002_customers_returns.sql", m002]] as const) {
+  for (const [name, sql] of [["001_init.sql", m001], ["002_customers_returns.sql", m002], ["003_device_kinds.sql", m003]] as const) {
     if (done.has(name)) continue;
     await pg.exec(sql);
     await pg.query(`INSERT INTO schema_migrations (name) VALUES ($1)`, [name]);
   }
   const db = new Db(pg);
   const app = new MiniApp(db);
-  for (const r of [authRoutes, adminRoutes, catalogRoutes, salesRoutes, shiftRoutes, stockRoutes, reportRoutes, customerRoutes, returnRoutes]) {
+  for (const r of [authRoutes, adminRoutes, catalogRoutes, salesRoutes, shiftRoutes, stockRoutes, reportRoutes, customerRoutes, returnRoutes, deviceRoutes]) {
     await app.register(r);
   }
   await seedDemo(db);

@@ -11,6 +11,9 @@ import { AmountDialog, Modal, PayDialog } from "./dialogs";
 import { Receipt, type ReceiptData } from "./Receipt";
 import { CustomerDialog } from "./CustomerDialog";
 import { ReturnDialog, type ReturnDone } from "./ReturnDialog";
+import { PrinterDialog } from "../hardware/PrinterDialog";
+import { openCustomerDisplay, openDrawer, printReceipt } from "../hardware/printer";
+import { displaySender } from "../display/channel";
 
 type Dialog =
   | { kind: "pay" }
@@ -23,6 +26,7 @@ type Dialog =
   | { kind: "held"; carts: HeldCart[] }
   | { kind: "customer" }
   | { kind: "return" }
+  | { kind: "printer" }
   | null;
 
 export function Cashier({ go }: { go: (s: Screen) => void }) {
@@ -75,12 +79,57 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     if (sync?.lastSync) void db.products.count().then(setCatalogSize);
   }, [sync?.lastSync]);
 
+  // The cash drawer opens only when money goes in or out of it.
+  const cashMoved = (r: ReceiptData) =>
+    r.sale ? r.sale.payments.some((p) => p.method === "cash") : r.ret ? r.ret.method === "cash" : r.payment?.method === "cash";
+
+  const print = useCallback(async (r: ReceiptData, withDrawer: boolean) => {
+    try {
+      await printReceipt(r, { openDrawer: withDrawer && cashMoved(r) });
+    } catch (e) {
+      flash(`الطابعة ما ردتش: ${(e as Error).message ?? e}`, true);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (receipt) {
-      const t = setTimeout(() => window.print(), 50);
+      // Let React render the printable receipt first; the browser dialog prints that.
+      const t = setTimeout(() => void print(receipt, true), 50);
       return () => clearTimeout(t);
     }
-  }, [receipt]);
+  }, [receipt, print]);
+
+  async function drawer() {
+    try {
+      await openDrawer();
+      await api("/devices/events", { body: { action: "drawer.open" }, token: session.staffToken }).catch(() => undefined);
+    } catch (e) {
+      flash((e as Error).message, true);
+    }
+  }
+
+  // Keep the customer-facing screen in step with the cart.
+  const [display, setDisplay] = useState<ReturnType<typeof displaySender> | null>(null);
+  useEffect(() => {
+    const d = displaySender();
+    setDisplay(d);
+    return () => d.close();
+  }, []);
+  useEffect(() => {
+    if (!display) return;
+    const storeName = device?.storeName ?? "";
+    if (lines.length)
+      display.send({
+        kind: "cart",
+        storeName,
+        lines: lines.map((l) => ({ name: l.name, qty: l.isWeighted ? `${formatQty(l.qtyMilli, true)} كغ` : formatQty(l.qtyMilli, false), amount: formatMoney(lineTotal(l), "") })),
+        total: formatMoney(totals.total),
+        discount: totals.discount > 0 ? formatMoney(totals.discount) : null,
+        customer: customer?.name ?? null,
+      });
+    else if (receipt?.sale) display.send({ kind: "paid", storeName, total: formatMoney(receipt.sale.totalMinor), change: receipt.changeMinor ? formatMoney(receipt.changeMinor) : null });
+    else display.send({ kind: "idle", storeName });
+  }, [lines, totals, customer, receipt, display, device?.storeName]);
 
   function put(line: CartLine) {
     const r = addLine(lines, line);
@@ -291,6 +340,8 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
           </span>
         )}
         <span className="muted">{catalogSize} صنف</span>
+        <button onClick={() => void openCustomerDisplay()} title="افتحها على الشاشة الثانية">شاشة الزبون</button>
+        <button onClick={() => setDialog({ kind: "printer" })}>الطابعة</button>
         <button onClick={() => void syncNow()}>مزامنة</button>
         <button onClick={askCloseShift} disabled={!shift}>قفل الوردية</button>
         <button onClick={logout}>خروج</button>
@@ -406,7 +457,8 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
             <button onClick={async () => setDialog({ kind: "held", carts: await db.held.toArray() })}>الفواتير المعلقة</button>
             <button onClick={() => setDialog({ kind: "customer" })}>{customer ? `العميل: ${customer.name}` : "العميل / تسديد"}</button>
             <button onClick={() => setDialog({ kind: "return" })} disabled={!shift}>مرتجع</button>
-            <button onClick={() => receipt && window.print()} disabled={!receipt}>إعادة طباعة</button>
+            <button onClick={() => receipt && void print(receipt, false)} disabled={!receipt}>إعادة طباعة</button>
+            <button onClick={() => void drawer()}>فتح الدرج</button>
             <button onClick={clearCart} disabled={!lines.length} className="danger">إلغاء الفاتورة</button>
             <button className="primary pay" disabled={!lines.length || !shift} onClick={() => setDialog({ kind: "pay" })}>
               دفع (F12)
@@ -417,6 +469,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
 
       <Receipt data={receipt} />
 
+      {dialog?.kind === "printer" && <PrinterDialog onClose={() => { setDialog(null); focusScan(); }} />}
       {dialog?.kind === "pay" && <PayDialog totalMinor={totals.total} customer={customer} onPay={pay} onClose={() => { setDialog(null); focusScan(); }} />}
       {dialog?.kind === "weight" && (
         <AmountDialog

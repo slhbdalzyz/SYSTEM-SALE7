@@ -62,7 +62,7 @@ export async function adminRoutes(app: FastifyInstance) {
 
   app.get("/devices", managers, async (req) => {
     const r = await app.db.query(
-      `SELECT id, store_id, name, prefix, active, last_seen_at FROM devices WHERE tenant_id = $1 ORDER BY created_at`,
+      `SELECT id, store_id, name, prefix, kind, active, last_seen_at FROM devices WHERE tenant_id = $1 ORDER BY created_at`,
       [req.user.tid],
     );
     return r.rows;
@@ -70,18 +70,18 @@ export async function adminRoutes(app: FastifyInstance) {
 
   /** Registers a cashier device. The token is returned once and only its hash is stored. */
   app.post("/devices", owners, async (req) => {
-    const b = z.object({ storeId: z.string().uuid(), name: z.string().min(1).max(60) }).parse(req.body);
+    const b = z.object({ storeId: z.string().uuid(), name: z.string().min(1).max(60), kind: z.enum(["pos", "price_checker"]).default("pos") }).parse(req.body);
     const store = await app.db.query(`SELECT 1 FROM stores WHERE id = $1 AND tenant_id = $2`, [b.storeId, req.user.tid]);
     if (!store.rowCount) throw new HttpError(404, "الفرع غير موجود");
     const n = (await app.db.query(`SELECT count(*)::int AS n FROM devices WHERE tenant_id = $1`, [req.user.tid])).rows[0].n as number;
     const prefix = `P${n + 1}`;
     const token = newDeviceToken();
     const r = await app.db.query(
-      `INSERT INTO devices (tenant_id, store_id, name, prefix, token_hash) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-      [req.user.tid, b.storeId, b.name, prefix, hashToken(token)],
+      `INSERT INTO devices (tenant_id, store_id, name, prefix, token_hash, kind) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+      [req.user.tid, b.storeId, b.name, prefix, hashToken(token), b.kind],
     );
-    await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "device.register", entity: "device", entityId: r.rows[0].id, data: { name: b.name } });
-    return { id: r.rows[0].id, prefix, deviceToken: token };
+    await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "device.register", entity: "device", entityId: r.rows[0].id, data: { name: b.name, kind: b.kind } });
+    return { id: r.rows[0].id, prefix, kind: b.kind, deviceToken: token };
   });
 
   app.patch("/devices/:id", owners, async (req) => {

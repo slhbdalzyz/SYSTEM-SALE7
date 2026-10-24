@@ -56,7 +56,7 @@ export async function authRoutes(app: FastifyInstance) {
   /** Staff on a registered device pick their name and type a PIN. */
   app.post("/auth/pin", loginLimit, async (req) => {
     const b = pinSchema.parse(req.body);
-    const d = (await app.db.query(`SELECT id, tenant_id, store_id FROM devices WHERE token_hash = $1 AND active`, [hashToken(b.deviceToken)])).rows[0];
+    const d = (await app.db.query(`SELECT id, tenant_id, store_id FROM devices WHERE token_hash = $1 AND active AND kind = 'pos'`, [hashToken(b.deviceToken)])).rows[0];
     if (!d) throw new HttpError(401, "الجهاز غير معتمد");
     const u = (await app.db.query(`SELECT id, role, pin_hash FROM users WHERE id = $1 AND tenant_id = $2 AND active`, [b.userId, d.tenant_id])).rows[0];
     if (!u?.pin_hash || !(await bcrypt.compare(b.pin, u.pin_hash))) {
@@ -71,7 +71,7 @@ export async function authRoutes(app: FastifyInstance) {
   /** The device lists who may sign in on it, before anyone is signed in. */
   app.post("/auth/device-users", async (req) => {
     const { deviceToken } = z.object({ deviceToken: z.string().length(64) }).parse(req.body);
-    const d = (await app.db.query(`SELECT d.id, d.tenant_id, d.name, d.prefix, s.name AS store_name FROM devices d JOIN stores s ON s.id = d.store_id WHERE d.token_hash = $1 AND d.active`, [hashToken(deviceToken)])).rows[0];
+    const d = (await app.db.query(`SELECT d.id, d.tenant_id, d.name, d.prefix, s.name AS store_name FROM devices d JOIN stores s ON s.id = d.store_id WHERE d.token_hash = $1 AND d.active AND d.kind = 'pos'`, [hashToken(deviceToken)])).rows[0];
     if (!d) throw new HttpError(401, "الجهاز غير معتمد");
     const users = await app.db.query(
       `SELECT id, name, role FROM users WHERE tenant_id = $1 AND active AND pin_hash IS NOT NULL ORDER BY name`,

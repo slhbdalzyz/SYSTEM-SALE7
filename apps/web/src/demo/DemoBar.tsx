@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { DEMO } from "../api";
+import { session } from "../session";
+import { DEMO_CHECKER_TOKEN, DEMO_DEVICE_TOKEN } from "./seed";
 
 /** A strip on every screen of the demo with the logins to try, and a way to start over. */
 export function DemoBar() {
@@ -17,6 +19,14 @@ export function DemoBar() {
     }
     location.reload();
   }
+  const checker = session.deviceKind === "price_checker";
+  function switchDevice() {
+    session.deviceToken = checker ? DEMO_DEVICE_TOKEN : DEMO_CHECKER_TOKEN;
+    session.deviceKind = checker ? "pos" : "price_checker";
+    session.staffToken = null;
+    location.reload();
+  }
+  if (new URLSearchParams(location.search).get("screen") === "display") return null;
   return (
     <div className="demo-bar">
       <b>نسخة تجريبية</b>
@@ -28,6 +38,7 @@ export function DemoBar() {
         </span>
       )}
       <span className="spacer" />
+      <button onClick={switchDevice}>{checker ? "رجوع للكاشير" : "جرّب قارئ الأسعار"}</button>
       <button onClick={() => setOpen(!open)}>{open ? "إخفاء" : "عرض"}</button>
       <button onClick={reset}>بيانات جديدة</button>
     </div>
