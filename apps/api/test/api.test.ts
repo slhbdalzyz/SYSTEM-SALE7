@@ -586,3 +586,18 @@ describe("offers", () => {
     expect((await call("PUT", `/offers/${offerId}`, owner, { ...o, active: false })).status).toBe(404);
   });
 });
+
+describe("generated barcodes", () => {
+  it("numbers in-store codes per shop and refuses other shops' units", async () => {
+    const r = await call("POST", "/auth/register", undefined, { businessName: "مخبز", storeName: "الرئيسي", ownerName: "نوري", email: "bread@test.ly", password: "password123" });
+    const t = r.body.token;
+    const p = await call("POST", "/products", t, { name: "خبز", units: [{ name: "رغيف", priceMinor: 250, isBase: true }, { name: "كيس 10", factorMilli: 10000, priceMinor: 2250 }] });
+    const a = await call("POST", "/barcodes/generate", t, { unitId: p.body.units[0].id });
+    const b = await call("POST", "/barcodes/generate", t, { unitId: p.body.units[1].id });
+    expect(a.body.code).toBe("2990000000019");
+    expect(b.body.code).toBe("2990000000026");
+    const list = (await call("GET", `/products?storeId=${r.body.storeId}`, t)).body[0];
+    expect(list.units.map((u: { barcodes: string[] }) => u.barcodes)).toEqual([["2990000000019"], ["2990000000026"]]);
+    expect((await call("POST", "/barcodes/generate", owner, { unitId: p.body.units[0].id })).status).toBe(404);
+  });
+});

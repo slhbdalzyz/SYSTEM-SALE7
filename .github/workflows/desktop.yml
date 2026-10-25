@@ -13,6 +13,21 @@ on:
         required: false
 
 jobs:
+  # The serial-port code is tested on Linux, where socat can stand in for a scale.
+  rust-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y socat libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+      - name: Placeholder web build for tauri::generate_context
+        run: mkdir -p apps/web/dist-demo && echo '<!doctype html>' > apps/web/dist-demo/index.html
+      - run: cargo test --lib
+        working-directory: apps/desktop/src-tauri
+
   build:
     runs-on: windows-latest
     steps:

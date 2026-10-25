@@ -350,7 +350,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
         )}
         <span className="muted">{catalogSize} صنف</span>
         <button onClick={() => void openCustomerDisplay()} title="افتحها على الشاشة الثانية">شاشة الزبون</button>
-        <button onClick={() => setDialog({ kind: "printer" })}>الطابعة</button>
+        <button onClick={() => setDialog({ kind: "printer" })}>الطابعة والميزان</button>
         <button onClick={() => void syncNow()}>مزامنة</button>
         <button onClick={askCloseShift} disabled={!shift}>قفل الوردية</button>
         <button onClick={logout}>خروج</button>

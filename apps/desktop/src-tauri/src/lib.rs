@@ -1,8 +1,9 @@
 //! The Windows shell around the web till. It adds what a browser cannot do: send raw bytes
 //! to the receipt printer (and through it, pulse the cash drawer), and open the customer
-//! display on the second monitor.
+//! display on the second monitor, and read the counter scale on a COM port.
 
 mod printer;
+mod scale;
 
 use std::io::Write;
 use std::net::{TcpStream, ToSocketAddrs};
@@ -36,6 +37,22 @@ fn print_tcp(host: String, port: u16, data: Vec<u8>) -> Result<(), String> {
     s.flush().map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn list_serial_ports() -> Result<Vec<scale::PortInfo>, String> {
+    scale::list()
+}
+
+/// Blocking serial I/O runs off the main thread so the window stays responsive.
+#[tauri::command]
+async fn read_scale(port: String, baud: u32, request: Option<String>, timeout_ms: Option<u64>) -> Result<String, String> {
+    if port.is_empty() {
+        return Err("اختار منفذ الميزان من الإعدادات".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || scale::read(&port, baud, request.as_deref(), Duration::from_millis(timeout_ms.unwrap_or(3000))))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// Opens (or brings back) the customer display, full screen on the second monitor when there is one.
 #[tauri::command]
 fn open_display(app: AppHandle) -> Result<(), String> {
@@ -59,7 +76,7 @@ fn open_display(app: AppHandle) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![list_printers, print_raw, print_tcp, open_display])
+        .invoke_handler(tauri::generate_handler![list_printers, print_raw, print_tcp, open_display, list_serial_ports, read_scale])
         .run(tauri::generate_context!())
         .expect("error while running the till");
 }
