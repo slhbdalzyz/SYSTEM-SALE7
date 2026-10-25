@@ -10,7 +10,10 @@ interface Q {
 }
 
 export async function seedDemo(db: Q) {
-  if ((await db.query(`SELECT 1 FROM users LIMIT 1`)).rows.length) return addPriceChecker(db);
+  if ((await db.query(`SELECT 1 FROM users LIMIT 1`)).rows.length) {
+    await addPriceChecker(db);
+    return addPlatform(db);
+  }
   const one = async (sql: string, params: unknown[] = []) => (await db.query(sql, params)).rows[0]?.id as string;
   const hash = (s: string) => bcrypt.hash(s, 8);
 
@@ -20,6 +23,7 @@ export async function seedDemo(db: Q) {
   await db.query(`INSERT INTO users (tenant_id, name, pin_hash, role) VALUES ($1,'أحمد الكاشير',$2,'cashier')`, [tid, await hash("1234")]);
   await db.query(`INSERT INTO devices (tenant_id, store_id, name, prefix, token_hash) VALUES ($1,$2,'كاشير 1','P1',$3)`, [tid, sid, hashToken(DEMO_DEVICE_TOKEN)]);
   await addPriceChecker(db);
+  await addPlatform(db);
   await db.query(`INSERT INTO customers (tenant_id, name, phone, credit_limit_minor) VALUES ($1,'محمد الطرابلسي','0912345678',200000), ($1,'مطعم الواحة','0923456789',NULL)`, [tid]);
 
   const cat = (n: string) => one(`INSERT INTO categories (tenant_id, name) VALUES ($1,$2) RETURNING id`, [tid, n]);
@@ -77,4 +81,47 @@ async function addPriceChecker(db: Q) {
      SELECT tenant_id, store_id, 'قارئ الأسعار', 'PC', $1, 'price_checker' FROM devices ORDER BY created_at LIMIT 1`,
     [t],
   );
+}
+
+export const DEMO_PLATFORM = { email: "admin@sale7.ly", password: "platform12345" };
+
+/** The platform side of the demo: its staff login and a handful of other shops in different states. */
+async function addPlatform(db: Q) {
+  if ((await db.query(`SELECT 1 FROM platform_admins LIMIT 1`)).rows.length) return;
+  const aid = (await db.query(
+    `INSERT INTO platform_admins (name, email, password_hash) VALUES ('صالح', $1, $2) RETURNING id`,
+    [DEMO_PLATFORM.email, await bcrypt.hash(DEMO_PLATFORM.password, 8)],
+  )).rows[0].id as string;
+  const pay = (tid: string, plan: string, months: number, price: number, monthsAgo: number, method: string) =>
+    db.query(
+      `INSERT INTO subscription_payments (tenant_id, plan_code, months, amount_minor, method, period_from, period_to, recorded_by, created_at)
+       VALUES ($1,$2,$3,$4,$5, now() - make_interval(months => $6), now() - make_interval(months => $6) + make_interval(months => $3), $7, now() - make_interval(months => $6))`,
+      [tid, plan, months, price * months, method, monthsAgo, aid],
+    );
+
+  const demo = (await db.query(`SELECT id FROM tenants ORDER BY created_at LIMIT 1`)).rows[0].id as string;
+  await db.query(`UPDATE tenants SET status = 'active', plan_code = 'pro', phone = '0911111111', paid_until = now() + interval '25 days' WHERE id = $1`, [demo]);
+  await pay(demo, "pro", 1, 300000, 0, "bank");
+
+  const others: [string, string, string, string, string, string | null][] = [
+    // name, phone, owner email, plan, status, paid_until offset
+    ["بقالة النور", "0921234567", "noor@demo.ly", "basic", "trial", "3 days"],
+    ["ملحمة الأصيل", "0917654321", "aseel@demo.ly", "basic", "active", "-3 days"],
+    ["صيدلية الشفاء", "0945556677", "shifa@demo.ly", "pro", "suspended", "-40 days"],
+    ["أسواق الواحة", "0918889990", "waha@demo.ly", "chain", "active", "80 days"],
+  ];
+  for (const [name, phone, email, plan, status, offset] of others) {
+    const tid = (await db.query(
+      `INSERT INTO tenants (name, phone, plan_code, status, status_reason, paid_until, created_at) VALUES ($1,$2,$3,$4,$5, now() + $6::interval, now() - interval '70 days') RETURNING id`,
+      [name, phone, plan, status, status === "suspended" ? "ما دفعش من شهرين" : null, offset],
+    )).rows[0].id as string;
+    const sid = (await db.query(`INSERT INTO stores (tenant_id, name) VALUES ($1, 'الفرع الرئيسي') RETURNING id`, [tid])).rows[0].id;
+    await db.query(`INSERT INTO users (tenant_id, name, email, password_hash, role) VALUES ($1, 'المالك', $2, 'x', 'owner')`, [tid, email]);
+    await db.query(
+      `INSERT INTO devices (tenant_id, store_id, name, prefix, token_hash, last_seen_at) VALUES ($1,$2,'كاشير 1','P1',$3, now() - interval '2 hours')`,
+      [tid, sid, hashToken(`${email}-device`)],
+    );
+    if (name === "ملحمة الأصيل") await pay(tid, "basic", 2, 150000, 2, "cash");
+    if (name === "أسواق الواحة") await pay(tid, "chain", 3, 700000, 0, "bank");
+  }
 }

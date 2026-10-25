@@ -4,6 +4,7 @@ import { PGlite } from "@electric-sql/pglite";
 import m001 from "../../../api/migrations/001_init.sql?raw";
 import m002 from "../../../api/migrations/002_customers_returns.sql?raw";
 import m003 from "../../../api/migrations/003_device_kinds.sql?raw";
+import m004 from "../../../api/migrations/004_saas.sql?raw";
 import { authRoutes } from "../../../api/src/routes/auth";
 import { adminRoutes } from "../../../api/src/routes/admin";
 import { catalogRoutes } from "../../../api/src/routes/catalog";
@@ -14,7 +15,10 @@ import { reportRoutes } from "../../../api/src/routes/reports";
 import { customerRoutes } from "../../../api/src/routes/customers";
 import { returnRoutes } from "../../../api/src/routes/returns";
 import { deviceRoutes } from "../../../api/src/routes/devices";
+import { platformRoutes } from "../../../api/src/routes/platform";
+import { subscriptionRoutes } from "../../../api/src/routes/subscription";
 import { seedDemo } from "./seed";
+import { checkSubscription } from "../../../api/src/billing";
 // Type-only: brings in the server's Fastify type additions (app.db, req.user) for the route files.
 import type {} from "../../../api/src/app";
 
@@ -25,7 +29,7 @@ type Req = {
   params: Record<string, string>;
   headers: Record<string, string>;
   user: any; // eslint-disable-line @typescript-eslint/no-explicit-any
-  jwtVerify: () => Promise<void>;
+  jwtVerify: () => Promise<any>; // eslint-disable-line @typescript-eslint/no-explicit-any
   log: Console;
 };
 type Fn = (req: Req, reply: unknown) => unknown;
@@ -109,14 +113,14 @@ async function boot(): Promise<MiniApp> {
   }
   await pg.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY)`);
   const done = new Set((await pg.query<{ name: string }>(`SELECT name FROM schema_migrations`)).rows.map((r) => r.name));
-  for (const [name, sql] of [["001_init.sql", m001], ["002_customers_returns.sql", m002], ["003_device_kinds.sql", m003]] as const) {
+  for (const [name, sql] of [["001_init.sql", m001], ["002_customers_returns.sql", m002], ["003_device_kinds.sql", m003], ["004_saas.sql", m004]] as const) {
     if (done.has(name)) continue;
     await pg.exec(sql);
     await pg.query(`INSERT INTO schema_migrations (name) VALUES ($1)`, [name]);
   }
   const db = new Db(pg);
   const app = new MiniApp(db);
-  for (const r of [authRoutes, adminRoutes, catalogRoutes, salesRoutes, shiftRoutes, stockRoutes, reportRoutes, customerRoutes, returnRoutes, deviceRoutes]) {
+  for (const r of [authRoutes, adminRoutes, catalogRoutes, salesRoutes, shiftRoutes, stockRoutes, reportRoutes, customerRoutes, returnRoutes, deviceRoutes, platformRoutes, subscriptionRoutes]) {
     await app.register(r);
   }
   await seedDemo(db);
@@ -154,9 +158,12 @@ export async function handle(method: string, url: string, token: string | null |
       const p = JSON.parse(decodeURIComponent(escape(atob(t))));
       if (p.exp * 1000 < Date.now()) throw new Error("expired");
       req.user = p;
+      return p;
     },
   };
   try {
+    // The server runs this as a hook before every route; so does the demo.
+    await checkSubscription(app.db as never, method, u.pathname, token ? () => req.jwtVerify() : null);
     for (const p of m.route.pre) await p(req, {});
     return { status: 200, data: await m.route.handler(req, {}) };
   } catch (e) {

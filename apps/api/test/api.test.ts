@@ -287,3 +287,114 @@ describe("price checker and till events", () => {
     expect(a.body.map((x: { action: string }) => x.action)).toContain("drawer.open");
   });
 });
+
+describe("subscriptions and the platform back office", () => {
+  let staff: string;
+  let tenantId: string;
+
+  it("starts new shops on a trial and signs platform staff in separately", async () => {
+    const bcrypt = (await import("bcryptjs")).default;
+    await db.query(`INSERT INTO platform_admins (name, email, password_hash) VALUES ('صالح', 'admin@sale7.ly', $1)`, [await bcrypt.hash("platform-pass", 4)]);
+    expect((await call("POST", "/platform/login", undefined, { email: "admin@sale7.ly", password: "nope" })).status).toBe(401);
+    const l = await call("POST", "/platform/login", undefined, { email: "admin@sale7.ly", password: "platform-pass" });
+    expect(l.status).toBe(200);
+    staff = l.body.token;
+    // A platform token is not a shop's token, and a shop's token is not a platform token.
+    expect((await call("GET", "/products", staff)).status).toBe(403);
+    expect((await call("GET", "/platform/tenants", owner)).status).toBe(403);
+
+    const s = await call("GET", "/subscription", owner);
+    expect(s.body.state).toBe("trial");
+    expect(s.body.daysLeft).toBe(14);
+    expect(s.body.plan.code).toBe("basic");
+    expect(s.body.usage.devices).toBe(2);
+    tenantId = (await db.query(`SELECT tenant_id FROM users WHERE email = 'salem@test.ly'`)).rows[0].tenant_id;
+  });
+
+  it("holds a shop to its plan's limits", async () => {
+    const d = await call("POST", "/devices", owner, { storeId, name: "كاشير 3" });
+    expect(d.status).toBe(402);
+    expect(d.body.error).toContain("الأساسية");
+  });
+
+  it("lists shops with their state and usage", async () => {
+    const list = await call("GET", "/platform/tenants?q=النور", staff);
+    expect(list.body).toHaveLength(1);
+    expect(list.body[0]).toMatchObject({ name: "سوق النور", state: "trial", devices: 2, owner_email: "salem@test.ly" });
+    expect(list.body[0].sales30).toBeGreaterThan(0);
+    const o = await call("GET", "/platform/overview", staff);
+    expect(o.body.tenants).toBe(2);
+    expect(o.body.byState.trial).toBe(2);
+  });
+
+  it("locks a shop whose trial ran out, but still takes the till's sales", async () => {
+    await db.query(`UPDATE tenants SET paid_until = now() - interval '1 day' WHERE id = $1`, [tenantId]);
+    // Skip the 20 s cache by recording through the API, which forgets the shop's cached state.
+    await call("PATCH", `/platform/tenants/${tenantId}`, staff, { phone: "0910000000" });
+    const s = await call("GET", "/subscription", owner);
+    expect(s.body.state).toBe("locked");
+    expect((await call("POST", "/products", owner, { name: "x", units: [{ name: "قطعة", priceMinor: 1, isBase: true }] })).status).toBe(402);
+    const users = (await call("POST", "/auth/device-users", undefined, { deviceToken })).body.users as { id: string; name: string }[];
+    const pin = await call("POST", "/auth/pin", undefined, { deviceToken, userId: users.find((u) => u.name === "أحمد")!.id, pin: "1234" });
+    expect(pin.status).toBe(402);
+    // A sale made before the lock, synced after it, is kept.
+    const sale = { id: randomUUID(), shiftId, number: "LATE-1", createdAt: new Date().toISOString(), lines: [{ productId: pepsi.productId, unitId: pepsi.piece, name: "بيبسي", qtyMilli: 1000, priceMinor: 1500, discountMinor: 0, taxBp: 0 }], invoiceDiscountMinor: 0, payments: [{ method: "cash", amountMinor: 1500 }], totalMinor: 1500 };
+    const r = await call("POST", "/sales/batch", cashierToken, { sales: [sale] });
+    expect(r.status).toBe(200);
+    expect(r.body.results[0].status).not.toBe("rejected");
+    // The owner can still sign in to see the bill.
+    expect((await call("POST", "/auth/login", undefined, { email: "salem@test.ly", password: "password123" })).status).toBe(200);
+  });
+
+  it("records a payment, which reopens the shop and moves the paid-up date", async () => {
+    const p = await call("POST", `/platform/tenants/${tenantId}/payments`, staff, { months: 3, method: "bank", reference: "TRX-77", planCode: "pro" });
+    expect(p.status).toBe(200);
+    expect(p.body.amountMinor).toBe(900000);
+    const s = await call("GET", "/subscription", owner);
+    expect(s.body.state).toBe("active");
+    expect(s.body.plan.code).toBe("pro");
+    expect(s.body.daysLeft).toBeGreaterThanOrEqual(89);
+    expect(s.body.payments).toHaveLength(1);
+    expect((await call("POST", "/devices", owner, { storeId, name: "كاشير 3" })).status).toBe(200);
+
+    // Paying early adds to what is left rather than starting from today.
+    const before = new Date(s.body.paidUntil).getTime();
+    await call("POST", `/platform/tenants/${tenantId}/payments`, staff, { months: 1, method: "cash" });
+    const after = new Date((await call("GET", "/subscription", owner)).body.paidUntil).getTime();
+    expect(Math.round((after - before) / 86_400_000)).toBeGreaterThanOrEqual(28);
+  });
+
+  it("gives a paying shop a grace period before locking", async () => {
+    await db.query(`UPDATE tenants SET paid_until = now() - interval '2 days' WHERE id = $1`, [tenantId]);
+    await call("PATCH", `/platform/tenants/${tenantId}`, staff, { phone: "0910000001" });
+    expect((await call("GET", "/subscription", owner)).body.state).toBe("grace");
+    expect((await call("POST", "/customers", owner, { name: "زبون جديد" })).status).toBe(200);
+    // Renewing during the grace period pays for those days too: the month runs from the old end date.
+    await call("POST", `/platform/tenants/${tenantId}/payments`, staff, { months: 1, method: "cash" });
+    const left = (await call("GET", "/subscription", owner)).body.daysLeft as number;
+    expect(left).toBeGreaterThanOrEqual(26);
+    expect(left).toBeLessThanOrEqual(29);
+  });
+
+  it("suspends and reactivates a shop, and keeps a log of it", async () => {
+    await call("PATCH", `/platform/tenants/${tenantId}`, staff, { status: "suspended", reason: "شيك راجع" });
+    const r = await call("POST", "/customers", owner, { name: "زبون 2" });
+    expect(r.status).toBe(402);
+    expect(r.body.error).toContain("شيك راجع");
+    await call("PATCH", `/platform/tenants/${tenantId}`, staff, { status: "active", extendDays: 10 });
+    expect((await call("POST", "/customers", owner, { name: "زبون 2" })).status).toBe(200);
+    const d = await call("GET", `/platform/tenants/${tenantId}`, staff);
+    expect(d.body.payments).toHaveLength(3);
+    expect(d.body.log.map((x: { action: string }) => x.action)).toEqual(expect.arrayContaining(["payment.record", "tenant.update"]));
+    await expect(db.query(`DELETE FROM platform_audit`)).rejects.toThrow(/append-only/);
+  });
+
+  it("edits plans and shows active ones publicly", async () => {
+    await call("PUT", "/platform/plans/basic", staff, { name: "الأساسية", priceMinor: 120000, maxStores: 1, maxDevices: 2, maxUsers: 5, sort: 1 });
+    const plans = (await call("GET", "/plans")).body as { code: string; price_minor: number }[];
+    expect(plans.find((p) => p.code === "basic")!.price_minor).toBe(120000);
+    const reg = await call("POST", "/auth/register", undefined, { businessName: "ملحمة", storeName: "فرع", ownerName: "علي", email: "butcher@test.ly", password: "password123", planCode: "chain", phone: "092" });
+    const s = await call("GET", "/subscription", reg.body.token);
+    expect(s.body.plan.code).toBe("chain");
+  });
+});

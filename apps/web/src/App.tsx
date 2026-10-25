@@ -8,6 +8,7 @@ import { DemoBar } from "./demo/DemoBar";
 import { DEMO } from "./api";
 import { CustomerDisplay } from "./display/CustomerDisplay";
 import { PriceChecker } from "./pricecheck/PriceChecker";
+import { Platform } from "./platform/Platform";
 
 export type Screen = "setup" | "pin" | "pos" | "admin" | "price";
 
@@ -22,7 +23,15 @@ function initial(): Screen {
 
 export function App() {
   // The customer display is a second window of the till, with no session of its own.
-  if (new URLSearchParams(location.search).get("screen") === "display") return <CustomerDisplay />;
+  const q = new URLSearchParams(location.search);
+  if (q.get("screen") === "display") return <CustomerDisplay />;
+  if (q.get("app") === "platform")
+    return (
+      <>
+        <DemoBar />
+        <Platform />
+      </>
+    );
   return <Main />;
 }
 

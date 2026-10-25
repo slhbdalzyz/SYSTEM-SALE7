@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { DEMO } from "../api";
 import { session } from "../session";
-import { DEMO_CHECKER_TOKEN, DEMO_DEVICE_TOKEN } from "./seed";
+import { DEMO_CHECKER_TOKEN, DEMO_DEVICE_TOKEN, DEMO_PLATFORM } from "./seed";
 
 /** A strip on every screen of the demo with the logins to try, and a way to start over. */
 export function DemoBar() {
@@ -26,11 +26,18 @@ export function DemoBar() {
     session.staffToken = null;
     location.reload();
   }
-  if (new URLSearchParams(location.search).get("screen") === "display") return null;
+  const q = new URLSearchParams(location.search);
+  if (q.get("screen") === "display") return null;
+  const platform = q.get("app") === "platform";
   return (
     <div className="demo-bar">
       <b>نسخة تجريبية</b>
-      {open && (
+      {open && platform && (
+        <span>
+          لوحة المنصة (لصاحب الخدمة): <b className="num">{DEMO_PLATFORM.email}</b> / <b className="num">{DEMO_PLATFORM.password}</b>
+        </span>
+      )}
+      {open && !platform && (
         <span>
           الكاشير: <b>أحمد</b> رقمه <b className="num">1234</b> · المالك رقمه <b className="num">9999</b> · الإدارة:{" "}
           <b className="num">owner@demo.ly</b> / <b className="num">demo12345</b> · باركودات للتجربة: <b className="num">6191234500042</b> (كرتونة بيبسي)،{" "}
@@ -38,7 +45,8 @@ export function DemoBar() {
         </span>
       )}
       <span className="spacer" />
-      <button onClick={switchDevice}>{checker ? "رجوع للكاشير" : "جرّب قارئ الأسعار"}</button>
+      <a href={platform ? location.pathname : "?app=platform"}><button type="button">{platform ? "شاشة المحل" : "لوحة المنصة"}</button></a>
+      {!platform && <button onClick={switchDevice}>{checker ? "رجوع للكاشير" : "جرّب قارئ الأسعار"}</button>}
       <button onClick={() => setOpen(!open)}>{open ? "إخفاء" : "عرض"}</button>
       <button onClick={reset}>بيانات جديدة</button>
     </div>

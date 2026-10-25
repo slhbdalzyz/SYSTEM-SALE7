@@ -7,7 +7,7 @@ export interface DeviceInfo {
   storeName: string;
 }
 
-const KEYS = { deviceToken: "pos.deviceToken", device: "pos.device", staff: "pos.staffToken", admin: "pos.adminToken", kind: "pos.deviceKind" } as const;
+const KEYS = { deviceToken: "pos.deviceToken", device: "pos.device", staff: "pos.staffToken", admin: "pos.adminToken", kind: "pos.deviceKind", platform: "pos.platformToken" } as const;
 
 function get(k: string): string | null {
   try {
@@ -52,6 +52,13 @@ export const session = {
   },
   set staffToken(v: string | null) {
     set(KEYS.staff, v);
+  },
+  /** Someone running the service, in the platform back office. */
+  get platformToken() {
+    return get(KEYS.platform);
+  },
+  set platformToken(v: string | null) {
+    set(KEYS.platform, v);
   },
   /** Owner/manager session for the admin screens (from email + password). */
   get adminToken() {

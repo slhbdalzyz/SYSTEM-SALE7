@@ -6,7 +6,7 @@ import type { Role } from "@pos/shared";
 export interface TokenPayload {
   sub: string; // user id
   tid: string; // tenant id
-  role: Role;
+  role: Role | "platform"; // "platform" = staff running the service, with no shop (tid is "")
   did?: string; // device id, present for cashier sessions on a registered device
   sid?: string; // store id of that device
 }
@@ -38,12 +38,22 @@ export async function authenticate(req: FastifyRequest) {
   } catch {
     throw new HttpError(401, "غير مصرح");
   }
+  if (req.user.role === "platform") throw new HttpError(403, "هذا حساب إدارة المنصة، مش حساب محل");
+}
+
+export async function requirePlatform(req: FastifyRequest) {
+  try {
+    await req.jwtVerify();
+  } catch {
+    throw new HttpError(401, "غير مصرح");
+  }
+  if (req.user.role !== "platform") throw new HttpError(403, "ليس لديك صلاحية");
 }
 
 export function requireRole(...roles: Role[]) {
   return async (req: FastifyRequest, _reply: FastifyReply) => {
     await authenticate(req);
-    if (!roles.includes(req.user.role)) throw new HttpError(403, "ليس لديك صلاحية");
+    if (!roles.includes(req.user.role as Role)) throw new HttpError(403, "ليس لديك صلاحية");
   };
 }
 

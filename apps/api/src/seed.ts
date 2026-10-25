@@ -14,7 +14,11 @@ if (exists.rowCount) {
   process.exit(0);
 }
 await inTx(db, async (tx) => {
-  const tid = (await tx.query(`INSERT INTO tenants (name) VALUES ('سوبرماركت التجربة') RETURNING id`)).rows[0].id;
+  const tid = (await tx.query(`INSERT INTO tenants (name, status, plan_code, paid_until) VALUES ('سوبرماركت التجربة', 'active', 'pro', now() + interval '1 year') RETURNING id`)).rows[0].id;
+  await tx.query(
+    `INSERT INTO platform_admins (name, email, password_hash) VALUES ('مدير المنصة', 'admin@sale7.ly', $1) ON CONFLICT (email) DO NOTHING`,
+    [await bcrypt.hash("platform12345", 12)],
+  );
   const sid = (await tx.query(`INSERT INTO stores (tenant_id, name, address, receipt_footer) VALUES ($1,'الفرع الرئيسي','طرابلس','شكراً لزيارتكم') RETURNING id`, [tid])).rows[0].id;
   await tx.query(`INSERT INTO users (tenant_id, name, email, password_hash, pin_hash, role) VALUES ($1,'المالك','owner@demo.ly',$2,$3,'owner')`, [tid, await bcrypt.hash("demo12345", 12), await bcrypt.hash("9999", 10)]);
   await tx.query(`INSERT INTO users (tenant_id, name, pin_hash, role) VALUES ($1,'أحمد الكاشير',$2,'cashier')`, [tid, await bcrypt.hash("1234", 10)]);
@@ -59,5 +63,6 @@ await inTx(db, async (tx) => {
 console.log("demo data created");
 console.log("owner login: owner@demo.ly / demo12345");
 console.log("cashier PIN: 1234 (أحمد) — owner PIN: 9999");
+console.log("platform back office (?app=platform): admin@sale7.ly / platform12345");
 console.log(`demo device token: ${DEMO_DEVICE_TOKEN}`);
 await db.end();
