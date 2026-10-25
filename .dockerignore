@@ -1,0 +1,6 @@
+**/node_modules
+**/dist
+**/dist-demo
+.vercel
+.git
+apps/desktop/src-tauri/target

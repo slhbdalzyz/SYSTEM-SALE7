@@ -5,3 +5,6 @@ dist
 dist-demo
 target
 apps/desktop/src-tauri/gen
+.vercel
+deploy/.env
+deploy/backups

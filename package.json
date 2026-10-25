@@ -10,5 +10,8 @@
     "typecheck": "pnpm -r typecheck",
     "build": "pnpm -r build"
   },
-  "packageManager": "pnpm@10.28.0"
+  "packageManager": "pnpm@10.28.0",
+  "devDependencies": {
+    "esbuild": "0.24.0"
+  }
 }
