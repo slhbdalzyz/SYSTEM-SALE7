@@ -1,10 +1,12 @@
 import { buildApp } from "./app";
 import { createPool } from "./db";
 import { bootstrapPlatformAdmin, migrate } from "./migrate";
+import { setupPush } from "./push";
 
 const db = createPool();
 await migrate(db);
 await bootstrapPlatformAdmin(db);
+await setupPush(db);
 const secret = process.env.JWT_SECRET ?? (process.env.NODE_ENV === "production" ? "" : "dev-only-secret-change-me-0123456789abcdef");
 const app = await buildApp({
   db,

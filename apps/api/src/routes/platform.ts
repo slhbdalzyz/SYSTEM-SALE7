@@ -166,7 +166,7 @@ export async function platformRoutes(app: FastifyInstance) {
   });
 
   app.get("/platform/settings", staff, async () => {
-    const r = await app.db.query(`SELECT key, value FROM platform_settings`);
+    const r = await app.db.query(`SELECT key, value FROM platform_settings WHERE key <> 'vapid'`); // the push signing key stays on the server
     return Object.fromEntries(r.rows.map((x) => [x.key, x.value]));
   });
 

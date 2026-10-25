@@ -3,11 +3,14 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { buildApp } from "./app";
 import { createPool } from "./db";
+import { setupPush } from "./push";
 
 const secret = process.env.JWT_SECRET ?? "";
 const ready = (async () => {
+  const db = createPool(process.env.DATABASE_URL ?? process.env.POSTGRES_URL, 3);
+  await setupPush(db);
   const app = await buildApp({
-    db: createPool(process.env.DATABASE_URL ?? process.env.POSTGRES_URL, 3),
+    db,
     jwtSecret: secret,
     corsOrigin: process.env.CORS_ORIGIN?.split(","),
     trustProxy: true,

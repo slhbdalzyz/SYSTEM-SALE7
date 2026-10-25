@@ -65,7 +65,7 @@ export async function adminRoutes(app: FastifyInstance) {
 
   app.get("/devices", managers, async (req) => {
     const r = await app.db.query(
-      `SELECT id, store_id, name, prefix, kind, active, last_seen_at FROM devices WHERE tenant_id = $1 ORDER BY created_at`,
+      `SELECT id, store_id, name, prefix, kind, active, backup, last_seen_at FROM devices WHERE tenant_id = $1 ORDER BY created_at`,
       [req.user.tid],
     );
     return r.rows;

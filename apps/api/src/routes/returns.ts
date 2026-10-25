@@ -3,6 +3,7 @@ import { z } from "zod";
 import { refundFor, returnInputSchema } from "@pos/shared";
 import { audit, inTx } from "../db";
 import { HttpError, authenticate, requireDevice, verifyApproval } from "../auth";
+import { alertBigReturn, flushPushes } from "../alerts";
 
 export async function returnRoutes(app: FastifyInstance) {
   async function loadSale(tenantId: string, where: { id?: string; number?: string }) {
@@ -87,6 +88,8 @@ export async function returnRoutes(app: FastifyInstance) {
           tenantId: who.tid, userId: who.sub, deviceId: who.did, action: "sale.return", entity: "sale", entityId: orig.id,
           data: { returnNumber: b.number, original: orig.number, total, method: b.refundMethod, approvedBy, reason: b.reason },
         });
+        const cashier = (await tx.query(`SELECT name FROM users WHERE id = $1`, [who.sub])).rows[0]?.name ?? "";
+        await alertBigReturn(tx, { tenantId: who.tid, storeId: who.sid!, totalMinor: total, number: b.number, original: orig.number, reason: b.reason, cashier });
       });
     } catch (e) {
       const err = e as { code?: string; constraint?: string };
@@ -94,6 +97,7 @@ export async function returnRoutes(app: FastifyInstance) {
       if (err.code === "23505") throw new HttpError(409, "رقم الفاتورة مكرر");
       throw e;
     }
+    await flushPushes(app.db, who.tid);
     return { id: b.id, status: "accepted", totalMinor: total, lines: priced.map((p) => ({ name: p.l.name, qtyMilli: p.qty, priceMinor: p.l.price_minor, totalMinor: p.totalMinor })) };
   });
 }

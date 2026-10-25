@@ -678,3 +678,146 @@ describe("online subscription payments", () => {
     expect((await call("GET", `/subscription/pay/${anyIntent}`, owner)).status).toBe(404);
   });
 });
+
+describe("the owner's phone: dashboard, alerts, expenses, backup", () => {
+  let t: string;
+  let store: string;
+  let till: string;
+  let tillShift: string;
+  let deviceId: string;
+  let rice: { id: string; piece: string };
+  const pushed: { endpoint: string; payload: string }[] = [];
+
+  const sale = (qty: number, discount = 0) => ({
+    id: randomUUID(), number: `R-${randomUUID().slice(0, 6)}`, shiftId: tillShift, createdAt: new Date().toISOString(),
+    lines: [{ productId: rice.id, unitId: rice.piece, name: "رز", qtyMilli: qty * 1000, priceMinor: 10000, discountMinor: discount }],
+    payments: [{ method: "cash", amountMinor: qty * 10000 - discount }], totalMinor: qty * 10000 - discount,
+  });
+
+  it("sets up a shop with stock near its minimum", async () => {
+    const { setPusher } = await import("../src/alerts");
+    setPusher(async (to, payload) => {
+      pushed.push({ endpoint: to.endpoint, payload });
+      return to.endpoint.endsWith("/gone") ? { gone: true } : {};
+    }, "BPUBLICKEY");
+    const r = await call("POST", "/auth/register", undefined, { businessName: "سوق الهاتف", storeName: "الرئيسي", ownerName: "علي", email: "phone@test.ly", password: "password123" });
+    t = r.body.token;
+    store = r.body.storeId;
+    const p = await call("POST", "/products", t, { name: "رز", costMinor: 7000, minStockMilli: 5000, units: [{ name: "كيس", priceMinor: 10000, isBase: true }] });
+    rice = { id: p.body.id, piece: p.body.units[0].id };
+    await call("POST", "/purchases", t, { storeId: store, lines: [{ unitId: rice.piece, qtyMilli: 8000, unitCostMinor: 7000 }] });
+    const d = await call("POST", "/devices", t, { storeId: store, name: "كاشير الهاتف" });
+    deviceId = d.body.id;
+    const u = await call("POST", "/users", t, { name: "مراد", role: "cashier", pin: "5555" });
+    till = (await call("POST", "/auth/pin", undefined, { deviceToken: d.body.deviceToken, userId: u.body.id, pin: "5555" })).body.token;
+    tillShift = randomUUID();
+    await call("POST", "/shifts/open", till, { id: tillShift, openingCashMinor: 20000 });
+    expect((await call("POST", "/push/subscribe", t, { endpoint: "https://push.example/phone1", keys: { p256dh: "BKEY-0123456789", auth: "auth-01234" } })).status).toBe(200);
+    await call("POST", "/push/subscribe", t, { endpoint: "https://push.example/gone", keys: { p256dh: "BKEY-0123456789", auth: "auth-01234" } });
+  });
+
+  it("alerts once when a product crosses its minimum, and again when it runs out", async () => {
+    await call("POST", "/sales/batch", till, { sales: [sale(2)] }); // 8 → 6, still above 5
+    expect((await call("GET", "/alerts", t)).body.alerts).toHaveLength(0);
+    await call("POST", "/sales/batch", till, { sales: [sale(2)] }); // 6 → 4
+    await call("POST", "/sales/batch", till, { sales: [sale(1)] }); // 4 → 3, already low: no new alert
+    const a = (await call("GET", "/alerts", t)).body;
+    expect(a.alerts.map((x: { kind: string }) => x.kind)).toEqual(["low_stock"]);
+    expect(a.alerts[0].body).toContain("باقي 4");
+    await call("POST", "/sales/batch", till, { sales: [sale(3)] }); // 3 → 0
+    expect((await call("GET", "/alerts", t)).body.alerts[0]).toMatchObject({ kind: "out_of_stock", title: "خلص: رز" });
+    expect(pushed.filter((p) => p.endpoint.endsWith("phone1")).map((p) => JSON.parse(p.payload).tag)).toEqual(["low_stock", "out_of_stock"]);
+    // The phone that unsubscribed is forgotten after its first failed push.
+    expect((await db.query(`SELECT count(*)::int AS n FROM push_subscriptions WHERE endpoint LIKE '%/gone'`)).rows[0].n).toBe(0);
+  });
+
+  it("alerts on a big discount and a short drawer, by the shop's own limits", async () => {
+    await call("POST", "/purchases", t, { storeId: store, lines: [{ unitId: rice.piece, qtyMilli: 20000, unitCostMinor: 7000 }] });
+    expect((await call("PUT", "/alerts/settings", till, { discountOverMinor: 1 })).status).toBe(403);
+    expect((await call("PUT", "/alerts/settings", t, { discountOverMinor: 3000, cashDiffOverMinor: 2000 })).body).toMatchObject({ discountOverMinor: 3000, lowStock: true });
+    await call("POST", "/sales/batch", till, { sales: [sale(1, 1000)] }); // under the limit
+    await call("POST", "/sales/batch", till, { sales: [sale(2, 4000)] });
+    const close = await call("POST", `/shifts/${tillShift}/close`, till, { closingCashMinor: 0 });
+    expect(close.body.differenceMinor).toBeLessThan(-2000);
+    const kinds = (await call("GET", "/alerts", t)).body.alerts.map((x: { kind: string }) => x.kind);
+    expect(kinds.slice(0, 2)).toEqual(["cash_diff", "big_discount"]);
+    expect(kinds.filter((k: string) => k === "big_discount")).toHaveLength(1);
+  });
+
+  it("marks alerts read", async () => {
+    const before = (await call("GET", "/alerts", t)).body;
+    expect(before.unread).toBe(4);
+    await call("POST", "/alerts/read", t, { ids: [before.alerts[0].id] });
+    expect((await call("GET", "/alerts", t)).body.unread).toBe(3);
+    await call("POST", "/alerts/read", t, {});
+    expect((await call("GET", "/alerts", t)).body.unread).toBe(0);
+    expect((await call("GET", "/alerts", till)).status).toBe(403);
+  });
+
+  it("shows today against yesterday and the month after expenses", async () => {
+    const day = new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Tripoli" }).format(new Date());
+    expect((await call("POST", "/expenses", t, { storeId: store, category: "كهرباء", amountMinor: 15000, spentOn: day })).status).toBe(200);
+    await call("POST", "/expenses", t, { storeId: store, category: "إيجار", amountMinor: 500000, spentOn: `${day.slice(0, 7)}-01` });
+    expect((await call("POST", "/expenses", till, { storeId: store, category: "x", amountMinor: 1, spentOn: day })).status).toBe(403);
+    const d = (await call("GET", "/dashboard", t)).body;
+    // 11 bags sold at 10.000, less 5.000 in discounts; each bag cost 7.000.
+    expect(d.today).toMatchObject({ totalMinor: 105000, salesCount: 6, profitMinor: 105000 - 77000, expensesMinor: 15000, netMinor: 105000 - 77000 - 15000 });
+    expect(d.month.expensesMinor).toBe(515000);
+    expect(d.month.netMinor).toBe(d.month.profitMinor - 515000);
+    expect(d.week).toHaveLength(7);
+    expect(d.week[6]).toMatchObject({ day, totalMinor: 105000 });
+    expect(d.stores).toEqual([expect.objectContaining({ name: "الرئيسي", totalMinor: 105000 })]);
+    expect(d.lowStock.count).toBe(0);
+    expect(d.openShifts).toHaveLength(0);
+    const e = (await call("GET", `/expenses?month=${day.slice(0, 7)}`, t)).body;
+    expect(e.totalMinor).toBe(515000);
+    await call("POST", `/expenses/${e.expenses.find((x: { category: string }) => x.category === "كهرباء").id}/delete`, t);
+    expect((await call("GET", "/dashboard", t)).body.today.expensesMinor).toBe(0);
+  });
+
+  it("backs up the whole shop page by page, without secrets, for the owner or an allowed till", async () => {
+    expect((await call("GET", "/backup", till)).status).toBe(403);
+    const m = (await call("GET", "/backup", t)).body;
+    expect(m.format).toBe("pos-backup-1");
+    const sales = m.tables.find((x: { name: string }) => x.name === "sales");
+    expect(sales.rows).toBe(6);
+    const first = (await call("GET", "/backup/sales?limit=5", t)).body;
+    expect(first.rows).toHaveLength(5);
+    const rest = (await call("GET", `/backup/sales?limit=5&after=${first.next}`, t)).body;
+    expect(rest.rows).toHaveLength(1);
+    expect(rest.next).toBeNull();
+    expect(new Set([...first.rows, ...rest.rows].map((r: { id: string }) => r.id)).size).toBe(6);
+    const users = (await call("GET", "/backup/users", t)).body.rows;
+    expect(users.length).toBe(2);
+    expect(users.some((u: Record<string, unknown>) => "password_hash" in u || "pin_hash" in u)).toBe(false);
+    expect((await call("GET", "/backup/devices", t)).body.rows.some((d: Record<string, unknown>) => "token_hash" in d)).toBe(false);
+    expect((await call("GET", "/backup/platform_admins", t)).status).toBe(404);
+    expect((await call("GET", "/backup/sales?after=1;drop", t)).status).toBe(400);
+    // Another shop's backup holds none of this shop's rows.
+    expect((await call("GET", "/backup/sales", owner)).body.rows.every((r: { tenant_id: string }) => r.tenant_id !== m.tenantId)).toBe(true);
+
+    expect((await call("PATCH", `/devices/${deviceId}/backup`, till, { backup: true })).status).toBe(403);
+    expect((await call("PATCH", `/devices/${deviceId}/backup`, t, { backup: true })).status).toBe(200);
+    expect((await call("GET", "/backup/products", till)).body.rows).toHaveLength(1);
+    const { setPusher } = await import("../src/alerts");
+    setPusher(null, null);
+  });
+
+  it("makes its own push keys once and keeps the private one to itself", async () => {
+    const { setupPush } = await import("../src/push");
+    const { pushPublicKey, setPusher } = await import("../src/alerts");
+    await setupPush(db);
+    const first = pushPublicKey();
+    expect(first).toMatch(/^B[A-Za-z0-9_-]{80,}$/);
+    await setupPush(db);
+    expect(pushPublicKey()).toBe(first);
+    expect((await call("GET", "/alerts/settings", t)).body.pushKey).toBe(first);
+    const admin = await db.query(`SELECT 1 FROM platform_settings WHERE key = 'vapid'`);
+    expect(admin.rowCount).toBe(1);
+    const staff = (await call("POST", "/platform/login", undefined, { email: "admin@sale7.ly", password: "platform-pass" })).body.token;
+    const settings = (await call("GET", "/platform/settings", staff)).body;
+    expect(settings.grace_days).toBeDefined();
+    expect(settings.vapid).toBeUndefined();
+    setPusher(null, null);
+  });
+});

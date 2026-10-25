@@ -4,6 +4,7 @@ import type { Plan } from "./billing";
 import { api } from "./api";
 import { session } from "./session";
 import type { Screen } from "./App";
+import { prefersOwnerView } from "./owner/Owner";
 
 /** First screen on a browser that is not a registered cashier yet: owner signs in or opens a new account. */
 export function Setup({ go }: { go: (s: Screen) => void }) {
@@ -26,7 +27,7 @@ export function Setup({ go }: { go: (s: Screen) => void }) {
           ? await api<{ token: string }>("/auth/login", { body: { email: f.email, password: f.password } })
           : await api<{ token: string }>("/auth/register", { body: { ...f, phone: f.phone || undefined } });
       session.adminToken = r.token;
-      go("admin");
+      go(mode === "login" && prefersOwnerView() ? "owner" : "admin");
     } catch (err) {
       setError((err as Error).message);
     } finally {
