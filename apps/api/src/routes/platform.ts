@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { Db, Tx } from "../db";
 import { inTx } from "../db";
 import { HttpError, requirePlatform } from "../auth";
-import { daysLeft, forgetTenant, graceDays, subState } from "../billing";
+import { daysLeft, forgetTenant, graceDays, recordSubscriptionPayment, subState } from "../billing";
 
 async function platformAudit(q: Db | Tx, e: { adminId: string; tenantId?: string; action: string; data?: unknown }) {
   await q.query(`INSERT INTO platform_audit (admin_id, tenant_id, action, data) VALUES ($1,$2,$3,$4)`, [e.adminId, e.tenantId ?? null, e.action, e.data ?? null]);
@@ -91,7 +91,7 @@ export async function platformRoutes(app: FastifyInstance) {
       app.db.query(`SELECT name, address FROM stores WHERE tenant_id = $1 ORDER BY created_at`, [id]),
       app.db.query(`SELECT name, kind, active, last_seen_at FROM devices WHERE tenant_id = $1 ORDER BY created_at`, [id]),
       app.db.query(
-        `SELECT sp.*, a.name AS recorded_by_name FROM subscription_payments sp JOIN platform_admins a ON a.id = sp.recorded_by WHERE sp.tenant_id = $1 ORDER BY sp.created_at DESC`,
+        `SELECT sp.*, a.name AS recorded_by_name FROM subscription_payments sp LEFT JOIN platform_admins a ON a.id = sp.recorded_by WHERE sp.tenant_id = $1 ORDER BY sp.created_at DESC`,
         [id],
       ),
       app.db.query(
@@ -116,26 +116,9 @@ export async function platformRoutes(app: FastifyInstance) {
       reference: z.string().max(200).optional(),
     }).parse(req.body);
     const out = await inTx(app.db, async (tx) => {
-      const t = (await tx.query(`SELECT id, plan_code, paid_until FROM tenants WHERE id = $1 FOR UPDATE`, [id])).rows[0];
-      if (!t) throw new HttpError(404, "المحل غير موجود");
-      const planCode = b.planCode ?? t.plan_code;
-      const plan = (await tx.query(`SELECT price_minor FROM plans WHERE code = $1`, [planCode])).rows[0];
-      if (!plan) throw new HttpError(400, "الباقة غير موجودة");
-      // Days used during the grace period are paid for; a shop that was locked starts from today.
-      const end = new Date(t.paid_until).getTime();
-      const inGrace = Date.now() - end <= (await graceDays(tx)) * 86_400_000;
-      const from = new Date(inGrace ? end : Date.now());
-      const to = new Date(from);
-      to.setMonth(to.getMonth() + b.months);
-      const amount = b.amountMinor ?? plan.price_minor * b.months;
-      const p = await tx.query(
-        `INSERT INTO subscription_payments (tenant_id, plan_code, months, amount_minor, method, reference, period_from, period_to, recorded_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
-        [id, planCode, b.months, amount, b.method, b.reference ?? null, from, to, req.user.sub],
-      );
-      await tx.query(`UPDATE tenants SET status = 'active', status_reason = NULL, plan_code = $2, paid_until = $3 WHERE id = $1`, [id, planCode, to]);
-      await platformAudit(tx, { adminId: req.user.sub, tenantId: id, action: "payment.record", data: { months: b.months, amountMinor: amount, planCode, method: b.method } });
-      return { id: p.rows[0].id as string, paidUntil: to.toISOString(), amountMinor: amount };
+      const r = await recordSubscriptionPayment(tx, id, { ...b, recordedBy: req.user.sub });
+      await platformAudit(tx, { adminId: req.user.sub, tenantId: id, action: "payment.record", data: { months: b.months, amountMinor: r.amountMinor, planCode: r.planCode, method: b.method } });
+      return { id: r.id, paidUntil: r.paidUntil.toISOString(), amountMinor: r.amountMinor };
     });
     forgetTenant(id);
     return out;

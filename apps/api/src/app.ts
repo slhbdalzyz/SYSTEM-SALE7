@@ -22,6 +22,9 @@ import { branchRoutes } from "./routes/branches";
 import { offerRoutes } from "./routes/offers";
 import { subscriptionRoutes } from "./routes/subscription";
 import { subscriptionGuard } from "./billing";
+import { setGateway, type Gateway } from "./payments/gateway";
+import { plutuFromEnv } from "./payments/plutu";
+import { fakeGateway } from "./payments/fake";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -36,12 +39,15 @@ export interface AppOptions {
   logger?: boolean;
   /** Behind a proxy or a platform like Vercel: take the client IP from X-Forwarded-For (rate limits). */
   trustProxy?: boolean;
+  /** Online subscription payments. Default: Plutu when its keys are in the environment, the demo stand-in with PAYMENTS_FAKE=1, else none. */
+  gateway?: Gateway | null;
 }
 
 export async function buildApp(opts: AppOptions) {
   if (opts.jwtSecret.length < 32) throw new Error("JWT_SECRET must be at least 32 characters");
   const app = Fastify({ logger: opts.logger ?? false, trustProxy: opts.trustProxy ?? false, bodyLimit: 2 * 1024 * 1024 });
   app.decorate("db", opts.db);
+  setGateway(opts.gateway !== undefined ? opts.gateway : (plutuFromEnv() ?? (process.env.PAYMENTS_FAKE === "1" ? fakeGateway() : null)));
 
   await app.register(helmet);
   await app.register(cors, { origin: opts.corsOrigin ?? true });

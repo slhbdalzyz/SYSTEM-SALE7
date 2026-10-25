@@ -13,7 +13,7 @@ export const STATE_LABEL: Record<SubState, string> = {
 
 export const STATE_BADGE: Record<SubState, string> = { trial: "off", active: "ok", grace: "off", locked: "bad", suspended: "bad", cancelled: "bad" };
 
-export const METHOD_LABEL: Record<string, string> = { cash: "كاش", bank: "تحويل مصرفي", card: "بطاقة", other: "أخرى" };
+export const METHOD_LABEL: Record<string, string> = { cash: "كاش", bank: "تحويل مصرفي", card: "بطاقة", other: "أخرى", online: "دفع إلكتروني" };
 
 export interface Plan {
   code: string;

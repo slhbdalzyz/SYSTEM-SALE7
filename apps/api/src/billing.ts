@@ -62,7 +62,7 @@ export async function assertNotLocked(db: Db, tid: string) {
 }
 
 /** Writes that stay open while locked: syncing what the till already did, and signing in to see the bill. */
-const OPEN_WHILE_LOCKED = [/^\/auth\//, /^\/sales\/batch$/, /^\/shifts\//, /^\/devices\/events$/, /^\/customers\/[^/]+\/payments$/, /^\/platform\//];
+const OPEN_WHILE_LOCKED = [/^\/auth\//, /^\/sales\/batch$/, /^\/shifts\//, /^\/devices\/events$/, /^\/customers\/[^/]+\/payments$/, /^\/platform\//, /^\/subscription\/pay\//];
 
 /** Rejects a write by a shop that is locked. `verify` reads the caller's token, if there is one. */
 export async function checkSubscription(db: Db, method: string, path: string, verify: (() => Promise<TokenPayload>) | null) {
@@ -104,4 +104,35 @@ export async function assertWithinPlan(q: Db | Tx, tid: string, what: "devices" 
   const max = { devices: l.max_devices, users: l.max_users, stores: l.max_stores }[what];
   const label = { devices: "الأجهزة", users: "المستخدمين", stores: "الفروع" }[what];
   if (u[what] >= max) throw new HttpError(402, `باقة «${l.name}» تسمح بـ ${max} من ${label} بس. رقّي الباقة باش تزيد.`);
+}
+
+/**
+ * Records money received for a subscription and moves the paid-up date forward from where it
+ * was, or from today for a shop that had already locked. Used by platform staff and by online payments.
+ */
+export async function recordSubscriptionPayment(
+  tx: Tx,
+  tenantId: string,
+  p: { planCode?: string; months: number; amountMinor?: number; method: "cash" | "bank" | "card" | "other" | "online"; reference?: string | null; recordedBy: string | null },
+) {
+  const t = (await tx.query(`SELECT id, plan_code, paid_until FROM tenants WHERE id = $1 FOR UPDATE`, [tenantId])).rows[0];
+  if (!t) throw new HttpError(404, "المحل غير موجود");
+  const planCode = p.planCode ?? t.plan_code;
+  const plan = (await tx.query(`SELECT price_minor FROM plans WHERE code = $1`, [planCode])).rows[0];
+  if (!plan) throw new HttpError(400, "الباقة غير موجودة");
+  // Days used during the grace period are paid for; a shop that was locked starts from today.
+  const end = new Date(t.paid_until).getTime();
+  const inGrace = Date.now() - end <= (await graceDays(tx)) * 86_400_000;
+  const from = new Date(inGrace ? end : Date.now());
+  const to = new Date(from);
+  to.setMonth(to.getMonth() + p.months);
+  const amount = p.amountMinor ?? plan.price_minor * p.months;
+  const r = await tx.query(
+    `INSERT INTO subscription_payments (tenant_id, plan_code, months, amount_minor, method, reference, period_from, period_to, recorded_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+    [tenantId, planCode, p.months, amount, p.method, p.reference ?? null, from, to, p.recordedBy],
+  );
+  await tx.query(`UPDATE tenants SET status = 'active', status_reason = NULL, plan_code = $2, paid_until = $3 WHERE id = $1`, [tenantId, planCode, to]);
+  forgetTenant(tenantId);
+  return { id: r.rows[0].id as string, paidUntil: to, amountMinor: amount, planCode };
 }
