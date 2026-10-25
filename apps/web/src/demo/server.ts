@@ -5,6 +5,7 @@ import m001 from "../../../api/migrations/001_init.sql?raw";
 import m002 from "../../../api/migrations/002_customers_returns.sql?raw";
 import m003 from "../../../api/migrations/003_device_kinds.sql?raw";
 import m004 from "../../../api/migrations/004_saas.sql?raw";
+import m005 from "../../../api/migrations/005_purchasing.sql?raw";
 import { authRoutes } from "../../../api/src/routes/auth";
 import { adminRoutes } from "../../../api/src/routes/admin";
 import { catalogRoutes } from "../../../api/src/routes/catalog";
@@ -17,6 +18,7 @@ import { returnRoutes } from "../../../api/src/routes/returns";
 import { deviceRoutes } from "../../../api/src/routes/devices";
 import { platformRoutes } from "../../../api/src/routes/platform";
 import { subscriptionRoutes } from "../../../api/src/routes/subscription";
+import { purchasingRoutes } from "../../../api/src/routes/purchasing";
 import { seedDemo } from "./seed";
 import { checkSubscription } from "../../../api/src/billing";
 // Type-only: brings in the server's Fastify type additions (app.db, req.user) for the route files.
@@ -113,14 +115,14 @@ async function boot(): Promise<MiniApp> {
   }
   await pg.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY)`);
   const done = new Set((await pg.query<{ name: string }>(`SELECT name FROM schema_migrations`)).rows.map((r) => r.name));
-  for (const [name, sql] of [["001_init.sql", m001], ["002_customers_returns.sql", m002], ["003_device_kinds.sql", m003], ["004_saas.sql", m004]] as const) {
+  for (const [name, sql] of [["001_init.sql", m001], ["002_customers_returns.sql", m002], ["003_device_kinds.sql", m003], ["004_saas.sql", m004], ["005_purchasing.sql", m005]] as const) {
     if (done.has(name)) continue;
     await pg.exec(sql);
     await pg.query(`INSERT INTO schema_migrations (name) VALUES ($1)`, [name]);
   }
   const db = new Db(pg);
   const app = new MiniApp(db);
-  for (const r of [authRoutes, adminRoutes, catalogRoutes, salesRoutes, shiftRoutes, stockRoutes, reportRoutes, customerRoutes, returnRoutes, deviceRoutes, platformRoutes, subscriptionRoutes]) {
+  for (const r of [authRoutes, adminRoutes, catalogRoutes, salesRoutes, shiftRoutes, stockRoutes, reportRoutes, customerRoutes, returnRoutes, deviceRoutes, platformRoutes, subscriptionRoutes, purchasingRoutes]) {
     await app.register(r);
   }
   await seedDemo(db);
