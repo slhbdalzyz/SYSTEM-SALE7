@@ -4,7 +4,7 @@ import { db } from "../localdb";
 import type { Screen } from "../App";
 import type { Call } from "./Admin";
 
-interface D { id: string; name: string; prefix: string; active: boolean; last_seen_at: string | null }
+interface D { id: string; name: string; prefix: string; kind: "pos" | "price_checker"; active: boolean; last_seen_at: string | null }
 
 export function Devices({ call, storeId, storeName, go }: { call: Call; storeId: string; storeName: string; go: (s: Screen) => void }) {
   const [devices, setDevices] = useState<D[]>([]);
@@ -14,17 +14,18 @@ export function Devices({ call, storeId, storeName, go }: { call: Call; storeId:
   useEffect(() => void load(), []); // eslint-disable-line react-hooks/exhaustive-deps
   const thisId = session.device?.id;
 
-  async function registerThis() {
+  async function registerThis(kind: "pos" | "price_checker") {
     setError(null);
     try {
-      const r = await call<{ id: string; prefix: string; deviceToken: string }>("/devices", { body: { storeId, name } });
+      const r = await call<{ id: string; prefix: string; deviceToken: string }>("/devices", { body: { storeId, name, kind } });
       // A different shop may have used this browser before; start from a clean local copy.
       await db.delete();
       await db.open();
       session.deviceToken = r.deviceToken;
       session.device = { id: r.id, name, prefix: r.prefix, storeName };
       session.staffToken = null;
-      go("pin");
+      session.deviceKind = kind;
+      go(kind === "pos" ? "pin" : "price");
     } catch (e) {
       setError((e as Error).message);
     }
@@ -35,7 +36,8 @@ export function Devices({ call, storeId, storeName, go }: { call: Call; storeId:
       {!session.deviceToken && (
         <div className="card row" style={{ alignItems: "end" }}>
           <label style={{ flex: 1 }}>اسم هذا الجهاز<input value={name} onChange={(e) => setName(e.target.value)} /></label>
-          <button className="primary" onClick={registerThis} disabled={!name}>اعتماد هذا الجهاز ككاشير</button>
+          <button className="primary" onClick={() => registerThis("pos")} disabled={!name}>اعتماد هذا الجهاز ككاشير</button>
+          <button onClick={() => registerThis("price_checker")} disabled={!name}>اعتماده كقارئ أسعار</button>
         </div>
       )}
       {error && <div className="error">{error}</div>}
@@ -45,7 +47,7 @@ export function Devices({ call, storeId, storeName, go }: { call: Call; storeId:
           <tbody>
             {devices.map((d) => (
               <tr key={d.id}>
-                <td>{d.name}{d.id === thisId && <span className="badge ok" style={{ marginInlineStart: 8 }}>هذا الجهاز</span>}</td>
+                <td>{d.name}{d.kind === "price_checker" && <span className="badge off" style={{ marginInlineStart: 8 }}>قارئ أسعار</span>}{d.id === thisId && <span className="badge ok" style={{ marginInlineStart: 8 }}>هذا الجهاز</span>}</td>
                 <td className="num">{d.prefix}</td>
                 <td className="num">{d.last_seen_at ? new Date(d.last_seen_at).toLocaleString("en-GB") : "—"}</td>
                 <td>{d.active ? <span className="badge ok">فعال</span> : <span className="badge bad">موقوف</span>}</td>

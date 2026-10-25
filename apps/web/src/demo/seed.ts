@@ -3,13 +3,14 @@ import bcrypt from "bcryptjs";
 import { hashToken } from "../../../api/src/auth";
 
 export const DEMO_DEVICE_TOKEN = "d".repeat(64);
+export const DEMO_CHECKER_TOKEN = "c".repeat(64);
 
 interface Q {
   query(sql: string, params?: unknown[]): Promise<{ rows: any[] }>; // eslint-disable-line @typescript-eslint/no-explicit-any
 }
 
 export async function seedDemo(db: Q) {
-  if ((await db.query(`SELECT 1 FROM users LIMIT 1`)).rows.length) return;
+  if ((await db.query(`SELECT 1 FROM users LIMIT 1`)).rows.length) return addPriceChecker(db);
   const one = async (sql: string, params: unknown[] = []) => (await db.query(sql, params)).rows[0]?.id as string;
   const hash = (s: string) => bcrypt.hash(s, 8);
 
@@ -18,6 +19,7 @@ export async function seedDemo(db: Q) {
   await db.query(`INSERT INTO users (tenant_id, name, email, password_hash, pin_hash, role) VALUES ($1,'المالك','owner@demo.ly',$2,$3,'owner')`, [tid, await hash("demo12345"), await hash("9999")]);
   await db.query(`INSERT INTO users (tenant_id, name, pin_hash, role) VALUES ($1,'أحمد الكاشير',$2,'cashier')`, [tid, await hash("1234")]);
   await db.query(`INSERT INTO devices (tenant_id, store_id, name, prefix, token_hash) VALUES ($1,$2,'كاشير 1','P1',$3)`, [tid, sid, hashToken(DEMO_DEVICE_TOKEN)]);
+  await addPriceChecker(db);
   await db.query(`INSERT INTO customers (tenant_id, name, phone, credit_limit_minor) VALUES ($1,'محمد الطرابلسي','0912345678',200000), ($1,'مطعم الواحة','0923456789',NULL)`, [tid]);
 
   const cat = (n: string) => one(`INSERT INTO categories (tenant_id, name) VALUES ($1,$2) RETURNING id`, [tid, n]);
@@ -64,4 +66,15 @@ export async function seedDemo(db: Q) {
   await product("موز", veg, 4000, [{ name: "كيلو", factor: 1000, price: 5500, barcodes: [] }], "00103");
   await product("لحم غنمي", meat, 38000, [{ name: "كيلو", factor: 1000, price: 48000, barcodes: [] }], "00201");
   await product("دجاج كامل", meat, 9000, [{ name: "كيلو", factor: 1000, price: 12500, barcodes: [] }], "00202");
+}
+
+/** Demos opened before the price checker existed get one too. */
+async function addPriceChecker(db: Q) {
+  const t = hashToken(DEMO_CHECKER_TOKEN);
+  if ((await db.query(`SELECT 1 FROM devices WHERE token_hash = $1`, [t])).rows.length) return;
+  await db.query(
+    `INSERT INTO devices (tenant_id, store_id, name, prefix, token_hash, kind)
+     SELECT tenant_id, store_id, 'قارئ الأسعار', 'PC', $1, 'price_checker' FROM devices ORDER BY created_at LIMIT 1`,
+    [t],
+  );
 }

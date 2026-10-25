@@ -7,7 +7,7 @@ export interface DeviceInfo {
   storeName: string;
 }
 
-const KEYS = { deviceToken: "pos.deviceToken", device: "pos.device", staff: "pos.staffToken", admin: "pos.adminToken" } as const;
+const KEYS = { deviceToken: "pos.deviceToken", device: "pos.device", staff: "pos.staffToken", admin: "pos.adminToken", kind: "pos.deviceKind" } as const;
 
 function get(k: string): string | null {
   try {
@@ -38,6 +38,13 @@ export const session = {
   },
   set device(v: DeviceInfo | null) {
     set(KEYS.device, v ? JSON.stringify(v) : null);
+  },
+  /** "price_checker" turns this browser into a shelf price checker instead of a till. */
+  get deviceKind(): "pos" | "price_checker" | null {
+    return get(KEYS.kind) as "pos" | "price_checker" | null;
+  },
+  set deviceKind(v: "pos" | "price_checker" | null) {
+    set(KEYS.kind, v);
   },
   /** Cashier session on this device (from PIN). */
   get staffToken() {

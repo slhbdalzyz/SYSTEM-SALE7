@@ -68,3 +68,33 @@ describe("device", () => {
     expect(parseScaleLine("---")).toBeNull();
   });
 });
+
+describe("receipt rows for the thermal printer", async () => {
+  const { receiptRows } = await import("../src/hardware/receiptImage");
+  const base = { storeName: "المحل", deviceName: "كاشير 1", cashierName: "أحمد" };
+  const text = (rows: ReturnType<typeof receiptRows>) => JSON.stringify(rows);
+
+  it("lists each line, the total, the cash and the change", () => {
+    const rows = receiptRows({
+      ...base,
+      changeMinor: 1500,
+      sale: {
+        id: water.id, number: "P1-0007", createdAt: "2026-10-24T10:00:00Z", invoiceDiscountMinor: 0, totalMinor: 8500,
+        lines: [{ productId: water.id, unitId: water.units[0].id, name: "مياه", qtyMilli: 2000, priceMinor: 750, discountMinor: 0, taxBp: 0 },
+                { productId: water.id, unitId: water.units[1].id, name: "مياه شد 6", qtyMilli: 1000, priceMinor: 7000, discountMinor: 0, taxBp: 0 }],
+        payments: [{ method: "cash", amountMinor: 10000 }],
+      },
+    });
+    const t = text(rows);
+    for (const s of ["المحل", "P1-0007", "مياه شد 6", "8.500", "10.000", "1.500"]) expect(t).toContain(s);
+  });
+
+  it("prints a refund and a debt payment", () => {
+    const r = text(receiptRows({ ...base, ret: { number: "P1-0008", originalNumber: "P1-0007", customerName: null, method: "cash", totalMinor: 1500, reason: "تالف", lines: [{ name: "مياه", qtyMilli: 2000, totalMinor: 1500 }] } }));
+    expect(r).toContain("P1-0007");
+    expect(r).toContain("1.500");
+    const p = text(receiptRows({ ...base, payment: { customerName: "محمد", amountMinor: 50000, method: "cash", balanceMinor: 20000, at: "2026-10-24T10:00:00Z" } }));
+    expect(p).toContain("محمد");
+    expect(p).toContain("50.000");
+  });
+});

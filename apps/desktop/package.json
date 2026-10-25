@@ -1,0 +1,13 @@
+{
+  "name": "@pos/desktop",
+  "private": true,
+  "version": "0.3.0",
+  "scripts": {
+    "build:web": "cd ../web && npx vite build",
+    "tauri": "tauri",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.5.0"
+  }
+}

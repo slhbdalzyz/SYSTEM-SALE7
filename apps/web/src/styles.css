@@ -110,3 +110,23 @@ th { color: var(--muted); font-weight: 600; font-size: .85rem; }
 .demo-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 6px 16px; background: var(--warn-soft); color: var(--warn); font-size: .85rem; }
 .demo-bar button { padding: 2px 10px; font-size: .8rem; }
 .demo-bar + .pos { height: calc(100vh - 36px); }
+
+/* Customer display */
+.cdisplay { min-height: 100vh; display: grid; grid-template-rows: auto 1fr auto; background: var(--ink); color: #fff; font-size: 1.6rem; }
+.cdisplay header { padding: 16px 24px; font-weight: 800; background: var(--brand); }
+.cdisplay-center { display: grid; place-items: center; align-content: center; gap: 12px; font-size: 2.4rem; }
+.cdisplay-total { font-size: 3.4rem; font-weight: 800; color: #5eead4; }
+.cdisplay-lines { padding: 12px 24px; overflow: auto; display: flex; flex-direction: column; justify-content: flex-end; }
+.cdisplay-lines > div { display: grid; grid-template-columns: 1fr auto 9ch; gap: 16px; padding: 8px 0; border-bottom: 1px solid #334155; }
+.cdisplay-lines > div.last { color: #5eead4; }
+.cdisplay footer { display: flex; gap: 16px; align-items: center; padding: 16px 24px; background: #1e293b; }
+
+/* Price checker */
+.pchecker { min-height: 100vh; display: grid; grid-template-rows: auto 1fr auto; background: #fff; text-align: center; }
+.pchecker header { padding: 14px; font-weight: 800; font-size: 1.4rem; background: var(--brand); color: #fff; }
+.pchecker-input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.pchecker-idle { display: grid; place-items: center; align-content: center; gap: 12px; font-size: 2rem; color: var(--muted); }
+.pchecker-hit { display: grid; place-items: center; align-content: center; gap: 10px; font-size: 1.6rem; padding: 16px; }
+.pchecker-name { font-size: 2.6rem; font-weight: 800; }
+.pchecker-price { font-size: 5rem; font-weight: 800; color: var(--brand); line-height: 1.2; }
+.pchecker-other { font-size: 1.4rem; }
