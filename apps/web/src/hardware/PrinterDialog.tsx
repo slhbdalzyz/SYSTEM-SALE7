@@ -13,8 +13,8 @@ const SAMPLE: ReceiptData = {
     number: "TEST-1",
     createdAt: new Date().toISOString(),
     lines: [
-      { productId: "", unitId: "", name: "حليب طازج 1 لتر", qtyMilli: 2000, priceMinor: 3500, discountMinor: 0, taxBp: 0 },
-      { productId: "", unitId: "", name: "طماطم", qtyMilli: 1250, priceMinor: 3500, discountMinor: 0, taxBp: 0 },
+      { productId: "", unitId: "", name: "حليب طازج 1 لتر", qtyMilli: 2000, priceMinor: 3500, discountMinor: 0, promoMinor: 0, taxBp: 0 },
+      { productId: "", unitId: "", name: "طماطم", qtyMilli: 1250, priceMinor: 3500, discountMinor: 0, promoMinor: 0, taxBp: 0 },
     ],
     invoiceDiscountMinor: 0,
     payments: [{ method: "cash", amountMinor: 20000 }],

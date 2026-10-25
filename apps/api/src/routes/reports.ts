@@ -17,7 +17,8 @@ export async function reportRoutes(app: FastifyInstance) {
            COALESCE(-sum(total_minor) FILTER (WHERE kind = 'return'),0)::bigint AS returns_minor,
            COALESCE(sum(total_minor),0)::bigint AS total_minor, COALESCE(sum(discount_minor),0)::bigint AS discount_minor,
            COALESCE(sum(tax_minor),0)::bigint AS tax_minor,
-           COALESCE((SELECT sum(l.total_minor - l.cost_minor) FROM sale_lines l JOIN sales s ON s.id = l.sale_id WHERE ${day}),0)::bigint AS gross_profit_minor
+           COALESCE((SELECT sum(l.total_minor - l.cost_minor) FROM sale_lines l JOIN sales s ON s.id = l.sale_id WHERE ${day}),0)::bigint AS gross_profit_minor,
+           COALESCE((SELECT sum(l.promo_minor) FROM sale_lines l JOIN sales s ON s.id = l.sale_id WHERE ${day}),0)::bigint AS promo_minor
          FROM sales s WHERE ${day}`,
         args,
       ),

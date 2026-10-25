@@ -53,11 +53,12 @@ export function receiptRows(d: ReceiptData): Row[] {
     ...s.lines.map((l): Row => ({
       kind: "item",
       name: l.name,
-      detail: `${formatQty(l.qtyMilli, l.qtyMilli % 1000 !== 0)} × ${formatMoney(l.priceMinor, "")}${l.discountMinor ? ` (خصم ${formatMoney(l.discountMinor, "")})` : ""}`,
+      detail: `${formatQty(l.qtyMilli, l.qtyMilli % 1000 !== 0)} × ${formatMoney(l.priceMinor, "")}${l.discountMinor ? ` (خصم ${formatMoney(l.discountMinor, "")})` : ""}${l.promoMinor ? ` (${l.offerName ?? "عرض"} −${formatMoney(l.promoMinor, "")})` : ""}`,
       amount: formatMoney(computeLine(l).total, ""),
     })),
     { kind: "rule" },
     ...(t.discount > 0 ? [{ kind: "pair", right: "الخصم", left: formatMoney(t.discount) } as Row] : []),
+    ...(s.lines.some((l) => l.promoMinor) ? [{ kind: "pair", right: "وفّرت من العروض", left: formatMoney(s.lines.reduce((a, l) => a + (l.promoMinor ?? 0), 0)) } as Row] : []),
     ...(t.tax > 0 ? [{ kind: "pair", right: "منها ضريبة", left: formatMoney(t.tax) } as Row] : []),
     { kind: "pair", right: "الإجمالي", left: formatMoney(t.total), size: 30, bold: true },
     ...s.payments.map((p): Row => ({ kind: "pair", right: METHOD[p.method], left: formatMoney(p.amountMinor) })),

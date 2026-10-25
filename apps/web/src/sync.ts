@@ -1,4 +1,4 @@
-import type { CatalogCustomer, CatalogProduct } from "@pos/shared";
+import type { CatalogCustomer, CatalogProduct, Offer } from "@pos/shared";
 import { api, ApiError } from "./api";
 import { db, getMeta, setMeta, storeCatalog } from "./localdb";
 import { session } from "./session";
@@ -51,6 +51,16 @@ export async function syncCustomers(token: string) {
   });
 }
 
+/** Offers are few; the device keeps the whole running list for working offline. */
+export async function syncOffers(token: string) {
+  const list = await api<Offer[]>("/sync/offers", { token });
+  await setMeta("offers", list);
+}
+
+export async function loadOffers() {
+  return (await getMeta<Offer[]>("offers")) ?? [];
+}
+
 /**
  * Sends queued work in the order it happened. A rejected sale stays in the queue with its error
  * so a manager can see it; it does not block the sales behind it.
@@ -98,6 +108,7 @@ export async function syncNow() {
     await flushOutbox(token);
     await syncCatalog(token);
     await syncCustomers(token);
+    await syncOffers(token);
     update({ online: true, lastSync: new Date().toISOString(), error: null });
   } catch (e) {
     const offline = e instanceof ApiError && e.status === 0;

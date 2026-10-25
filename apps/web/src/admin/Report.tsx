@@ -6,6 +6,7 @@ interface Daily {
   sales_count: number;
   total_minor: number;
   discount_minor: number;
+  promo_minor: number;
   returns_count: number;
   returns_minor: number;
   customerPayments: Record<string, number>;
@@ -48,6 +49,7 @@ export function Report({ call, storeId }: { call: Call; storeId: string }) {
             <div className="kpi"><span className="muted">المرتجعات ({r.returns_count})</span><b className="num">{formatMoney(r.returns_minor)}</b></div>
             <div className="kpi"><span className="muted">تسديد ديون</span><b className="num">{formatMoney((r.customerPayments.cash ?? 0) + (r.customerPayments.card ?? 0))}</b></div>
             <div className="kpi"><span className="muted">الخصومات</span><b className="num">{formatMoney(r.discount_minor)}</b></div>
+            {r.promo_minor > 0 && <div className="kpi"><span className="muted">منها عروض</span><b className="num">{formatMoney(r.promo_minor)}</b></div>}
           </div>
           <div className="card stack">
             <b>المبيعات حسب الساعة</b>

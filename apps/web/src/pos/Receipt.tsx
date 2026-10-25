@@ -71,6 +71,7 @@ export function Receipt({ data }: { data: ReceiptData | null }) {
               <td>
                 {l.name}
                 <div className="num">{formatQty(l.qtyMilli, l.qtyMilli % 1000 !== 0)} × {formatMoney(l.priceMinor, "")}</div>
+                {l.promoMinor > 0 && <div>{l.offerName ?? "عرض"} −<span className="num">{formatMoney(l.promoMinor, "")}</span></div>}
               </td>
               <td className="num" style={{ textAlign: "left", verticalAlign: "top" }}>{formatMoney(computeLine(l).total, "")}</td>
             </tr>
