@@ -398,3 +398,61 @@ describe("subscriptions and the platform back office", () => {
     expect(s.body.plan.code).toBe("chain");
   });
 });
+
+describe("purchasing and suppliers", () => {
+  let t: string;
+  let store: string;
+  let rice: { id: string; bag: string; sack: string };
+  let supplier: string;
+
+  it("sets up a shop with a product sold by the bag and bought by the sack", async () => {
+    const r = await call("POST", "/auth/register", undefined, { businessName: "بقالة الرز", storeName: "الرئيسي", ownerName: "منصور", email: "rice@test.ly", password: "password123" });
+    t = r.body.token;
+    store = r.body.storeId;
+    const p = await call("POST", "/products", t, {
+      name: "رز 1 كغ", costMinor: 0, minStockMilli: 20000,
+      units: [{ name: "كيس", factorMilli: 1000, priceMinor: 4500, isBase: true, barcodes: ["9990000000017"] }, { name: "شوال 10", factorMilli: 10000, priceMinor: 42000, barcodes: [] }],
+    });
+    rice = { id: p.body.id, bag: p.body.units[0].id, sack: p.body.units[1].id };
+    supplier = (await call("POST", "/suppliers", t, { name: "شركة الحبوب", phone: "0911112222" })).body.id;
+  });
+
+  it("receives an invoice paid in part, and owes the rest", async () => {
+    const r = await call("POST", "/purchases", t, {
+      storeId: store, supplierId: supplier, supplierRef: "F-1001", paidMinor: 50000, paymentMethod: "cash",
+      lines: [{ unitId: rice.sack, qtyMilli: 3000, unitCostMinor: 35000 }],
+    });
+    expect(r.status).toBe(200);
+    expect(r.body.totalMinor).toBe(105000);
+    const products = (await call("GET", `/products?storeId=${store}`, t)).body as { id: string; stockMilli: number; costMinor: number }[];
+    const p = products.find((x) => x.id === rice.id)!;
+    expect(p.stockMilli).toBe(30000); // 3 sacks of 10 bags
+    expect(p.costMinor).toBe(3500); // per bag
+    const sup = (await call("GET", "/suppliers", t)).body[0];
+    expect(sup.balance_minor).toBe(55000);
+    const inv = (await call("GET", `/purchases/${r.body.id}`, t)).body;
+    expect(inv.lines[0]).toMatchObject({ name: "رز 1 كغ", unit_name: "شوال 10", qty_milli: 3000 });
+    expect((await call("GET", "/purchases", t)).body[0].paid_minor).toBe(50000);
+    expect((await call("POST", "/purchases", t, { storeId: store, supplierId: supplier, paidMinor: 999999, lines: [{ unitId: rice.bag, qtyMilli: 1000, unitCostMinor: 1 }] })).status).toBe(400);
+  });
+
+  it("pays the supplier later and shows it on the statement", async () => {
+    const pay = await call("POST", `/suppliers/${supplier}/payments`, t, { amountMinor: 55000, method: "bank" });
+    expect(pay.body.balanceMinor).toBe(0);
+    const st = (await call("GET", `/suppliers/${supplier}/statement`, t)).body;
+    expect(st.entries.map((e: { type: string }) => e.type)).toEqual(["invoice", "payment", "payment"]);
+    expect(st.entries.at(-1).balance_minor).toBe(0);
+  });
+
+  it("suggests what to reorder, from whom and at what cost", async () => {
+    await call("POST", "/stock/adjust", t, { storeId: store, productId: rice.id, qtyMilli: -15000, reason: "جرد" });
+    const r = (await call("GET", `/stock/reorder?storeId=${store}`, t)).body;
+    expect(r).toHaveLength(1);
+    expect(r[0]).toMatchObject({ name: "رز 1 كغ", stock_milli: 15000, suggest_milli: 25000, supplier_name: "شركة الحبوب", last_unit_name: "شوال 10", last_cost_minor: 35000 });
+  });
+
+  it("keeps suppliers to their own shop and away from cashiers", async () => {
+    expect((await call("GET", `/suppliers/${supplier}/statement`, owner)).status).toBe(404);
+    expect((await call("GET", "/suppliers", cashierToken)).status).toBe(403);
+  });
+});

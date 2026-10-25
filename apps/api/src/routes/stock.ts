@@ -1,43 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { audit, inTx } from "../db";
+import { audit } from "../db";
 import { HttpError, requireRole } from "../auth";
 
 export async function stockRoutes(app: FastifyInstance) {
   const managers = { preHandler: requireRole("owner", "manager") };
-
-  /** Receiving goods. Quantities are in the chosen unit; stock is kept in the base unit. */
-  app.post("/purchases", managers, async (req) => {
-    const b = z
-      .object({
-        storeId: z.string().uuid(),
-        note: z.string().max(300).optional(),
-        updateCost: z.boolean().default(true),
-        lines: z.array(z.object({ unitId: z.string().uuid(), qtyMilli: z.number().int().positive(), unitCostMinor: z.number().int().nonnegative() })).min(1).max(500),
-      })
-      .parse(req.body);
-    const store = await app.db.query(`SELECT 1 FROM stores WHERE id = $1 AND tenant_id = $2`, [b.storeId, req.user.tid]);
-    if (!store.rowCount) throw new HttpError(404, "الفرع غير موجود");
-    const ref = crypto.randomUUID();
-    await inTx(app.db, async (tx) => {
-      for (const l of b.lines) {
-        const u = (await tx.query(`SELECT product_id, factor_milli FROM product_units WHERE id = $1 AND tenant_id = $2`, [l.unitId, req.user.tid])).rows[0];
-        if (!u) throw new HttpError(400, "وحدة غير موجودة");
-        const baseQty = Math.round((l.qtyMilli * u.factor_milli) / 1000);
-        await tx.query(
-          `INSERT INTO stock_movements (tenant_id, store_id, product_id, qty_milli, kind, ref_id, note, user_id) VALUES ($1,$2,$3,$4,'purchase',$5,$6,$7)`,
-          [req.user.tid, b.storeId, u.product_id, baseQty, ref, b.note ?? null, req.user.sub],
-        );
-        if (b.updateCost) {
-          // Cost per base unit = unit cost ÷ factor.
-          const baseCost = Math.round((l.unitCostMinor * 1000) / u.factor_milli);
-          await tx.query(`UPDATE products SET cost_minor = $2, updated_at = now() WHERE id = $1`, [u.product_id, baseCost]);
-        }
-      }
-      await audit(tx, { tenantId: req.user.tid, userId: req.user.sub, action: "stock.purchase", entityId: ref, data: { lines: b.lines.length } });
-    });
-    return { id: ref };
-  });
 
   /** Count correction, damage or loss. A positive or negative quantity in the base unit. */
   app.post("/stock/adjust", managers, async (req) => {

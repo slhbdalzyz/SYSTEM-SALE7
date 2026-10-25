@@ -12,7 +12,8 @@ interface Q {
 export async function seedDemo(db: Q) {
   if ((await db.query(`SELECT 1 FROM users LIMIT 1`)).rows.length) {
     await addPriceChecker(db);
-    return addPlatform(db);
+    await addPlatform(db);
+    return addSuppliers(db);
   }
   const one = async (sql: string, params: unknown[] = []) => (await db.query(sql, params)).rows[0]?.id as string;
   const hash = (s: string) => bcrypt.hash(s, 8);
@@ -70,6 +71,38 @@ export async function seedDemo(db: Q) {
   await product("موز", veg, 4000, [{ name: "كيلو", factor: 1000, price: 5500, barcodes: [] }], "00103");
   await product("لحم غنمي", meat, 38000, [{ name: "كيلو", factor: 1000, price: 48000, barcodes: [] }], "00201");
   await product("دجاج كامل", meat, 9000, [{ name: "كيلو", factor: 1000, price: 12500, barcodes: [] }], "00202");
+  await addSuppliers(db);
+}
+
+/** Two suppliers, one bought-on-credit invoice, and a couple of items running low so «النواقص» has something. */
+async function addSuppliers(db: Q) {
+  if ((await db.query(`SELECT 1 FROM suppliers LIMIT 1`)).rows.length) return;
+  const { tid, sid } = (await db.query(`SELECT tenant_id AS tid, store_id AS sid FROM devices ORDER BY created_at LIMIT 1`)).rows[0];
+  const sup = async (name: string, phone: string) =>
+    (await db.query(`INSERT INTO suppliers (tenant_id, name, phone) VALUES ($1,$2,$3) RETURNING id`, [tid, name, phone])).rows[0].id as string;
+  const drinks = await sup("شركة المشروبات الوطنية", "0214441122");
+  await sup("مخازن الألبان", "0913332211");
+  const unit = async (name: string) =>
+    (await db.query(`SELECT u.id, u.product_id, u.factor_milli FROM product_units u JOIN products p ON p.id = u.product_id WHERE p.tenant_id = $1 AND u.name = $2 ORDER BY u.factor_milli DESC LIMIT 1`, [tid, name])).rows[0];
+  const carton = await unit("كرتونة 24");
+  const inv = (await db.query(
+    `INSERT INTO purchase_invoices (tenant_id, store_id, supplier_id, supplier_ref, invoice_date, total_minor, created_at)
+     VALUES ($1,$2,$3,'F-1021', current_date - 5, 108000, now() - interval '5 days') RETURNING id`,
+    [tid, sid, drinks],
+  )).rows[0].id as string;
+  await db.query(
+    `INSERT INTO purchase_lines (tenant_id, invoice_id, product_id, unit_id, name, unit_name, qty_milli, unit_cost_minor, total_minor)
+     SELECT $1, $2, $3, $4, p.name, 'كرتونة 24', 5000, 21600, 108000 FROM products p WHERE p.id = $3`,
+    [tid, inv, carton.product_id, carton.id],
+  );
+  await db.query(`INSERT INTO supplier_payments (tenant_id, supplier_id, invoice_id, amount_minor, method, created_at) VALUES ($1,$2,$3,50000,'cash', now() - interval '5 days')`, [tid, drinks, inv]);
+  // Sell most of the stock of two items so they show up as running low.
+  for (const name of ["بيبسي علبة 330 مل", "حليب طازج 1 لتر"]) {
+    await db.query(
+      `INSERT INTO stock_movements (tenant_id, store_id, product_id, qty_milli, kind, note) SELECT $1, $2, id, -94000, 'adjust', 'تجربة: بيع' FROM products WHERE tenant_id = $1 AND name = $3`,
+      [tid, sid, name],
+    );
+  }
 }
 
 /** Demos opened before the price checker existed get one too. */
