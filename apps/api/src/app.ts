@@ -18,6 +18,7 @@ import { returnRoutes } from "./routes/returns";
 import { deviceRoutes } from "./routes/devices";
 import { platformRoutes } from "./routes/platform";
 import { purchasingRoutes } from "./routes/purchasing";
+import { branchRoutes } from "./routes/branches";
 import { subscriptionRoutes } from "./routes/subscription";
 import { subscriptionGuard } from "./billing";
 
@@ -71,6 +72,7 @@ export async function buildApp(opts: AppOptions) {
   await app.register(deviceRoutes);
   await app.register(platformRoutes);
   await app.register(purchasingRoutes);
+  await app.register(branchRoutes);
   await app.register(subscriptionRoutes);
   return app;
 }
