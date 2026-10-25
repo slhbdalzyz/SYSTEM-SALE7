@@ -23,6 +23,12 @@ services:
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
       PLATFORM_ADMIN_EMAIL: ${PLATFORM_ADMIN_EMAIL:-}
       PLATFORM_ADMIN_PASSWORD: ${PLATFORM_ADMIN_PASSWORD:-}
+      PUBLIC_URL: https://${DOMAIN}
+      PLUTU_API_KEY: ${PLUTU_API_KEY:-}
+      PLUTU_ACCESS_TOKEN: ${PLUTU_ACCESS_TOKEN:-}
+      PLUTU_SECRET_KEY: ${PLUTU_SECRET_KEY:-}
+      PLUTU_TEST: ${PLUTU_TEST:-}
+      PLUTU_METHODS: ${PLUTU_METHODS:-}
 
   web:
     build: { context: .., target: web }

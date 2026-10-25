@@ -19,6 +19,8 @@ export type Screen = "setup" | "pin" | "pos" | "admin" | "price";
 if (DEMO && !session.deviceToken) session.deviceToken = "d".repeat(64);
 
 function initial(): Screen {
+  // Coming back from the card payment page: straight to the owner's subscription screen.
+  if (new URLSearchParams(location.search).has("payment") && tokenValid(session.adminToken)) return "admin";
   if (session.deviceToken && session.deviceKind === "price_checker") return "price";
   if (session.deviceToken) return tokenValid(session.staffToken) ? "pos" : "pin";
   return tokenValid(session.adminToken) ? "admin" : "setup";

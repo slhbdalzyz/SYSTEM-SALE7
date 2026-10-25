@@ -186,7 +186,7 @@ interface Detail extends Row {
   max_users: number;
   users: { name: string; email: string | null; role: string; active: boolean }[];
   devices: never;
-  payments: { id: string; months: number; amount_minor: number; method: string; reference: string | null; period_from: string; period_to: string; created_at: string; plan_code: string; recorded_by_name: string }[];
+  payments: { id: string; months: number; amount_minor: number; method: string; reference: string | null; period_from: string; period_to: string; created_at: string; plan_code: string; recorded_by_name: string | null }[];
   log: { action: string; data: Record<string, unknown> | null; created_at: string; admin_name: string | null }[];
 }
 
@@ -314,7 +314,7 @@ function TenantDetail({ call, id, back }: { call: Call; id: string; back: () => 
                   <td>{METHOD_LABEL[p.method]}</td>
                   <td className="num">{p.reference ?? "—"}</td>
                   <td className="num">{formatMoney(p.amount_minor)}</td>
-                  <td>{p.recorded_by_name}</td>
+                  <td>{p.recorded_by_name ?? "المحل (أونلاين)"}</td>
                 </tr>
               ))}
             </tbody>

@@ -601,3 +601,80 @@ describe("generated barcodes", () => {
     expect((await call("POST", "/barcodes/generate", owner, { unitId: p.body.units[0].id })).status).toBe(404);
   });
 });
+
+describe("online subscription payments", () => {
+  let t: string;
+  let tid: string;
+
+  it("lets a locked shop pay by Sadad with the code it gets by SMS", async () => {
+    const { setGateway } = await import("../src/payments/gateway");
+    const { fakeGateway } = await import("../src/payments/fake");
+    setGateway(fakeGateway());
+    const r = await call("POST", "/auth/register", undefined, { businessName: "بقالة الدفع", storeName: "الرئيسي", ownerName: "سالم", email: "pay@test.ly", password: "password123", planCode: "basic" });
+    t = r.body.token;
+    tid = (await db.query(`SELECT id FROM tenants WHERE name = 'بقالة الدفع'`)).rows[0].id;
+    await db.query(`UPDATE tenants SET paid_until = now() - interval '30 days' WHERE id = $1`, [tid]);
+    const { forgetTenant } = await import("../src/billing");
+    forgetTenant(tid);
+    expect((await call("POST", "/categories", t, { name: "x" })).status).toBe(402); // locked
+
+    const opts = (await call("GET", "/subscription/pay/options", t)).body;
+    expect(opts.methods).toEqual(["sadad", "edfali"]);
+    expect((await call("POST", "/subscription/pay/start", t, { planCode: "basic", months: 2, method: "sadad", mobile: "0913632323" })).status).toBe(400); // no birth year
+    const s = await call("POST", "/subscription/pay/start", t, { planCode: "basic", months: 2, method: "sadad", mobile: "0913632323", birthYear: "1990" });
+    expect(s.status).toBe(200);
+    const basic = Number((await db.query(`SELECT price_minor FROM plans WHERE code = 'basic'`)).rows[0].price_minor);
+    expect(s.body).toMatchObject({ needsCode: true, amountMinor: basic * 2 });
+    const bad = await call("POST", `/subscription/pay/${s.body.id}/confirm`, t, { code: "123456" });
+    expect(bad).toMatchObject({ status: 402, body: { error: "الرمز غير صحيح" } });
+    const ok = await call("POST", `/subscription/pay/${s.body.id}/confirm`, t, { code: "111111" });
+    expect(ok.status).toBe(200);
+    expect((await call("POST", `/subscription/pay/${s.body.id}/confirm`, t, { code: "111111" })).status).toBe(409);
+
+    const sub = (await call("GET", "/subscription", t)).body;
+    expect(sub.state).toBe("active");
+    expect(sub.daysLeft).toBeGreaterThan(55);
+    expect(sub.payments[0]).toMatchObject({ method: "online", months: 2, amount_minor: basic * 2 });
+    expect((await call("POST", "/categories", t, { name: "x" })).status).toBe(200); // unlocked
+  });
+
+  it("takes a card payment only back from a correctly signed return", async () => {
+    const { setGateway } = await import("../src/payments/gateway");
+    const { plutuGateway, plutuSignature, signedString } = await import("../src/payments/plutu");
+    let sent: URLSearchParams | null = null;
+    setGateway(plutuGateway({
+      apiKey: "k", accessToken: "tok", secretKey: "s3cret",
+      fetch: (async (_url: string, init: RequestInit) => {
+        sent = init.body as URLSearchParams;
+        return new Response(JSON.stringify({ status: 200, result: { code: "CHECKOUT_REDIRECT", redirect_url: "https://pay.example/checkout/1" } }), { status: 200 });
+      }) as typeof fetch,
+    }));
+    const s = await call("POST", "/subscription/pay/start", t, { planCode: "pro", months: 1, method: "localbankcards" });
+    expect(s.body.redirectUrl).toBe("https://pay.example/checkout/1");
+    const pro = (Number((await db.query(`SELECT price_minor FROM plans WHERE code = 'pro'`)).rows[0].price_minor) / 1000).toFixed(2);
+    expect(sent!.get("amount")).toBe(pro);
+    expect(sent!.get("return_url")).toBe("http://localhost:80/api/billing/plutu/return");
+    const inv = sent!.get("invoice_no")!;
+    const q = `gateway=localbankcards&approved=1&invoice_no=${inv}&amount=${pro}&transaction_id=TX77`;
+    const hashed = plutuSignature(signedString(q, ["gateway", "approved", "canceled", "invoice_no", "amount", "transaction_id"]), "s3cret");
+
+    const forged = await app.inject({ method: "GET", url: `/billing/plutu/return?${q.replace(`amount=${pro}`, "amount=3.00")}&hashed=${hashed}` });
+    expect(forged.headers.location).toContain("payment=invalid");
+    const real = await app.inject({ method: "GET", url: `/billing/plutu/return?${q}&hashed=${hashed}` });
+    expect(real.statusCode).toBe(302);
+    expect(real.headers.location).toContain("payment=ok");
+    const again = await app.inject({ method: "GET", url: `/billing/plutu/return?${q}&hashed=${hashed}` });
+    expect(again.headers.location).toContain("payment=ok");
+    const pays = (await call("GET", "/subscription", t)).body.payments;
+    expect(pays).toHaveLength(2);
+    expect(pays[0]).toMatchObject({ method: "online", plan_code: "pro" });
+    const { setGateway: reset } = await import("../src/payments/gateway");
+    reset(null);
+  });
+
+  it("keeps other people out of a shop's payments", async () => {
+    expect((await call("GET", "/subscription/pay/options", cashierToken)).status).toBe(403);
+    const anyIntent = (await db.query(`SELECT id FROM payment_intents LIMIT 1`)).rows[0].id;
+    expect((await call("GET", `/subscription/pay/${anyIntent}`, owner)).status).toBe(404);
+  });
+});

@@ -68,7 +68,7 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
     call<Sub>("/subscription")
       .then((s) => {
         setSub(s);
-        if (["locked", "suspended", "cancelled"].includes(s.state)) setTab("subscription");
+        if (["locked", "suspended", "cancelled"].includes(s.state) || new URLSearchParams(location.search).has("payment")) setTab("subscription");
       })
       .catch(() => setSub(null));
   }, [call, loadMe]);
