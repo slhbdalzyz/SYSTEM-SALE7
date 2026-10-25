@@ -106,3 +106,7 @@ th { color: var(--muted); font-weight: 600; font-size: .85rem; }
   .pos-main { grid-template-columns: 1fr; }
   .units-grid { grid-template-columns: 1fr 1fr; }
 }
+
+.demo-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 6px 16px; background: var(--warn-soft); color: var(--warn); font-size: .85rem; }
+.demo-bar button { padding: 2px 10px; font-size: .8rem; }
+.demo-bar + .pos { height: calc(100vh - 36px); }
