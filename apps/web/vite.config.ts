@@ -21,15 +21,23 @@ export default defineConfig({
       registerType: "autoUpdate",
       manifest: {
         name: "نظام نقاط البيع",
-        short_name: "POS",
+        short_name: "المحل",
+        description: "الكاشير، ولصاحب المحل: مبيعات اليوم والتنبيهات من التلفون",
         lang: "ar",
         dir: "rtl",
+        start_url: "./",
         display: "standalone",
-        background_color: "#0f172a",
+        background_color: "#f1f5f9",
         theme_color: "#0f766e",
-        icons: [],
+        icons: [
+          { src: "icon-192.png", sizes: "192x192", type: "image/png" },
+          { src: "icon-512.png", sizes: "512x512", type: "image/png" },
+          { src: "icon-maskable-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
+        ],
       },
-      workbox: { navigateFallbackDenylist: [/^\/api/] },
+      includeAssets: ["apple-touch-icon.png", "icon.svg"],
+      // push-sw.js adds the phone notifications to the generated service worker.
+      workbox: { navigateFallbackDenylist: [/^\/api/], importScripts: ["push-sw.js"] },
     }),
   ],
   server: {
