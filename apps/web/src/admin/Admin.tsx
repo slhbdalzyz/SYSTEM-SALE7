@@ -9,6 +9,7 @@ import { Devices } from "./Devices";
 import { Customers } from "./Customers";
 import { Purchasing } from "./Purchasing";
 import { Branches } from "./Branches";
+import { Offers } from "./Offers";
 import { Subscription, subNotice, type Sub } from "./Subscription";
 
 export interface Me {
@@ -19,7 +20,7 @@ export interface Me {
 
 export type Call = <T>(path: string, opts?: { method?: string; body?: unknown }) => Promise<T>;
 
-const TABS = { report: "التقرير اليومي", products: "الأصناف والمخزون", purchasing: "المشتريات والموردين", branches: "الفروع والتحويلات", customers: "العملاء والديون", staff: "الموظفين", devices: "الأجهزة", subscription: "الاشتراك" } as const;
+const TABS = { report: "التقرير اليومي", products: "الأصناف والمخزون", offers: "العروض", purchasing: "المشتريات والموردين", branches: "الفروع والتحويلات", customers: "العملاء والديون", staff: "الموظفين", devices: "الأجهزة", subscription: "الاشتراك" } as const;
 
 export function Admin({ go }: { go: (s: Screen) => void }) {
   const [me, setMe] = useState<Me | null>(null);
@@ -107,6 +108,7 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
       {tab === "products" && <Products call={call} storeId={store.id} />}
       {tab === "purchasing" && <Purchasing call={call} storeId={store.id} />}
       {tab === "branches" && <Branches call={call} storeId={store.id} isOwner={me.user.role === "owner"} onStoresChanged={loadMe} />}
+      {tab === "offers" && <Offers call={call} storeId={store.id} stores={me.stores} />}
       {tab === "customers" && <Customers call={call} />}
       {tab === "staff" && <Staff call={call} isOwner={me.user.role === "owner"} />}
       {tab === "subscription" && <Subscription call={call} />}

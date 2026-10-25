@@ -4,6 +4,8 @@ export interface CartLineInput {
   priceMinor: number;
   qtyMilli: number;
   discountMinor?: number;
+  /** Taken off by a running offer; counts as discount. */
+  promoMinor?: number;
   /** Tax rate in basis points (100 = 1%). Prices are tax-inclusive. */
   taxBp?: number;
 }
@@ -17,7 +19,7 @@ export interface CartLineTotals {
 
 export function computeLine(l: CartLineInput): CartLineTotals {
   const gross = lineAmount(l.priceMinor, l.qtyMilli);
-  const discount = Math.min(l.discountMinor ?? 0, gross);
+  const discount = Math.min((l.discountMinor ?? 0) + (l.promoMinor ?? 0), gross);
   const total = gross - discount;
   const bp = l.taxBp ?? 0;
   const tax = bp > 0 ? Math.round((total * bp) / (10000 + bp)) : 0;

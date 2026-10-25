@@ -17,6 +17,9 @@ export const saleLineSchema = z.object({
   qtyMilli: milli,
   priceMinor: posMinor,
   discountMinor: posMinor.default(0),
+  promoMinor: posMinor.default(0),
+  offerId: z.string().uuid().nullable().optional(),
+  offerName: z.string().max(120).nullable().optional(),
   taxBp: z.number().int().min(0).max(10000).default(0),
 });
 
@@ -71,6 +74,27 @@ export interface CatalogUnit {
   isBase: boolean;
   barcodes: string[];
 }
+
+export const offerInputSchema = z.object({
+  name: z.string().min(2).max(120),
+  kind: z.enum(["percent", "amount", "buy_get", "bundle"]),
+  percentBp: z.number().int().min(1).max(10000).nullable().optional(),
+  amountMinor: z.number().int().positive().nullable().optional(),
+  buyQty: z.number().int().min(1).max(100).nullable().optional(),
+  getQty: z.number().int().min(1).max(100).nullable().optional(),
+  bundleQty: z.number().int().min(2).max(100).nullable().optional(),
+  bundlePriceMinor: z.number().int().nonnegative().nullable().optional(),
+  productIds: z.array(z.string().uuid()).max(500).default([]),
+  categoryIds: z.array(z.string().uuid()).max(100).default([]),
+  storeIds: z.array(z.string().uuid()).max(100).default([]),
+  startsAt: z.string().datetime({ offset: true }).nullable().optional(),
+  endsAt: z.string().datetime({ offset: true }).nullable().optional(),
+  days: z.array(z.number().int().min(0).max(6)).max(7).default([]),
+  hourFrom: z.number().int().min(0).max(23).nullable().optional(),
+  hourTo: z.number().int().min(0).max(24).nullable().optional(),
+  active: z.boolean().default(true),
+});
+export type OfferInput = z.infer<typeof offerInputSchema>;
 
 export interface CatalogProduct {
   id: string;

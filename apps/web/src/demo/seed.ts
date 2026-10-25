@@ -14,7 +14,8 @@ export async function seedDemo(db: Q) {
     await addPriceChecker(db);
     await addPlatform(db);
     await addSuppliers(db);
-    return addBranch(db);
+    await addBranch(db);
+    return addOffers(db);
   }
   const one = async (sql: string, params: unknown[] = []) => (await db.query(sql, params)).rows[0]?.id as string;
   const hash = (s: string) => bcrypt.hash(s, 8);
@@ -74,6 +75,21 @@ export async function seedDemo(db: Q) {
   await product("دجاج كامل", meat, 9000, [{ name: "كيلو", factor: 1000, price: 12500, barcodes: [] }], "00202");
   await addSuppliers(db);
   await addBranch(db);
+  await addOffers(db);
+}
+
+/** A buy-2-get-1 on yoghurt, a 3-for-10 on pasta, and 10% off meat on Fridays. */
+async function addOffers(db: Q) {
+  if ((await db.query(`SELECT 1 FROM offers LIMIT 1`)).rows.length) return;
+  const tid = (await db.query(`SELECT tenant_id FROM devices ORDER BY created_at LIMIT 1`)).rows[0].tenant_id;
+  const pid = async (name: string) => (await db.query(`SELECT id FROM products WHERE tenant_id = $1 AND name = $2`, [tid, name])).rows[0].id;
+  const meat = (await db.query(`SELECT id FROM categories WHERE tenant_id = $1 AND name = 'لحوم'`, [tid])).rows[0].id;
+  await db.query(`INSERT INTO offers (tenant_id, name, kind, buy_qty, get_qty, product_ids) VALUES ($1, 'ياغورت 2+1', 'buy_get', 2, 1, $2)`, [tid, [await pid("ياغورت فراولة")]]);
+  await db.query(
+    `INSERT INTO offers (tenant_id, name, kind, bundle_qty, bundle_price_minor, product_ids, ends_at) VALUES ($1, 'مكرونة 3 بـ 3.5', 'bundle', 3, 3500, $2, now() + interval '10 days')`,
+    [tid, [await pid("مكرونة 500 جم")]],
+  );
+  await db.query(`INSERT INTO offers (tenant_id, name, kind, percent_bp, category_ids, days) VALUES ($1, 'جمعة اللحم 10%', 'percent', 1000, $2, '{5}')`, [tid, [meat]]);
 }
 
 /** A second branch with some stock, and a transfer from the main branch on its way there. */

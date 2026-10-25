@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { formatMoney, formatQty, type CatalogCustomer, type CatalogProduct, type PaymentMethod } from "@pos/shared";
+import { formatMoney, formatQty, type CatalogCustomer, type CatalogProduct, type Offer, type PaymentMethod } from "@pos/shared";
 import { api } from "../api";
 import { db, getMeta, nextInvoiceNumber, setMeta, type HeldCart, type LocalShift } from "../localdb";
 import { findByCode, searchProducts } from "../lookup";
 import { session, tokenClaims } from "../session";
-import { onSync, refreshCounts, startSyncLoop, syncNow, type SyncState } from "../sync";
+import { loadOffers, onSync, refreshCounts, startSyncLoop, syncNow, type SyncState } from "../sync";
 import type { Screen } from "../App";
-import { addLine, cartTotals, lineFor, lineTotal, toSaleInput, type CartLine } from "./cart";
+import { addLine, cartTotals, lineFor, lineTotal, priceCart, toSaleInput, type CartLine } from "./cart";
 import { AmountDialog, Modal, PayDialog } from "./dialogs";
 import { Receipt, type ReceiptData } from "./Receipt";
 import { CustomerDialog } from "./CustomerDialog";
@@ -48,7 +48,16 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   const device = session.device;
   const role = tokenClaims(session.staffToken)?.role;
 
-  const totals = useMemo(() => cartTotals(lines, invoiceDiscount), [lines, invoiceDiscount]);
+  const [offers, setOffers] = useState<Offer[]>([]);
+  // Offers can start or end while a cart is open, so the clock is part of the price.
+  const [minute, setMinute] = useState(() => Math.floor(Date.now() / 60_000));
+  useEffect(() => {
+    const t = setInterval(() => setMinute(Math.floor(Date.now() / 60_000)), 15_000);
+    return () => clearInterval(t);
+  }, []);
+  useEffect(() => void loadOffers().then(setOffers), [sync?.lastSync]);
+  const priced = useMemo(() => priceCart(lines, offers, new Date()), [lines, offers, minute]); // eslint-disable-line react-hooks/exhaustive-deps
+  const totals = useMemo(() => cartTotals(priced.lines, invoiceDiscount), [priced, invoiceDiscount]);
 
   const focusScan = useCallback(() => setTimeout(() => scanRef.current?.focus(), 0), []);
   const flash = (text: string, bad = false) => {
@@ -122,14 +131,14 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
       display.send({
         kind: "cart",
         storeName,
-        lines: lines.map((l) => ({ name: l.name, qty: l.isWeighted ? `${formatQty(l.qtyMilli, true)} كغ` : formatQty(l.qtyMilli, false), amount: formatMoney(lineTotal(l), "") })),
+        lines: priced.lines.map((l) => ({ name: l.name, qty: l.isWeighted ? `${formatQty(l.qtyMilli, true)} كغ` : formatQty(l.qtyMilli, false), amount: formatMoney(lineTotal(l), "") })),
         total: formatMoney(totals.total),
         discount: totals.discount > 0 ? formatMoney(totals.discount) : null,
         customer: customer?.name ?? null,
       });
     else if (receipt?.sale) display.send({ kind: "paid", storeName, total: formatMoney(receipt.sale.totalMinor), change: receipt.changeMinor ? formatMoney(receipt.changeMinor) : null });
     else display.send({ kind: "idle", storeName });
-  }, [lines, totals, customer, receipt, display, device?.storeName]);
+  }, [lines, priced, totals, customer, receipt, display, device?.storeName]);
 
   function put(line: CartLine) {
     const r = addLine(lines, line);
@@ -204,7 +213,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     if (!device) return;
     const id = crypto.randomUUID();
     const number = await nextInvoiceNumber(device.prefix);
-    const sale = toSaleInput({ id, number, shiftId: shift?.id ?? null, lines, invoiceDiscountMinor: invoiceDiscount, payments, customerId: customer?.id });
+    const sale = toSaleInput({ id, number, shiftId: shift?.id ?? null, lines, offers, invoiceDiscountMinor: invoiceDiscount, payments, customerId: customer?.id });
     const credit = payments.filter((p) => p.method === "credit").reduce((a, p) => a + p.amountMinor, 0);
     const paid = payments.reduce((a, p) => a + p.amountMinor, 0);
     const change = paid - sale.totalMinor;
@@ -407,10 +416,14 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {lines.map((l, i) => (
+                  {priced.lines.map((l, i) => (
                     <tr key={l.key} className={l.key === selected ? "sel" : ""} onClick={() => setSelected(l.key)}>
                       <td className="num">{i + 1}</td>
-                      <td>{l.name}{l.discountMinor > 0 && <div className="muted">خصم {formatMoney(l.discountMinor)}</div>}</td>
+                      <td>
+                        {l.name}
+                        {l.discountMinor > 0 && <div className="muted">خصم {formatMoney(l.discountMinor)}</div>}
+                        {(l.promoMinor ?? 0) > 0 && <div className="offer-tag">🏷 {l.offerName} −{formatMoney(l.promoMinor!)}</div>}
+                      </td>
                       <td className="qty">
                         {l.isWeighted ? (
                           <button onClick={() => setDialog({ kind: "qty", key: l.key })} className="num">{formatQty(l.qtyMilli, true)} كغ</button>
@@ -437,6 +450,9 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
           <div className="totals">
             <div className="line"><span>عدد الأصناف</span><span className="num">{lines.length}</span></div>
             <div className="line"><span>المجموع</span><span className="num">{formatMoney(totals.subtotal)}</span></div>
+            {priced.applied.map((a) => (
+              <div className="line offer-tag" key={a.offerId}><span>🏷 {a.name}</span><span className="num">−{formatMoney(a.amountMinor)}</span></div>
+            ))}
             {totals.discount > 0 && <div className="line"><span>الخصم</span><span className="num">−{formatMoney(totals.discount)}</span></div>}
             {totals.tax > 0 && <div className="line muted"><span>منها ضريبة</span><span className="num">{formatMoney(totals.tax)}</span></div>}
             <div className="grand num">{formatMoney(totals.total)}</div>

@@ -80,8 +80,8 @@ describe("receipt rows for the thermal printer", async () => {
       changeMinor: 1500,
       sale: {
         id: water.id, number: "P1-0007", createdAt: "2026-10-24T10:00:00Z", invoiceDiscountMinor: 0, totalMinor: 8500,
-        lines: [{ productId: water.id, unitId: water.units[0].id, name: "مياه", qtyMilli: 2000, priceMinor: 750, discountMinor: 0, taxBp: 0 },
-                { productId: water.id, unitId: water.units[1].id, name: "مياه شد 6", qtyMilli: 1000, priceMinor: 7000, discountMinor: 0, taxBp: 0 }],
+        lines: [{ productId: water.id, unitId: water.units[0].id, name: "مياه", qtyMilli: 2000, priceMinor: 750, discountMinor: 0, promoMinor: 0, taxBp: 0 },
+                { productId: water.id, unitId: water.units[1].id, name: "مياه شد 6", qtyMilli: 1000, priceMinor: 7000, discountMinor: 0, promoMinor: 0, taxBp: 0 }],
         payments: [{ method: "cash", amountMinor: 10000 }],
       },
     });

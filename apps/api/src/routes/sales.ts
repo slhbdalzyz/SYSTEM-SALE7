@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { computeLine, computeTotals, saleInputSchema, type SaleInput } from "@pos/shared";
+import { applyOffers, computeLine, computeTotals, saleInputSchema, type SaleInput } from "@pos/shared";
+import { currentOffers } from "./offers";
 import { audit, inTx } from "../db";
 import { requireDevice } from "../auth";
 import type { TokenPayload } from "../auth";
@@ -74,7 +75,7 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
 
   const unitIds = [...new Set(s.lines.map((l) => l.unitId))];
   const units = await app.db.query(
-    `SELECT u.id, u.product_id, u.factor_milli, u.price_minor, p.cost_minor, p.name
+    `SELECT u.id, u.product_id, u.factor_milli, u.price_minor, u.is_base, p.cost_minor, p.name, p.category_id, p.is_weighted
      FROM product_units u JOIN products p ON p.id = u.product_id WHERE u.tenant_id = $1 AND u.id = ANY($2)`,
     [tid, unitIds],
   );
@@ -83,6 +84,24 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
     const u = byUnit.get(l.unitId);
     if (!u || u.product_id !== l.productId) throw new Reject(`الصنف غير موجود: ${l.name}`);
   }
+
+  // The device works out offers offline. Redo it here with the offers as the server knows them;
+  // a difference means the device had an old list, so the sale stands and gets flagged.
+  const offers = await currentOffers(app.db, tid);
+  const expected = applyOffers(
+    s.lines.map((l) => {
+      const u = byUnit.get(l.unitId)!;
+      return { productId: l.productId, categoryId: u.category_id, priceMinor: l.priceMinor, qtyMilli: l.qtyMilli, isBaseUnit: u.is_base, isWeighted: u.is_weighted };
+    }),
+    offers,
+    new Date(s.createdAt),
+    who.sid ?? null,
+  );
+  const offerMismatch = s.lines.some((l, i) => l.promoMinor !== expected.promo[i] || (l.promoMinor > 0 && (l.offerId ?? null) !== expected.offerIds[i]));
+  const claimed = [...new Set(s.lines.map((l) => l.offerId).filter((x): x is string => !!x))];
+  const knownOffers = new Set(
+    claimed.length ? (await app.db.query(`SELECT id FROM offers WHERE tenant_id = $1 AND id = ANY($2::uuid[])`, [tid, claimed])).rows.map((r) => r.id as string) : [],
+  );
 
   if (s.shiftId) {
     const sh = await app.db.query(`SELECT 1 FROM shifts WHERE id = $1 AND tenant_id = $2 AND device_id = $3`, [s.shiftId, tid, who.did]);
@@ -103,9 +122,10 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
         const baseQty = Math.round((l.qtyMilli * u.factor_milli) / 1000);
         const cost = Math.round((u.cost_minor * baseQty) / 1000);
         await tx.query(
-          `INSERT INTO sale_lines (tenant_id, sale_id, product_id, unit_id, name, qty_milli, price_minor, discount_minor, tax_minor, total_minor, cost_minor)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-          [tid, s.id, l.productId, l.unitId, l.name, l.qtyMilli, l.priceMinor, t.discount, t.tax, t.total, cost],
+          `INSERT INTO sale_lines (tenant_id, sale_id, product_id, unit_id, name, qty_milli, price_minor, discount_minor, tax_minor, total_minor, cost_minor, promo_minor, offer_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+          [tid, s.id, l.productId, l.unitId, l.name, l.qtyMilli, l.priceMinor, t.discount, t.tax, t.total, cost, Math.min(l.promoMinor, t.discount),
+            l.offerId && knownOffers.has(l.offerId) ? l.offerId : null],
         );
         await tx.query(
           `INSERT INTO stock_movements (tenant_id, store_id, product_id, qty_milli, kind, ref_id, user_id) VALUES ($1,$2,$3,$4,'sale',$5,$6)`,
@@ -124,8 +144,15 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
       if (customer && credit > 0 && customer.credit_limit_minor !== null && customer.balance_minor + credit > customer.credit_limit_minor) {
         await audit(tx, { tenantId: tid, userId: who.sub, deviceId: who.did, action: "customer.over_limit", entity: "customer", entityId: s.customerId!, data: { sale: s.number, balance: customer.balance_minor + credit, limit: customer.credit_limit_minor } });
       }
-      if (totals.discount > 0) {
-        await audit(tx, { tenantId: tid, userId: who.sub, deviceId: who.did, action: "sale.discount", entity: "sale", entityId: s.id, data: { discount: totals.discount } });
+      if (offerMismatch) {
+        await audit(tx, {
+          tenantId: tid, userId: who.sub, deviceId: who.did, action: "sale.offer_mismatch", entity: "sale", entityId: s.id,
+          data: { device: s.lines.map((l) => l.promoMinor), server: expected.promo },
+        });
+      }
+      const manual = s.lines.reduce((a, l) => a + l.discountMinor, 0) + s.invoiceDiscountMinor;
+      if (manual > 0) {
+        await audit(tx, { tenantId: tid, userId: who.sub, deviceId: who.did, action: "sale.discount", entity: "sale", entityId: s.id, data: { discount: manual } });
       }
     });
   } catch (e) {

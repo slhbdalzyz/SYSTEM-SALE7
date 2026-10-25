@@ -520,3 +520,69 @@ describe("branches and stock transfers", () => {
     expect((await call("GET", "/stores", cashierToken)).status).toBe(403);
   });
 });
+
+describe("offers", () => {
+  let t: string;
+  let store: string;
+  let till: string;
+  let yog: { id: string; piece: string };
+  let oil: { id: string; piece: string };
+  let offerId: string;
+
+  it("sets up a shop with a till", async () => {
+    const r = await call("POST", "/auth/register", undefined, { businessName: "سوق العروض", storeName: "الرئيسي", ownerName: "هدى", email: "offers@test.ly", password: "password123" });
+    t = r.body.token;
+    store = r.body.storeId;
+    const y = await call("POST", "/products", t, { name: "ياغورت", costMinor: 600, units: [{ name: "علبة", priceMinor: 1000, isBase: true }] });
+    yog = { id: y.body.id, piece: y.body.units[0].id };
+    const o = await call("POST", "/products", t, { name: "زيت", costMinor: 14000, units: [{ name: "قنينة", priceMinor: 18500, isBase: true }] });
+    oil = { id: o.body.id, piece: o.body.units[0].id };
+    const d = await call("POST", "/devices", t, { storeId: store, name: "كاشير" });
+    const u = await call("POST", "/users", t, { name: "سارة", role: "cashier", pin: "4321" });
+    till = (await call("POST", "/auth/pin", undefined, { deviceToken: d.body.deviceToken, userId: u.body.id, pin: "4321" })).body.token;
+  });
+
+  it("lets managers make offers and checks they are complete", async () => {
+    expect((await call("POST", "/offers", t, { name: "ناقص", kind: "buy_get", buyQty: 2 })).status).toBe(400);
+    expect((await call("POST", "/offers", till, { name: "2+1", kind: "buy_get", buyQty: 2, getQty: 1 })).status).toBe(403);
+    const r = await call("POST", "/offers", t, { name: "ياغورت 2+1", kind: "buy_get", buyQty: 2, getQty: 1, productIds: [yog.id] });
+    expect(r.status).toBe(200);
+    offerId = r.body.id;
+    await call("POST", "/offers", t, { name: "زيت قديم", kind: "percent", percentBp: 5000, productIds: [oil.id], endsAt: "2020-01-01T00:00:00Z" });
+    const synced = (await call("GET", "/sync/offers", till)).body;
+    expect(synced.map((o: { name: string }) => o.name)).toEqual(["ياغورت 2+1"]);
+  });
+
+  const sale = (promo: number, offer: string | null) => ({
+    id: randomUUID(), number: `T-${randomUUID().slice(0, 6)}`, createdAt: new Date().toISOString(),
+    lines: [
+      { productId: yog.id, unitId: yog.piece, name: "ياغورت", qtyMilli: 3000, priceMinor: 1000, promoMinor: promo, offerId: offer, offerName: "ياغورت 2+1" },
+      { productId: oil.id, unitId: oil.piece, name: "زيت", qtyMilli: 1000, priceMinor: 18500 },
+    ],
+    payments: [{ method: "cash", amountMinor: 30000 }], totalMinor: 21500 - promo,
+  });
+
+  it("takes a sale with the offer applied and records what it gave", async () => {
+    const r = await call("POST", "/sales/batch", till, { sales: [sale(1000, offerId)] });
+    expect(r.body.results[0].status).toBe("accepted");
+    const line = (await db.query(`SELECT promo_minor, offer_id, total_minor, discount_minor FROM sale_lines WHERE name = 'ياغورت'`)).rows[0];
+    expect(line).toMatchObject({ promo_minor: 1000, offer_id: offerId, total_minor: 2000, discount_minor: 1000 });
+    const list = (await call("GET", "/offers", t)).body.find((o: { id: string }) => o.id === offerId);
+    expect(list).toMatchObject({ salesCount: 1, givenMinor: 1000 });
+    const flagged = await db.query(`SELECT 1 FROM audit_log WHERE action IN ('sale.offer_mismatch', 'sale.discount') AND entity_id = $1`, [r.body.results[0].id]);
+    expect(flagged.rowCount).toBe(0);
+  });
+
+  it("keeps a sale from a device with an old offer list, and flags it", async () => {
+    const s = sale(0, null);
+    expect((await call("POST", "/sales/batch", till, { sales: [s] })).body.results[0].status).toBe("accepted");
+    expect((await db.query(`SELECT 1 FROM audit_log WHERE action = 'sale.offer_mismatch' AND entity_id = $1`, [s.id])).rowCount).toBe(1);
+  });
+
+  it("stops an offer when it is switched off", async () => {
+    const o = (await call("GET", "/offers", t)).body.find((x: { id: string }) => x.id === offerId);
+    expect((await call("PUT", `/offers/${offerId}`, t, { ...o, active: false })).status).toBe(200);
+    expect((await call("GET", "/sync/offers", till)).body).toHaveLength(0);
+    expect((await call("PUT", `/offers/${offerId}`, owner, { ...o, active: false })).status).toBe(404);
+  });
+});
