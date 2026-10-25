@@ -13,7 +13,8 @@ export async function seedDemo(db: Q) {
   if ((await db.query(`SELECT 1 FROM users LIMIT 1`)).rows.length) {
     await addPriceChecker(db);
     await addPlatform(db);
-    return addSuppliers(db);
+    await addSuppliers(db);
+    return addBranch(db);
   }
   const one = async (sql: string, params: unknown[] = []) => (await db.query(sql, params)).rows[0]?.id as string;
   const hash = (s: string) => bcrypt.hash(s, 8);
@@ -72,6 +73,24 @@ export async function seedDemo(db: Q) {
   await product("لحم غنمي", meat, 38000, [{ name: "كيلو", factor: 1000, price: 48000, barcodes: [] }], "00201");
   await product("دجاج كامل", meat, 9000, [{ name: "كيلو", factor: 1000, price: 12500, barcodes: [] }], "00202");
   await addSuppliers(db);
+  await addBranch(db);
+}
+
+/** A second branch with some stock, and a transfer from the main branch on its way there. */
+async function addBranch(db: Q) {
+  const { tid, sid } = (await db.query(`SELECT tenant_id AS tid, store_id AS sid FROM devices ORDER BY created_at LIMIT 1`)).rows[0];
+  if ((await db.query(`SELECT count(*)::int AS n FROM stores WHERE tenant_id = $1`, [tid])).rows[0].n > 1) return;
+  const b2 = (await db.query(`INSERT INTO stores (tenant_id, name, address, receipt_footer) VALUES ($1,'فرع حي الأندلس','طرابلس - حي الأندلس','شكراً لزيارتكم') RETURNING id`, [tid])).rows[0].id;
+  await db.query(
+    `INSERT INTO stock_movements (tenant_id, store_id, product_id, qty_milli, kind, note) SELECT $1, $2, id, 30000, 'adjust', 'رصيد افتتاحي' FROM products WHERE tenant_id = $1`,
+    [tid, b2],
+  );
+  const tr = (await db.query(`INSERT INTO stock_transfers (tenant_id, number, from_store_id, to_store_id, note) VALUES ($1, 1, $2, $3, 'مع السايق') RETURNING id`, [tid, sid, b2])).rows[0].id;
+  for (const [name, qty] of [["زيت زيتون 1 لتر", 12000], ["مكرونة 500 جم", 40000]] as const) {
+    const p = (await db.query(`SELECT id FROM products WHERE tenant_id = $1 AND name = $2`, [tid, name])).rows[0].id;
+    await db.query(`INSERT INTO stock_transfer_lines (tenant_id, transfer_id, product_id, name, qty_milli) VALUES ($1,$2,$3,$4,$5)`, [tid, tr, p, name, qty]);
+    await db.query(`INSERT INTO stock_movements (tenant_id, store_id, product_id, qty_milli, kind, ref_id, note) VALUES ($1,$2,$3,$4,'transfer',$5,'تحويل 1 (إرسال)')`, [tid, sid, p, -qty, tr]);
+  }
 }
 
 /** Two suppliers, one bought-on-credit invoice, and a couple of items running low so «النواقص» has something. */

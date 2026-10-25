@@ -100,11 +100,24 @@ export async function adminRoutes(app: FastifyInstance) {
 
   app.patch("/stores/:id", owners, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
-    const b = z.object({ name: z.string().min(1).optional(), address: z.string().nullable().optional(), receiptFooter: z.string().max(300).nullable().optional() }).parse(req.body);
-    await app.db.query(
-      `UPDATE stores SET name = COALESCE($3, name), address = COALESCE($4, address), receipt_footer = COALESCE($5, receipt_footer) WHERE id = $1 AND tenant_id = $2`,
-      [id, req.user.tid, b.name ?? null, b.address ?? null, b.receiptFooter ?? null],
+    const b = z.object({
+      name: z.string().min(1).optional(),
+      address: z.string().nullable().optional(),
+      phone: z.string().max(40).nullable().optional(),
+      receiptFooter: z.string().max(300).nullable().optional(),
+      active: z.boolean().optional(),
+    }).parse(req.body);
+    if (b.active === false) {
+      const others = await app.db.query(`SELECT 1 FROM stores WHERE tenant_id = $1 AND active AND id <> $2`, [req.user.tid, id]);
+      if (!others.rowCount) throw new HttpError(400, "لازم يبقى فرع واحد شغال على الأقل");
+    }
+    const r = await app.db.query(
+      `UPDATE stores SET name = COALESCE($3, name), address = COALESCE($4, address), receipt_footer = COALESCE($5, receipt_footer),
+              phone = COALESCE($6, phone), active = COALESCE($7, active) WHERE id = $1 AND tenant_id = $2`,
+      [id, req.user.tid, b.name ?? null, b.address ?? null, b.receiptFooter ?? null, b.phone ?? null, b.active ?? null],
     );
+    if (!r.rowCount) throw new HttpError(404, "الفرع غير موجود");
+    if (b.active !== undefined) await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: b.active ? "store.enable" : "store.disable", entity: "store", entityId: id });
     return { ok: true };
   });
 

@@ -92,7 +92,7 @@ export async function authRoutes(app: FastifyInstance) {
   app.get("/me", { preHandler: authenticate }, async (req) => {
     const u = (await app.db.query(`SELECT id, name, email, role FROM users WHERE id = $1 AND tenant_id = $2`, [req.user.sub, req.user.tid])).rows[0];
     const t = (await app.db.query(`SELECT id, name, currency, business_type FROM tenants WHERE id = $1`, [req.user.tid])).rows[0];
-    const stores = await app.db.query(`SELECT id, name, address, receipt_footer FROM stores WHERE tenant_id = $1 ORDER BY created_at`, [req.user.tid]);
+    const stores = await app.db.query(`SELECT id, name, address, phone, receipt_footer, active FROM stores WHERE tenant_id = $1 ORDER BY created_at`, [req.user.tid]);
     return { user: u, tenant: t, stores: stores.rows, deviceId: req.user.did ?? null, storeId: req.user.sid ?? null };
   });
 }

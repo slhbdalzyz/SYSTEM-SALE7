@@ -456,3 +456,67 @@ describe("purchasing and suppliers", () => {
     expect((await call("GET", "/suppliers", cashierToken)).status).toBe(403);
   });
 });
+
+describe("branches and stock transfers", () => {
+  let t: string;
+  let main: string;
+  let second: string;
+  let oil: string;
+
+  it("opens a second branch only on a plan that allows it", async () => {
+    const r = await call("POST", "/auth/register", undefined, { businessName: "أسواق الفرعين", storeName: "الرئيسي", ownerName: "علي", email: "branches@test.ly", password: "password123", planCode: "basic" });
+    t = r.body.token;
+    main = r.body.storeId;
+    expect((await call("POST", "/stores", t, { name: "فرع الهضبة" })).status).toBe(402);
+    await db.query(`UPDATE tenants SET plan_code = 'chain' WHERE name = 'أسواق الفرعين'`);
+    const s = await call("POST", "/stores", t, { name: "فرع الهضبة", address: "طرابلس" });
+    expect(s.status).toBe(200);
+    second = s.body.id;
+    expect((await call("GET", "/me", t)).body.stores).toHaveLength(2);
+    const p = await call("POST", "/products", t, { name: "زيت", costMinor: 10000, units: [{ name: "قنينة", priceMinor: 14000, isBase: true }] });
+    oil = p.body.id;
+    await call("POST", "/stock/adjust", t, { storeId: main, productId: oil, qtyMilli: 20000, reason: "رصيد" });
+  });
+
+  const stockAt = async (store: string) => ((await call("GET", `/products?storeId=${store}`, t)).body as { id: string; stockMilli: number }[]).find((x) => x.id === oil)!.stockMilli;
+
+  it("sends goods out of one branch and receives them in the other, with a shortage", async () => {
+    expect((await call("POST", "/transfers", t, { fromStoreId: main, toStoreId: second, lines: [{ productId: oil, qtyMilli: 50000 }] })).status).toBe(400);
+    const tr = await call("POST", "/transfers", t, { fromStoreId: main, toStoreId: second, lines: [{ productId: oil, qtyMilli: 8000 }] });
+    expect(tr.status).toBe(200);
+    expect(tr.body.number).toBe(1);
+    expect(await stockAt(main)).toBe(12000);
+    expect(await stockAt(second)).toBe(0);
+    const d = (await call("GET", `/transfers/${tr.body.id}`, t)).body;
+    const rec = await call("POST", `/transfers/${tr.body.id}/receive`, t, { lines: [{ id: d.lines[0].id, receivedMilli: 7000 }] });
+    expect(rec.body.shortMilli).toBe(1000);
+    expect(await stockAt(second)).toBe(7000);
+    expect((await call("POST", `/transfers/${tr.body.id}/receive`, t, {})).status).toBe(409);
+    expect((await call("GET", `/transfers?storeId=${second}`, t)).body[0]).toMatchObject({ status: "received", short_milli: 1000, from_name: "الرئيسي", to_name: "فرع الهضبة" });
+  });
+
+  it("puts goods back when a transfer is cancelled", async () => {
+    const tr = await call("POST", "/transfers", t, { fromStoreId: main, toStoreId: second, lines: [{ productId: oil, qtyMilli: 2000 }] });
+    expect(tr.body.number).toBe(2);
+    expect(await stockAt(main)).toBe(10000);
+    expect((await call("POST", `/transfers/${tr.body.id}/cancel`, t)).status).toBe(200);
+    expect(await stockAt(main)).toBe(12000);
+    expect((await call("POST", `/transfers/${tr.body.id}/receive`, t)).status).toBe(409);
+  });
+
+  it("compares branches and keeps one branch on", async () => {
+    const by = (await call("GET", "/stock/by-store", t)).body;
+    expect(by[0].stock).toEqual({ [main]: 12000, [second]: 7000 });
+    const rep = (await call("GET", "/reports/branches?from=2020-01-01&to=2030-01-01", t)).body;
+    expect(rep.map((r: { name: string }) => r.name)).toEqual(["الرئيسي", "فرع الهضبة"]);
+    expect((await call("GET", "/stores", t)).body[1].stock_value_minor).toBe(70000);
+    expect((await call("PATCH", `/stores/${second}`, t, { active: false })).status).toBe(200);
+    expect((await call("PATCH", `/stores/${main}`, t, { active: false })).status).toBe(400);
+    expect((await call("POST", "/transfers", t, { fromStoreId: main, toStoreId: second, lines: [{ productId: oil, qtyMilli: 1000 }] })).status).toBe(400);
+  });
+
+  it("keeps transfers within the shop", async () => {
+    expect((await call("POST", "/transfers", owner, { fromStoreId: main, toStoreId: second, lines: [{ productId: oil, qtyMilli: 1000 }] })).status).toBe(404);
+    expect((await call("GET", "/stores", cashierToken)).status).toBe(403);
+  });
+});
