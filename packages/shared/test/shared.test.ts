@@ -71,3 +71,25 @@ describe("cart totals", () => {
     expect(t.total).toBe(0);
   });
 });
+
+import { creditRoom, refundFor } from "../src";
+
+describe("returns", () => {
+  it("refunds the paid share of a line, including its part of the invoice discount", () => {
+    // 3 × 2.000 with 0.500 line discount = 5.500; second line 4.500; invoice discount 1.000 over 10.000
+    const r = refundFor({ qtyMilli: 3000, priceMinor: 2000, discountMinor: 500, costMinor: 3000 }, { linesNetMinor: 10000, invoiceDiscountMinor: 1000 }, 1000);
+    expect(r.totalMinor).toBe(Math.round((5500 - 550) / 3));
+    expect(r.costMinor).toBe(1000);
+  });
+  it("refunds the full line when everything comes back", () => {
+    expect(refundFor({ qtyMilli: 1250, priceMinor: 3500, discountMinor: 0, costMinor: 2500 }, { linesNetMinor: 4375, invoiceDiscountMinor: 0 }, 1250).totalMinor).toBe(4375);
+  });
+});
+
+describe("credit", () => {
+  it("knows how much credit is left", () => {
+    expect(creditRoom({ creditLimitMinor: null, balanceMinor: 5000 })).toBeNull();
+    expect(creditRoom({ creditLimitMinor: 10000, balanceMinor: 4000 })).toBe(6000);
+    expect(creditRoom({ creditLimitMinor: 10000, balanceMinor: 12000 })).toBe(0);
+  });
+});

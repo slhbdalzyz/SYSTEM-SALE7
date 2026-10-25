@@ -19,6 +19,7 @@ await inTx(db, async (tx) => {
   await tx.query(`INSERT INTO users (tenant_id, name, email, password_hash, pin_hash, role) VALUES ($1,'المالك','owner@demo.ly',$2,$3,'owner')`, [tid, await bcrypt.hash("demo12345", 12), await bcrypt.hash("9999", 10)]);
   await tx.query(`INSERT INTO users (tenant_id, name, pin_hash, role) VALUES ($1,'أحمد الكاشير',$2,'cashier')`, [tid, await bcrypt.hash("1234", 10)]);
   await tx.query(`INSERT INTO devices (tenant_id, store_id, name, prefix, token_hash) VALUES ($1,$2,'كاشير 1','P1',$3)`, [tid, sid, hashToken(DEMO_DEVICE_TOKEN)]);
+  await tx.query(`INSERT INTO customers (tenant_id, name, phone, credit_limit_minor) VALUES ($1,'محمد الطرابلسي','0912345678',200000), ($1,'مطعم الواحة','0923456789',NULL)`, [tid]);
   const cat = async (n: string) => (await tx.query(`INSERT INTO categories (tenant_id, name) VALUES ($1,$2) RETURNING id`, [tid, n])).rows[0].id;
   const drinks = await cat("مشروبات");
   const dairy = await cat("ألبان");

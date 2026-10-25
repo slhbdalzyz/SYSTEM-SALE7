@@ -12,7 +12,10 @@ export async function reportRoutes(app: FastifyInstance) {
     const day = `s.tenant_id = $1 AND s.store_id = $2 AND (s.created_at AT TIME ZONE $4)::date = $3::date`;
     const [summary, byMethod, byCashier, top, byHour] = await Promise.all([
       app.db.query(
-        `SELECT count(*)::int AS sales_count, COALESCE(sum(total_minor),0)::bigint AS total_minor, COALESCE(sum(discount_minor),0)::bigint AS discount_minor,
+        `SELECT count(*) FILTER (WHERE kind = 'sale')::int AS sales_count,
+           count(*) FILTER (WHERE kind = 'return')::int AS returns_count,
+           COALESCE(-sum(total_minor) FILTER (WHERE kind = 'return'),0)::bigint AS returns_minor,
+           COALESCE(sum(total_minor),0)::bigint AS total_minor, COALESCE(sum(discount_minor),0)::bigint AS discount_minor,
            COALESCE(sum(tax_minor),0)::bigint AS tax_minor,
            COALESCE((SELECT sum(l.total_minor - l.cost_minor) FROM sale_lines l JOIN sales s ON s.id = l.sale_id WHERE ${day}),0)::bigint AS gross_profit_minor
          FROM sales s WHERE ${day}`,
@@ -37,9 +40,15 @@ export async function reportRoutes(app: FastifyInstance) {
         args,
       ),
     ]);
+    const collected = await app.db.query(
+      `SELECT cp.method, sum(cp.amount_minor)::bigint AS amount_minor FROM customer_payments cp
+       WHERE cp.tenant_id = $1 AND cp.store_id = $2 AND (cp.created_at AT TIME ZONE $4)::date = $3::date GROUP BY cp.method`,
+      args,
+    );
     const change = await app.db.query(`SELECT COALESCE(sum(change_minor),0)::bigint AS c FROM sales s WHERE ${day}`, args);
     const methods = Object.fromEntries(byMethod.rows.map((r) => [r.method, r.amount_minor]));
     if (methods.cash) methods.cash -= change.rows[0].c; // net cash kept, after change given back
-    return { ...summary.rows[0], byMethod: methods, byCashier: byCashier.rows, topProducts: top.rows, byHour: byHour.rows };
+    const customerPayments = Object.fromEntries(collected.rows.map((r) => [r.method, r.amount_minor]));
+    return { ...summary.rows[0], byMethod: methods, customerPayments, byCashier: byCashier.rows, topProducts: top.rows, byHour: byHour.rows };
   });
 }

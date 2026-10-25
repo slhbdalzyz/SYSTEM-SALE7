@@ -1,4 +1,4 @@
-import type { CatalogProduct } from "@pos/shared";
+import type { CatalogCustomer, CatalogProduct } from "@pos/shared";
 import { api, ApiError } from "./api";
 import { db, getMeta, setMeta, storeCatalog } from "./localdb";
 import { session } from "./session";
@@ -40,6 +40,15 @@ export async function syncCatalog(token: string) {
   );
   await storeCatalog(r.products, r.full);
   await setMeta("catalogSince", r.serverTime);
+}
+
+/** Customers are few per shop, so the whole list with balances is refreshed each time. */
+export async function syncCustomers(token: string) {
+  const list = await api<CatalogCustomer[]>("/customers", { token });
+  await db.transaction("rw", db.customers, async () => {
+    await db.customers.clear();
+    await db.customers.bulkPut(list);
+  });
 }
 
 /**
@@ -88,6 +97,7 @@ export async function syncNow() {
   try {
     await flushOutbox(token);
     await syncCatalog(token);
+    await syncCustomers(token);
     update({ online: true, lastSync: new Date().toISOString(), error: null });
   } catch (e) {
     const offline = e instanceof ApiError && e.status === 0;

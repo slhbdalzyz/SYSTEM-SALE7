@@ -86,3 +86,48 @@ export interface CatalogProduct {
   updatedAt: string;
   units: CatalogUnit[];
 }
+
+/** A manager confirms a sensitive step (a return, for now) on the cashier's device with their PIN. */
+export const approvalSchema = z.object({
+  userId: z.string().uuid(),
+  pin: z.string().regex(/^\d{4,8}$/),
+});
+
+export const REFUND_METHODS = ["cash", "card", "credit"] as const;
+export type RefundMethod = (typeof REFUND_METHODS)[number];
+
+/** Returns are priced by the server from the original sale; the device only says what comes back. */
+export const returnInputSchema = z.object({
+  id: z.string().uuid(),
+  number: z.string().min(1).max(40),
+  originalSaleId: z.string().uuid(),
+  shiftId: z.string().uuid().nullable().optional(),
+  lines: z.array(z.object({ saleLineId: z.string().uuid(), qtyMilli: milli })).min(1).max(500),
+  refundMethod: z.enum(REFUND_METHODS),
+  reason: z.string().min(2).max(200),
+  approval: approvalSchema.optional(),
+});
+export type ReturnInput = z.infer<typeof returnInputSchema>;
+
+export const customerInputSchema = z.object({
+  name: z.string().min(2).max(120),
+  phone: z.string().regex(/^[+\d][\d\s-]{5,19}$/).nullable().optional(),
+  note: z.string().max(300).nullable().optional(),
+  creditLimitMinor: z.number().int().nonnegative().nullable().optional(),
+  active: z.boolean().optional(),
+});
+
+export interface CatalogCustomer {
+  id: string;
+  name: string;
+  phone: string | null;
+  creditLimitMinor: number | null;
+  balanceMinor: number;
+  active: boolean;
+}
+
+/** Room left on a customer's credit. null means no limit. */
+export function creditRoom(c: Pick<CatalogCustomer, "creditLimitMinor" | "balanceMinor">): number | null {
+  if (c.creditLimitMinor === null) return null;
+  return Math.max(c.creditLimitMinor - c.balanceMinor, 0);
+}

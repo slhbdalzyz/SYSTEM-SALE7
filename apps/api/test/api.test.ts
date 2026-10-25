@@ -17,6 +17,7 @@ let owner: string;
 let storeId: string;
 let cashierToken: string;
 let shiftId: string;
+let deviceToken: string;
 let pepsi: { productId: string; piece: string; carton: string };
 let tomato: { productId: string; kg: string };
 
@@ -66,6 +67,7 @@ describe("grocery POS flow", () => {
     const list = await call("POST", "/auth/device-users", undefined, { deviceToken: d.body.deviceToken });
     expect(list.body.users.map((x: { name: string }) => x.name)).toContain("أحمد");
     expect((await call("POST", "/auth/pin", undefined, { deviceToken: d.body.deviceToken, userId: u.body.id, pin: "0000" })).status).toBe(401);
+    deviceToken = d.body.deviceToken;
     const login = await call("POST", "/auth/pin", undefined, { deviceToken: d.body.deviceToken, userId: u.body.id, pin: "1234" });
     expect(login.status).toBe(200);
     cashierToken = login.body.token;
@@ -144,5 +146,114 @@ describe("grocery POS flow", () => {
     await expect(db.query(`DELETE FROM audit_log`)).rejects.toThrow(/append-only/);
     const r = await call("GET", "/audit", owner);
     expect(r.body.map((a: { action: string }) => a.action)).toEqual(expect.arrayContaining(["shift.close", "user.pin_failed", "device.register"]));
+  });
+});
+
+describe("customers, credit and returns", () => {
+  let shift2: string;
+  let managerId: string;
+  let customerId: string;
+  let creditSale: { id: string; number: string };
+  const pepsiLine = () => ({ productId: pepsi.productId, unitId: pepsi.piece, name: "بيبسي", qtyMilli: 4000, priceMinor: 1500 });
+  const sale = (number: string, payments: { method: string; amountMinor: number }[], extra: object = {}) => ({
+    id: randomUUID(), number, shiftId: shift2, createdAt: new Date().toISOString(), lines: [pepsiLine()],
+    invoiceDiscountMinor: 400, payments, totalMinor: 5600, ...extra,
+  });
+
+  beforeAll(async () => {
+    shift2 = randomUUID();
+    await call("POST", "/shifts/open", cashierToken, { id: shift2, openingCashMinor: 0 });
+    managerId = (await call("POST", "/users", owner, { name: "مدير", role: "manager", pin: "5555" })).body.id;
+  });
+
+  it("lets a cashier add a customer but not give them credit", async () => {
+    const r = await call("POST", "/customers", cashierToken, { name: "محمد", phone: "0912345678", creditLimitMinor: 999999 });
+    expect(r.status).toBe(200);
+    expect(r.body.creditLimitMinor).toBe(0);
+    customerId = r.body.id;
+    expect((await call("PATCH", `/customers/${customerId}`, cashierToken, { creditLimitMinor: 8000 })).status).toBe(403);
+    const u = await call("PATCH", `/customers/${customerId}`, owner, { creditLimitMinor: 8000 });
+    expect(u.body.creditLimitMinor).toBe(8000);
+    expect((await call("POST", "/customers", owner, { name: "ثاني", phone: "0912345678" })).status).toBe(409);
+  });
+
+  it("needs a customer to sell on credit", async () => {
+    const r = await call("POST", "/sales/batch", cashierToken, { sales: [sale("P1-C1", [{ method: "credit", amountMinor: 5600 }])] });
+    expect(r.body.results[0].status).toBe("rejected");
+  });
+
+  it("records a credit sale on the customer's balance", async () => {
+    const s = sale("P1-C2", [{ method: "cash", amountMinor: 1600 }, { method: "credit", amountMinor: 4000 }], { customerId });
+    creditSale = { id: s.id, number: s.number };
+    expect((await call("POST", "/sales/batch", cashierToken, { sales: [s] })).body.results[0].status).toBe("accepted");
+    const c = (await call("GET", "/customers?q=محمد", cashierToken)).body[0];
+    expect(c.balanceMinor).toBe(4000);
+  });
+
+  it("keeps an offline credit sale past the limit and flags it", async () => {
+    const s = sale("P1-C3", [{ method: "credit", amountMinor: 5600 }], { customerId, lines: [pepsiLine()] });
+    expect((await call("POST", "/sales/batch", cashierToken, { sales: [s] })).body.results[0].status).toBe("accepted");
+    const audit = await call("GET", "/audit", owner);
+    expect(audit.body.map((a: { action: string }) => a.action)).toContain("customer.over_limit");
+  });
+
+  it("takes a payment once, even when retried", async () => {
+    const pay = { id: randomUUID(), method: "cash", amountMinor: 3000, shiftId: shift2 };
+    await call("POST", `/customers/${customerId}/payments`, cashierToken, pay);
+    const r = await call("POST", `/customers/${customerId}/payments`, cashierToken, pay);
+    expect(r.body.balanceMinor).toBe(4000 + 5600 - 3000);
+    const st = await call("GET", `/customers/${customerId}/statement`, owner);
+    expect(st.body.entries.map((e: { amount_minor: number }) => e.amount_minor)).toEqual([4000, 5600, -3000]);
+    expect(st.body.entries.at(-1).balance_minor).toBe(6600);
+  });
+
+  it("finds a sale by number with what can still be returned", async () => {
+    const r = await call("GET", `/sales/lookup?number=${creditSale.number}`, cashierToken);
+    expect(r.body.lines[0].qty_milli).toBe(4000);
+    expect(r.body.lines[0].returned_milli).toBe(0);
+    expect(r.body.invoice_discount_minor).toBe(400);
+  });
+
+  it("asks for a manager PIN when a cashier makes a return", async () => {
+    const orig = (await call("GET", `/sales/lookup?number=${creditSale.number}`, cashierToken)).body;
+    const ret = { id: randomUUID(), number: "P1-R1", originalSaleId: orig.id, shiftId: shift2, lines: [{ saleLineId: orig.lines[0].id, qtyMilli: 1000 }], refundMethod: "credit", reason: "منتهي" };
+    expect((await call("POST", "/returns", cashierToken, ret)).status).toBe(403);
+    expect((await call("POST", "/returns", cashierToken, { ...ret, approval: { userId: managerId, pin: "0000" } })).status).toBe(403);
+    const ok = await call("POST", "/returns", cashierToken, { ...ret, approval: { userId: managerId, pin: "5555" } });
+    expect(ok.status).toBe(200);
+    expect(ok.body.totalMinor).toBe(1400); // 6.000 − 0.400 discount = 5.600 for 4 cans → 1.400 each
+    const again = await call("POST", "/returns", cashierToken, { ...ret, approval: { userId: managerId, pin: "5555" } });
+    expect(again.body.status).toBe("duplicate");
+    const c = (await call("GET", "/customers", owner)).body.find((x: { id: string }) => x.id === customerId);
+    expect(c.balanceMinor).toBe(6600 - 1400);
+  });
+
+  it("never returns more than was sold", async () => {
+    const orig = (await call("GET", `/sales/lookup?number=${creditSale.number}`, cashierToken)).body;
+    expect(orig.lines[0].returned_milli).toBe(1000);
+    const r = await call("POST", "/returns", cashierToken, {
+      id: randomUUID(), number: "P1-R2", originalSaleId: orig.id, shiftId: shift2, lines: [{ saleLineId: orig.lines[0].id, qtyMilli: 3001 }],
+      refundMethod: "cash", reason: "تجربة", approval: { userId: managerId, pin: "5555" },
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it("puts returned goods back in stock and nets the day and the drawer", async () => {
+    const before = (await call("GET", `/products?storeId=${storeId}`, owner)).body.find((x: { id: string }) => x.id === pepsi.productId).stockMilli;
+    const orig = (await call("GET", `/sales/lookup?number=${creditSale.number}`, cashierToken)).body;
+    const r = await call("POST", "/returns", cashierToken, {
+      id: randomUUID(), number: "P1-R3", originalSaleId: orig.id, shiftId: shift2, lines: [{ saleLineId: orig.lines[0].id, qtyMilli: 1000 }],
+      refundMethod: "cash", reason: "مكسور", approval: { userId: managerId, pin: "5555" },
+    });
+    expect(r.status).toBe(200);
+    const after = (await call("GET", `/products?storeId=${storeId}`, owner)).body.find((x: { id: string }) => x.id === pepsi.productId).stockMilli;
+    expect(after - before).toBe(1000);
+    const cur = (await call("GET", "/shifts/current", cashierToken)).body.shift;
+    expect(cur.expected).toBe(1600 + 3000 - 1400); // cash part of the sale + payment − cash refund
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Tripoli" }).format(new Date());
+    const rep = (await call("GET", `/reports/daily?storeId=${storeId}&date=${today}`, owner)).body;
+    expect(rep.returns_count).toBe(2);
+    expect(rep.returns_minor).toBe(2800);
+    expect(rep.customerPayments.cash).toBe(3000);
   });
 });
