@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { productInputSchema, type CatalogProduct } from "@pos/shared";
+import { ean13CheckDigit, productInputSchema, type CatalogProduct } from "@pos/shared";
 import { audit, inTx, type Db, type Tx } from "../db";
 import { HttpError, authenticate, requireRole } from "../auth";
 
@@ -169,6 +169,36 @@ export async function catalogRoutes(app: FastifyInstance) {
   });
 
   /** Devices pull the catalog changes since their last sync and keep a local copy for offline selling. */
+  /**
+   * Gives a unit its own barcode when it came without one (loose bread, local products…).
+   * Codes are EAN-13 starting 299, the in-store range, numbered per shop; the exact match is looked
+   * up before scale labels on the till, so they never read as a weight.
+   */
+  app.post("/barcodes/generate", managers, async (req) => {
+    const { unitId } = z.object({ unitId: z.string().uuid() }).parse(req.body);
+    return inTx(app.db, async (tx) => {
+      const u = (await tx.query(`SELECT product_id FROM product_units WHERE id = $1 AND tenant_id = $2`, [unitId, req.user.tid])).rows[0];
+      if (!u) throw new HttpError(404, "الوحدة غير موجودة");
+      await tx.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`barcode:${req.user.tid}`]);
+      const last = (await tx.query(
+        `SELECT max(substring(code, 4, 9)::bigint) AS n FROM barcodes WHERE tenant_id = $1 AND code ~ '^299[0-9]{10}$'`,
+        [req.user.tid],
+      )).rows[0].n;
+      let n = Number(last ?? 0) + 1;
+      for (;;) {
+        const body = `299${String(n).padStart(9, "0")}`;
+        const code = body + ean13CheckDigit(body);
+        const taken = await tx.query(`SELECT 1 FROM barcodes WHERE tenant_id = $1 AND code = $2`, [req.user.tid, code]);
+        if (!taken.rowCount) {
+          await tx.query(`INSERT INTO barcodes (tenant_id, unit_id, code) VALUES ($1,$2,$3)`, [req.user.tid, unitId, code]);
+          await tx.query(`UPDATE products SET updated_at = now() WHERE id = $1`, [u.product_id]);
+          return { code };
+        }
+        n++;
+      }
+    });
+  });
+
   app.get("/sync/catalog", { preHandler: authenticate }, async (req) => {
     const { since } = z.object({ since: z.string().datetime().optional() }).parse(req.query);
     const serverTime = (await app.db.query(`SELECT now() AS t`)).rows[0].t as Date;

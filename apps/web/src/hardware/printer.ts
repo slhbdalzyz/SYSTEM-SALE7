@@ -70,7 +70,7 @@ async function sendSerial(bytes: Uint8Array, baudRate: number) {
   }
 }
 
-async function send(bytes: Uint8Array, s: PrinterSettings) {
+export async function send(bytes: Uint8Array, s: Pick<PrinterSettings, "mode" | "printerName" | "host" | "port" | "baudRate">) {
   if (s.mode === "system") return invoke("print_raw", { printer: s.printerName, data: Array.from(bytes) });
   if (s.mode === "network") return invoke("print_tcp", { host: s.host, port: s.port, data: Array.from(bytes) });
   if (s.mode === "serial") return sendSerial(bytes, s.baudRate);

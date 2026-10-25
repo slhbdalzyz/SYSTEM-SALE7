@@ -4,7 +4,7 @@ import { makeScaleBarcode, type CatalogProduct } from "@pos/shared";
 import { db, storeCatalog, nextInvoiceNumber } from "../src/localdb";
 import { findByCode } from "../src/lookup";
 import { addLine, lineFor } from "../src/pos/cart";
-import { parseScaleLine } from "../src/scale";
+import { parseScaleLine, parseScaleOutput } from "../src/scale";
 
 const water: CatalogProduct = {
   id: "11111111-1111-4111-8111-111111111111", name: "مياه", sku: "W1", categoryId: null, isWeighted: false, scaleCode: null, taxBp: 0,
@@ -66,6 +66,11 @@ describe("device", () => {
     expect(parseScaleLine("ST,GS,+  1.250kg")).toBe(1250);
     expect(parseScaleLine("  850 g")).toBe(850);
     expect(parseScaleLine("---")).toBeNull();
+    expect(parseScaleLine("US,GS,+  1.180kg")).toBeNull(); // still settling
+    expect(parseScaleLine("01250")).toBe(1250);
+    expect(parseScaleLine("2.5 lb")).toBe(1134);
+    expect(parseScaleOutput("0.98kg\r\nUS,GS,+  1.010kg\r\nST,GS,+  1.020kg\r\nUS,GS,+  1.100kg\r\n")).toBe(1020);
+    expect(parseScaleOutput("\x02  0.000kg\x03")).toBeNull();
   });
 });
 

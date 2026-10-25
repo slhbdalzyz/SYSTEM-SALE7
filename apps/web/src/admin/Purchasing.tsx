@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { formatMoney, formatQty, toMinor, type CatalogProduct } from "@pos/shared";
 import { Modal } from "../pos/dialogs";
 import type { Call } from "./Admin";
+import type { LabelDraft } from "./Labels";
 
 interface Supplier { id: string; name: string; phone: string | null; note: string | null; active: boolean; balance_minor: number; last_purchase_at: string | null }
 interface Invoice { id: string; supplier_ref: string | null; invoice_date: string; total_minor: number; paid_minor: number; supplier_name: string | null; store_name: string; lines: number; created_at: string }
@@ -16,7 +17,7 @@ const METHOD = { cash: "كاش", bank: "تحويل مصرفي", cheque: "صك", 
 const date = (d: string) => new Date(d).toLocaleDateString("en-GB");
 const TABS = { invoice: "فاتورة شراء جديدة", invoices: "الفواتير", suppliers: "الموردين", reorder: "النواقص" } as const;
 
-export function Purchasing({ call, storeId }: { call: Call; storeId: string }) {
+export function Purchasing({ call, storeId, onLabels }: { call: Call; storeId: string; onLabels: (d: LabelDraft[]) => void }) {
   const [tab, setTab] = useState<keyof typeof TABS>("invoice");
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [draft, setDraft] = useState<{ supplierId: string; lines: Line[] } | null>(null);
@@ -29,7 +30,7 @@ export function Purchasing({ call, storeId }: { call: Call; storeId: string }) {
           <button key={k} className={tab === k ? "active" : ""} onClick={() => setTab(k)}>{TABS[k]}</button>
         ))}
       </div>
-      {tab === "invoice" && <NewInvoice call={call} storeId={storeId} suppliers={suppliers} reloadSuppliers={loadSuppliers} draft={draft} clearDraft={() => setDraft(null)} />}
+      {tab === "invoice" && <NewInvoice call={call} storeId={storeId} suppliers={suppliers} reloadSuppliers={loadSuppliers} draft={draft} clearDraft={() => setDraft(null)} onLabels={onLabels} />}
       {tab === "invoices" && <Invoices call={call} />}
       {tab === "suppliers" && <Suppliers call={call} list={suppliers} reload={loadSuppliers} />}
       {tab === "reorder" && <ReorderList call={call} storeId={storeId} order={(d) => { setDraft(d); setTab("invoice"); }} />}
@@ -37,9 +38,9 @@ export function Purchasing({ call, storeId }: { call: Call; storeId: string }) {
   );
 }
 
-function NewInvoice({ call, storeId, suppliers, reloadSuppliers, draft, clearDraft }: {
+function NewInvoice({ call, storeId, suppliers, reloadSuppliers, draft, clearDraft, onLabels }: {
   call: Call; storeId: string; suppliers: Supplier[]; reloadSuppliers: () => Promise<unknown>;
-  draft: { supplierId: string; lines: Line[] } | null; clearDraft: () => void;
+  draft: { supplierId: string; lines: Line[] } | null; clearDraft: () => void; onLabels: (d: LabelDraft[]) => void;
 }) {
   const [products, setProducts] = useState<CatalogProduct[]>([]);
   const [supplierId, setSupplierId] = useState("");
@@ -50,6 +51,7 @@ function NewInvoice({ call, storeId, suppliers, reloadSuppliers, draft, clearDra
   const [paid, setPaid] = useState<string | null>(null);
   const [method, setMethod] = useState<keyof typeof METHOD>("cash");
   const [msg, setMsg] = useState<{ text: string; bad?: boolean } | null>(null);
+  const [received, setReceived] = useState<LabelDraft[] | null>(null);
 
   useEffect(() => void call<CatalogProduct[]>(`/products?storeId=${storeId}`).then(setProducts), [call, storeId]);
   useEffect(() => {
@@ -96,6 +98,14 @@ function NewInvoice({ call, storeId, suppliers, reloadSuppliers, draft, clearDra
           lines: lines.map((l) => ({ unitId: l.unitId, qtyMilli: toMinor(Number(l.qty) || 0), unitCostMinor: toMinor(Number(l.cost) || 0) })),
         },
       });
+      // One label per piece that came in, for counted items (weighed ones get theirs from the scale).
+      setReceived(lines.flatMap((l) => {
+        const p = products.find((x) => x.id === l.productId);
+        const u = l.units.find((x) => x.id === l.unitId);
+        const base = p?.units.find((x) => x.isBase);
+        if (!p || !u || !base || p.isWeighted) return [];
+        return [{ productId: p.id, unitId: base.id, copies: Math.min(500, Math.round(((Number(l.qty) || 0) * u.factorMilli) / 1000)) }];
+      }));
       setMsg({ text: `تم الاستلام: ${formatMoney(r.totalMinor)}${r.totalMinor > r.paidMinor ? ` · باقي للمورد ${formatMoney(r.totalMinor - r.paidMinor)}` : ""}` });
       setLines([]);
       setRef("");
@@ -170,7 +180,12 @@ function NewInvoice({ call, storeId, suppliers, reloadSuppliers, draft, clearDra
         <span className="spacer" />
         <button className="primary big" disabled={!lines.length || lines.some((l) => !(Number(l.qty) > 0))} onClick={save}>استلام البضاعة</button>
       </div>
-      {msg && <div className={msg.bad ? "error" : "badge ok"}>{msg.text}</div>}
+      {msg && (
+        <div className="row">
+          <div className={msg.bad ? "error" : "badge ok"}>{msg.text}</div>
+          {!msg.bad && received && received.length > 0 && <button onClick={() => onLabels(received)}>اطبع ملصقات للبضاعة اللي وصلت</button>}
+        </div>
+      )}
     </div>
   );
 }

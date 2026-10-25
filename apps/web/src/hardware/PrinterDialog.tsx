@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ReceiptData } from "../pos/Receipt";
 import { Modal } from "../pos/dialogs";
+import { listScalePorts, loadScaleSettings, readScaleWeight, saveScaleSettings, webSerialSupported, type ScaleSettings } from "../scale";
 import { isDesktopApp, listSystemPrinters, loadPrinterSettings, openDrawer, printReceipt, savePrinterSettings, serialSupported, type PrinterMode, type PrinterSettings } from "./printer";
 
 const SAMPLE: ReceiptData = {
@@ -27,6 +28,7 @@ export function PrinterDialog({ onClose }: { onClose: () => void }) {
   const [s, setS] = useState<PrinterSettings>(loadPrinterSettings);
   const [printers, setPrinters] = useState<string[]>([]);
   const [msg, setMsg] = useState<{ text: string; bad?: boolean } | null>(null);
+  const [scale, setScale] = useState<ScaleSettings>(loadScaleSettings);
   const desktop = isDesktopApp();
 
   useEffect(() => {
@@ -52,7 +54,7 @@ export function PrinterDialog({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <Modal title="الطابعة والدرج" onClose={onClose}>
+    <Modal title="الطابعة والدرج والميزان" onClose={onClose}>
       <div className="stack" style={{ gap: 6 }}>
         {modes.map((m) => (
           <label key={m.id} className="row" style={{ color: m.ok ? "var(--ink)" : "var(--muted)" }}>
@@ -96,13 +98,79 @@ export function PrinterDialog({ onClose }: { onClose: () => void }) {
           </label>
         </>
       )}
-      {msg && <div className={msg.bad ? "error" : "badge ok"}>{msg.text}</div>}
       <div className="row">
         <button onClick={() => run(() => printReceipt(SAMPLE, { openDrawer: false }, s), "تم إرسال صفحة التجربة")}>طباعة تجربة</button>
         {s.mode !== "browser" && <button onClick={() => run(() => openDrawer(s), "تم إرسال أمر فتح الدرج")}>تجربة الدرج</button>}
+      </div>
+      <hr style={{ width: "100%", border: 0, borderTop: "1px solid var(--line)" }} />
+      <ScaleSection s={scale} set={setScale} />
+      {msg && <div className={msg.bad ? "error" : "badge ok"}>{msg.text}</div>}
+      <div className="row">
         <span className="spacer" />
-        <button className="primary" onClick={() => { savePrinterSettings(s); onClose(); }}>حفظ</button>
+        <button className="primary" onClick={() => { savePrinterSettings(s); saveScaleSettings(scale); onClose(); }}>حفظ</button>
       </div>
     </Modal>
+  );
+}
+
+const REQUESTS: [string, string][] = [["W\\r\\n", "يرسل W (أغلب الموازين)"], ["\\x05", "يرسل ENQ"], ["", "الميزان يرسل لحاله باستمرار"]];
+
+function ScaleSection({ s, set }: { s: ScaleSettings; set: (s: ScaleSettings) => void }) {
+  const desktop = isDesktopApp();
+  const [ports, setPorts] = useState<{ name: string; label: string }[]>([]);
+  const [msg, setMsg] = useState<{ text: string; bad?: boolean } | null>(null);
+  useEffect(() => {
+    if (desktop) void listScalePorts().then(setPorts).catch(() => setPorts([]));
+  }, [desktop]);
+  const modes: { id: ScaleSettings["mode"]; label: string; ok: boolean; why?: string }[] = [
+    { id: "off", label: "بدون ميزان (الوزن يتكتب أو من ملصق الميزان)", ok: true },
+    { id: "desktop", label: "ميزان على منفذ COM", ok: desktop, why: "يحتاج تطبيق ويندوز" },
+    { id: "browser", label: "ميزان عن طريق المتصفح", ok: webSerialSupported(), why: "يحتاج Chrome أو Edge" },
+  ];
+  async function test() {
+    saveScaleSettings(s);
+    setMsg(null);
+    try {
+      const g = await readScaleWeight(s);
+      setMsg({ text: `الوزن: ${(g / 1000).toFixed(3)} كغ ✓` });
+    } catch (e) {
+      setMsg({ text: (e as Error).message ?? String(e), bad: true });
+    }
+  }
+  return (
+    <div className="stack" style={{ gap: 6 }}>
+      <b>الميزان</b>
+      {modes.map((m) => (
+        <label key={m.id} className="row" style={{ color: m.ok ? "var(--ink)" : "var(--muted)" }}>
+          <input type="radio" style={{ width: "auto" }} disabled={!m.ok} checked={s.mode === m.id} onChange={() => set({ ...s, mode: m.id })} />
+          {m.label}
+          {!m.ok && <span className="muted"> ({m.why})</span>}
+        </label>
+      ))}
+      {s.mode !== "off" && (
+        <div className="row">
+          {s.mode === "desktop" && (
+            <label>المنفذ
+              <select value={s.port} onChange={(e) => set({ ...s, port: e.target.value })} style={{ width: "auto" }}>
+                <option value="">—</option>
+                {ports.map((p) => <option key={p.name} value={p.name}>{p.label}</option>)}
+              </select>
+            </label>
+          )}
+          <label>السرعة (Baud)
+            <select value={s.baudRate} onChange={(e) => set({ ...s, baudRate: Number(e.target.value) })} style={{ width: "auto" }}>
+              {[2400, 4800, 9600, 19200].map((b) => <option key={b}>{b}</option>)}
+            </select>
+          </label>
+          <label>طريقة القراءة
+            <select value={s.request} onChange={(e) => set({ ...s, request: e.target.value })} style={{ width: "auto" }}>
+              {REQUESTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </label>
+          <button onClick={test}>اقرأ الوزن</button>
+        </div>
+      )}
+      {msg && <div className={msg.bad ? "error" : "badge ok"}>{msg.text}</div>}
+    </div>
   );
 }
