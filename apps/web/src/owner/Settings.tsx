@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { formatMoney, fromMinor, toMinor } from "@pos/shared";
 import type { Call } from "../admin/Admin";
 import { session } from "../session";
-import { buildBackup, downloadBlob } from "./backup";
+import { buildBackup, commitRestore, downloadBlob, readManifest, uploadBackup, type BackupManifest } from "./backup";
 import { disablePush, enablePush, pushEnabled, pushSupported } from "./push";
 
 interface S { lowStock: boolean; returnOverMinor: number; discountOverMinor: number; cashDiffOverMinor: number; overCreditLimit: boolean; pushKey: string | null }
@@ -114,6 +114,101 @@ export function BackupCard() {
       </span>
       <button className="primary" onClick={run} disabled={!!busy}>{busy ?? "تنزيل نسخة احتياطية توا"}</button>
       {done && <div className="notice">{done}</div>}
+      {error && <div className="error">{error}</div>}
+    </div>
+  );
+}
+
+const TABLE_NAMES: [string, string][] = [["products", "صنف"], ["sales", "فاتورة"], ["customers", "زبون"], ["suppliers", "مورد"], ["purchase_invoices", "فاتورة شراء"], ["expenses", "مصروف"]];
+
+/**
+ * Puts the shop back as a backup file had it. The file is checked and uploaded first; the swap
+ * happens only after the owner's password, all at once, and a copy of today's data comes first.
+ */
+export function RestoreCard() {
+  const [file, setFile] = useState<File | null>(null);
+  const [m, setM] = useState<BackupManifest | null>(null);
+  const [saveFirst, setSaveFirst] = useState(true);
+  const [password, setPassword] = useState("");
+  const [job, setJob] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+
+  async function pick(f: File | undefined) {
+    setError(null);
+    setM(null);
+    setJob(null);
+    setFile(f ?? null);
+    if (!f) return;
+    try {
+      setM(await readManifest(f));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function run() {
+    if (!file || !m) return;
+    setError(null);
+    try {
+      let id = job;
+      if (!id) {
+        if (saveFirst) {
+          setBusy("نحفظوا نسخة من البيانات الحالية…");
+          const now = await buildBackup(session.adminToken);
+          downloadBlob(now.blob, now.name.replace("backup-", "before-restore-"));
+        }
+        setBusy("نرفعوا الملف…");
+        id = await uploadBackup(session.adminToken, file, (n, t) => setBusy(`نرفعوا الملف… ${n} من ${t}`));
+        setJob(id);
+      }
+      setBusy("نرجّعوا البيانات…");
+      await commitRestore(session.adminToken, id, password);
+      setDone(true);
+    } catch (e) {
+      const msg = (e as Error).message;
+      setError(msg);
+      // A wrong password keeps the upload; anything else starts again from the file.
+      if (!/كلمة السر/.test(msg)) setJob(null);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const count = (name: string) => m?.tables.find((t) => t.name === name)?.rows ?? 0;
+  if (done) {
+    return (
+      <div className="card stack">
+        <b>استرجاع نسخة احتياطية</b>
+        <div className="notice">تم الاسترجاع ✓ البيانات رجعت زي ما كانت يوم {m && new Date(m.createdAt).toLocaleString("en-GB")}. أجهزة الكاشير تحدّث الأصناف بروحها أول ما تتصل.</div>
+        <button className="primary" onClick={() => location.reload()}>تحديث الصفحة</button>
+      </div>
+    );
+  }
+  return (
+    <div className="card stack">
+      <b>استرجاع نسخة احتياطية</b>
+      <span className="muted small">لو صار مشكل، رجّع بيانات المحل من ملف نسخة احتياطية نزّلته قبل.</span>
+      <input type="file" accept=".gz,.ndjson,application/gzip,application/x-ndjson" disabled={!!busy} onChange={(e) => pick(e.target.files?.[0])} />
+      {m && (
+        <>
+          <div className="small">
+            النسخة من يوم <b>{new Date(m.createdAt).toLocaleString("en-GB")}</b>، فيها{" "}
+            {TABLE_NAMES.filter(([n]) => count(n)).map(([n, label]) => `${count(n)} ${label}`).join("، ") || "بيانات قليلة"}.
+          </div>
+          <div className="notice">
+            الاسترجاع يرجّع المحل زي ما كان في التاريخ هذا: أي مبيعات أو أصناف أو مشتريات صارت بعده تنمسح.
+            قبل ما تبدا، تأكد إن كل أجهزة الكاشير متصلة وبعتت مبيعاتها. كلمات السر والاشتراك ما يتغيروش.
+          </div>
+          <label className="check"><input type="checkbox" checked={saveFirst} disabled={!!busy || !!job} onChange={(e) => setSaveFirst(e.target.checked)} /> نزّل نسخة من البيانات الحالية قبل</label>
+          <label>
+            كلمة السر متاعك للتأكيد
+            <input type="password" autoComplete="current-password" value={password} disabled={!!busy} onChange={(e) => setPassword(e.target.value)} />
+          </label>
+          <button className="danger" onClick={run} disabled={!!busy || !password}>{busy ?? "استرجاع النسخة"}</button>
+        </>
+      )}
       {error && <div className="error">{error}</div>}
     </div>
   );

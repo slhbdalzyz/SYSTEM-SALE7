@@ -202,8 +202,11 @@ export async function catalogRoutes(app: FastifyInstance) {
   app.get("/sync/catalog", { preHandler: authenticate }, async (req) => {
     const { since } = z.object({ since: z.string().datetime().optional() }).parse(req.query);
     const serverTime = (await app.db.query(`SELECT now() AS t`)).rows[0].t as Date;
-    const products = await loadProducts(app.db, req.user.tid, { since: since ? new Date(since) : undefined });
+    // After a restore, a till that last synced before it reloads everything.
+    const restored = (await app.db.query(`SELECT restored_at FROM tenants WHERE id = $1`, [req.user.tid])).rows[0]?.restored_at as Date | null;
+    const from = since && !(restored && restored > new Date(since)) ? new Date(since) : undefined;
+    const products = await loadProducts(app.db, req.user.tid, { since: from });
     if (req.user.did) await app.db.query(`UPDATE devices SET last_seen_at = now() WHERE id = $1`, [req.user.did]);
-    return { serverTime: serverTime.toISOString(), products, full: !since };
+    return { serverTime: serverTime.toISOString(), products, full: !from };
   });
 }

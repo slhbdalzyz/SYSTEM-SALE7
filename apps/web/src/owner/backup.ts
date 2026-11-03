@@ -82,3 +82,92 @@ export async function autoBackupIfDue(token: string | null) {
     running = false;
   }
 }
+
+// ---- Restore ----
+
+export type BackupManifest = Manifest;
+
+/** The file's lines, unzipped on the fly when it is gzipped, without holding it all as one string. */
+async function* fileLines(file: Blob): AsyncGenerator<string> {
+  const head = new Uint8Array(await file.slice(0, 2).arrayBuffer());
+  let stream: ReadableStream = file.stream();
+  if (head[0] === 0x1f && head[1] === 0x8b) {
+    if (typeof DecompressionStream === "undefined") throw new Error("المتصفح هذا ما يقدرش يفتح الملف المضغوط. جرّب Chrome أو Edge");
+    stream = stream.pipeThrough(new DecompressionStream("gzip"));
+  }
+  const reader = (stream.pipeThrough(new TextDecoderStream()) as ReadableStream<string>).getReader();
+  let buf = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (value) {
+        buf += value;
+        let i: number;
+        while ((i = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, i);
+          buf = buf.slice(i + 1);
+          if (line.trim()) yield line;
+        }
+      }
+      if (done) break;
+    }
+    if (buf.trim()) yield buf;
+  } finally {
+    reader.cancel().catch(() => undefined);
+  }
+}
+
+const notBackup = () => new Error("الملف هذا مش نسخة احتياطية من النظام");
+
+/** Reads only the first line: what the file holds and when it was made. */
+export async function readManifest(file: Blob): Promise<BackupManifest> {
+  try {
+    for await (const line of fileLines(file)) {
+      const m = (JSON.parse(line) as { manifest?: BackupManifest }).manifest;
+      if (!m || m.format !== "pos-backup-1" || !Array.isArray(m.tables)) throw notBackup();
+      return m;
+    }
+  } catch (e) {
+    if (e instanceof Error && /المتصفح/.test(e.message)) throw e;
+    throw notBackup();
+  }
+  throw notBackup();
+}
+
+/**
+ * Uploads the whole file in pieces, then asks the server to swap it in. Nothing changes until the
+ * last step, and that step is all or nothing. Returns the job id so a wrong password can be retried.
+ */
+export async function uploadBackup(token: string | null, file: Blob, onProgress?: (done: number, total: number) => void): Promise<string> {
+  let id: string | null = null;
+  let total = 0;
+  let done = 0;
+  let batch: unknown[] = [];
+  let bytes = 0;
+  const flush = async () => {
+    if (!batch.length) return;
+    await api(`/restore/${id}/rows`, { token, body: { rows: batch } });
+    done += batch.length;
+    onProgress?.(done, total);
+    batch = [];
+    bytes = 0;
+  };
+  for await (const line of fileLines(file)) {
+    if (!id) {
+      const m = (JSON.parse(line) as { manifest: BackupManifest }).manifest;
+      total = m.tables.reduce((a, t) => a + t.rows, 0);
+      id = (await api<{ id: string }>("/restore", { token, body: { manifest: m } })).id;
+      continue;
+    }
+    batch.push(JSON.parse(line));
+    bytes += line.length;
+    if (batch.length >= 1000 || bytes > 1_000_000) await flush();
+  }
+  if (!id) throw notBackup();
+  await flush();
+  return id;
+}
+
+export function commitRestore(token: string | null, id: string, password: string) {
+  return api<{ ok: true; rows: Record<string, number> }>(`/restore/${id}/commit`, { token, body: { password } });
+}
