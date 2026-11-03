@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { audit } from "../db";
 import { HttpError, requireDevice } from "../auth";
+import { alertCashDiff, flushPushes } from "../alerts";
 
 export async function shiftRoutes(app: FastifyInstance) {
   async function expectedCash(shiftId: string) {
@@ -52,6 +53,9 @@ export async function shiftRoutes(app: FastifyInstance) {
     await app.db.query(`UPDATE shifts SET closed_at = now(), closing_cash_minor = $2, expected_cash_minor = $3 WHERE id = $1`, [id, b.closingCashMinor, e.expected]);
     const diff = b.closingCashMinor - e.expected;
     await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, deviceId: req.user.did, action: "shift.close", entity: "shift", entityId: id, data: { expected: e.expected, counted: b.closingCashMinor, diff } });
+    const names = (await app.db.query(`SELECT (SELECT name FROM users WHERE id = $1) AS cashier, (SELECT name FROM devices WHERE id = $2) AS device`, [req.user.sub, req.user.did])).rows[0];
+    await alertCashDiff(app.db, { tenantId: req.user.tid, storeId: req.user.sid!, diffMinor: diff, cashier: names.cashier ?? "", device: names.device ?? "" });
+    await flushPushes(app.db, req.user.tid);
     return { expectedCashMinor: e.expected, closingCashMinor: b.closingCashMinor, differenceMinor: diff, salesCount: e.sales_count, salesTotalMinor: e.sales_total };
   });
 }

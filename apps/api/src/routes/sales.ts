@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { applyOffers, computeLine, computeTotals, saleInputSchema, type SaleInput } from "@pos/shared";
 import { currentOffers } from "./offers";
+import { alertBigDiscount, alertOverCreditLimit, checkLowStock, flushPushes } from "../alerts";
 import { audit, inTx } from "../db";
 import { requireDevice } from "../auth";
 import type { TokenPayload } from "../auth";
@@ -32,6 +33,7 @@ export async function salesRoutes(app: FastifyInstance) {
         else throw e;
       }
     }
+    if (results.some((r) => r.status === "accepted")) await flushPushes(app.db, req.user.tid);
     return { results };
   });
 
@@ -57,10 +59,10 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
   const totals = computeTotals(s.lines, s.invoiceDiscountMinor);
   if (totals.total !== s.totalMinor) throw new Reject(`الإجمالي غير مطابق (${s.totalMinor} ≠ ${totals.total})`);
   const credit = s.payments.filter((p) => p.method === "credit").reduce((a, p) => a + p.amountMinor, 0);
-  let customer: { credit_limit_minor: number | null; balance_minor: number } | undefined;
+  let customer: { name: string; credit_limit_minor: number | null; balance_minor: number } | undefined;
   if (s.customerId) {
     customer = (await app.db.query(
-      `SELECT c.credit_limit_minor, b.balance_minor FROM customers c JOIN customer_balances b ON b.customer_id = c.id WHERE c.id = $1 AND c.tenant_id = $2`,
+      `SELECT c.name, c.credit_limit_minor, b.balance_minor FROM customers c JOIN customer_balances b ON b.customer_id = c.id WHERE c.id = $1 AND c.tenant_id = $2`,
       [s.customerId, tid],
     )).rows[0];
     if (!customer) throw new Reject("العميل غير موجود");
@@ -116,6 +118,7 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
         [s.id, tid, who.sid, who.did, s.shiftId ?? null, who.sub, s.number, totals.subtotal, totals.discount, totals.tax, totals.total, paid, change, s.createdAt, s.customerId ?? null],
       );
       const overrides: { name: string; catalog: number; sold: number }[] = [];
+      const taken = new Map<string, number>();
       for (const l of s.lines) {
         const u = byUnit.get(l.unitId)!;
         const t = computeLine(l);
@@ -131,6 +134,7 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
           `INSERT INTO stock_movements (tenant_id, store_id, product_id, qty_milli, kind, ref_id, user_id) VALUES ($1,$2,$3,$4,'sale',$5,$6)`,
           [tid, who.sid, l.productId, -baseQty, s.id, who.sub],
         );
+        taken.set(l.productId, (taken.get(l.productId) ?? 0) + baseQty);
         if (l.priceMinor !== u.price_minor) overrides.push({ name: l.name, catalog: u.price_minor, sold: l.priceMinor });
       }
       for (const p of s.payments) {
@@ -143,6 +147,7 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
       // An offline device may have sold on credit past the limit; the sale already happened, so it is kept and flagged.
       if (customer && credit > 0 && customer.credit_limit_minor !== null && customer.balance_minor + credit > customer.credit_limit_minor) {
         await audit(tx, { tenantId: tid, userId: who.sub, deviceId: who.did, action: "customer.over_limit", entity: "customer", entityId: s.customerId!, data: { sale: s.number, balance: customer.balance_minor + credit, limit: customer.credit_limit_minor } });
+        await alertOverCreditLimit(tx, { tenantId: tid, storeId: who.sid!, customer: customer.name, balanceMinor: customer.balance_minor + credit, limitMinor: customer.credit_limit_minor });
       }
       if (offerMismatch) {
         await audit(tx, {
@@ -153,7 +158,10 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
       const manual = s.lines.reduce((a, l) => a + l.discountMinor, 0) + s.invoiceDiscountMinor;
       if (manual > 0) {
         await audit(tx, { tenantId: tid, userId: who.sub, deviceId: who.did, action: "sale.discount", entity: "sale", entityId: s.id, data: { discount: manual } });
+        const cashier = (await tx.query(`SELECT name FROM users WHERE id = $1`, [who.sub])).rows[0]?.name ?? "";
+        await alertBigDiscount(tx, { tenantId: tid, storeId: who.sid!, discountMinor: manual, number: s.number, cashier });
       }
+      await checkLowStock(tx, tid, who.sid!, taken);
     });
   } catch (e) {
     const err = e as { code?: string; constraint?: string };

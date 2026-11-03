@@ -4,9 +4,9 @@ import { db } from "../localdb";
 import type { Screen } from "../App";
 import type { Call } from "./Admin";
 
-interface D { id: string; name: string; prefix: string; kind: "pos" | "price_checker"; active: boolean; last_seen_at: string | null }
+interface D { id: string; name: string; prefix: string; kind: "pos" | "price_checker"; active: boolean; backup: boolean; last_seen_at: string | null }
 
-export function Devices({ call, storeId, storeName, go }: { call: Call; storeId: string; storeName: string; go: (s: Screen) => void }) {
+export function Devices({ call, storeId, storeName, go, isOwner }: { call: Call; storeId: string; storeName: string; go: (s: Screen) => void; isOwner: boolean }) {
   const [devices, setDevices] = useState<D[]>([]);
   const [name, setName] = useState("كاشير 1");
   const [error, setError] = useState<string | null>(null);
@@ -41,9 +41,10 @@ export function Devices({ call, storeId, storeName, go }: { call: Call; storeId:
         </div>
       )}
       {error && <div className="error">{error}</div>}
+      <div className="muted small">«نسخة يومية»: جهاز الكاشير في تطبيق ويندوز يحفظ نسخة من كل بيانات المحل في «المستندات\POS-Backups» مرة في اليوم، ويخلّي آخر 30 نسخة. فعّلها بس على جهاز في مكان آمن.</div>
       <div className="card">
         <table>
-          <thead><tr><th>الجهاز</th><th>الرمز</th><th>آخر ظهور</th><th>الحالة</th><th /></tr></thead>
+          <thead><tr><th>الجهاز</th><th>الرمز</th><th>آخر ظهور</th><th>الحالة</th><th title="تطبيق ويندوز يحفظ نسخة من كل بيانات المحل على الجهاز كل يوم">نسخة يومية</th><th /></tr></thead>
           <tbody>
             {devices.map((d) => (
               <tr key={d.id}>
@@ -51,6 +52,15 @@ export function Devices({ call, storeId, storeName, go }: { call: Call; storeId:
                 <td className="num">{d.prefix}</td>
                 <td className="num">{d.last_seen_at ? new Date(d.last_seen_at).toLocaleString("en-GB") : "—"}</td>
                 <td>{d.active ? <span className="badge ok">فعال</span> : <span className="badge bad">موقوف</span>}</td>
+                <td>
+                  {d.kind === "pos" && (
+                    <label className="check">
+                      <input type="checkbox" checked={d.backup} disabled={!isOwner}
+                        onChange={async (e) => { await call(`/devices/${d.id}/backup`, { method: "PATCH", body: { backup: e.target.checked } }).catch((err) => setError((err as Error).message)); await load(); }} />
+                      {d.backup ? "مفعّلة" : "لا"}
+                    </label>
+                  )}
+                </td>
                 <td>
                   <button className={d.active ? "danger" : ""} onClick={async () => { await call(`/devices/${d.id}`, { method: "PATCH", body: { active: !d.active } }); await load(); }}>
                     {d.active ? "إيقاف (ضايع/مسروق)" : "تفعيل"}

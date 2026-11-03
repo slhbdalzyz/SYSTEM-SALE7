@@ -1,7 +1,9 @@
 //! The Windows shell around the web till. It adds what a browser cannot do: send raw bytes
 //! to the receipt printer (and through it, pulse the cash drawer), and open the customer
-//! display on the second monitor, and read the counter scale on a COM port.
+//! display on the second monitor, read the counter scale on a COM port, and keep daily
+//! backups of the shop's data on the till's disk.
 
+mod backup;
 mod printer;
 mod scale;
 
@@ -53,6 +55,17 @@ async fn read_scale(port: String, baud: u32, request: Option<String>, timeout_ms
         .map_err(|e| e.to_string())?
 }
 
+/// The page sends the backup file as the raw request body, with its name in a header.
+#[tauri::command]
+fn save_backup(app: AppHandle, request: tauri::ipc::Request<'_>) -> Result<String, String> {
+    let tauri::ipc::InvokeBody::Raw(data) = request.body() else {
+        return Err("النسخة لازم تجي كملف".into());
+    };
+    let name = request.headers().get("x-name").and_then(|v| v.to_str().ok()).unwrap_or_default();
+    let dir = app.path().document_dir().map_err(|e| e.to_string())?.join("POS-Backups");
+    backup::save(&dir, name, data).map(|p| p.display().to_string())
+}
+
 /// Opens (or brings back) the customer display, full screen on the second monitor when there is one.
 #[tauri::command]
 fn open_display(app: AppHandle) -> Result<(), String> {
@@ -76,7 +89,7 @@ fn open_display(app: AppHandle) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![list_printers, print_raw, print_tcp, open_display, list_serial_ports, read_scale])
+        .invoke_handler(tauri::generate_handler![list_printers, print_raw, print_tcp, open_display, list_serial_ports, read_scale, save_backup])
         .run(tauri::generate_context!())
         .expect("error while running the till");
 }

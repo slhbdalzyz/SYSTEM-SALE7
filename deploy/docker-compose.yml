@@ -29,6 +29,8 @@ services:
       PLUTU_SECRET_KEY: ${PLUTU_SECRET_KEY:-}
       PLUTU_TEST: ${PLUTU_TEST:-}
       PLUTU_METHODS: ${PLUTU_METHODS:-}
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
 
   web:
     build: { context: .., target: web }

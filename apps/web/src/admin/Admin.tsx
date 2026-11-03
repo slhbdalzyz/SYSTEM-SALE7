@@ -12,6 +12,10 @@ import { Branches } from "./Branches";
 import { Offers } from "./Offers";
 import { Labels, type LabelDraft } from "./Labels";
 import { Subscription, subNotice, type Sub } from "./Subscription";
+import { Expenses } from "./Expenses";
+import { Alerts } from "../owner/Alerts";
+import { AlertSettings, BackupCard } from "../owner/Settings";
+import { setPreferredView } from "../owner/Owner";
 
 export interface Me {
   user: { id: string; name: string; role: string };
@@ -21,7 +25,7 @@ export interface Me {
 
 export type Call = <T>(path: string, opts?: { method?: string; body?: unknown }) => Promise<T>;
 
-const TABS = { report: "التقرير اليومي", products: "الأصناف والمخزون", offers: "العروض", labels: "ملصقات الباركود", purchasing: "المشتريات والموردين", branches: "الفروع والتحويلات", customers: "العملاء والديون", staff: "الموظفين", devices: "الأجهزة", subscription: "الاشتراك" } as const;
+const TABS = { report: "التقرير اليومي", alerts: "التنبيهات", products: "الأصناف والمخزون", offers: "العروض", labels: "ملصقات الباركود", purchasing: "المشتريات والموردين", branches: "الفروع والتحويلات", customers: "العملاء والديون", expenses: "المصروفات", staff: "الموظفين", devices: "الأجهزة", backup: "النسخ الاحتياطي", subscription: "الاشتراك" } as const;
 
 export function Admin({ go }: { go: (s: Screen) => void }) {
   const [me, setMe] = useState<Me | null>(null);
@@ -92,6 +96,7 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
         )}
         <span className="muted">{me.user.name}</span>
         <span className="spacer" />
+        <button onClick={() => { setPreferredView("owner"); go("owner"); }}>عرض التلفون</button>
         {session.deviceToken && <button className="primary" onClick={() => go("pin")}>شاشة الكاشير</button>}
         <button onClick={logout}>خروج</button>
       </div>
@@ -113,9 +118,12 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
       {tab === "branches" && <Branches call={call} storeId={store.id} isOwner={me.user.role === "owner"} onStoresChanged={loadMe} />}
       {tab === "offers" && <Offers call={call} storeId={store.id} stores={me.stores} />}
       {tab === "customers" && <Customers call={call} />}
+      {tab === "alerts" && <><Alerts call={call} /><AlertSettings call={call} isOwner={me.user.role === "owner"} /></>}
+      {tab === "expenses" && <Expenses call={call} storeId={store.id} stores={open} />}
+      {tab === "backup" && (me.user.role === "owner" ? <BackupCard /> : <div className="notice">النسخة الاحتياطية لصاحب المحل فقط</div>)}
       {tab === "staff" && <Staff call={call} isOwner={me.user.role === "owner"} />}
       {tab === "subscription" && <Subscription call={call} />}
-      {tab === "devices" && <Devices call={call} storeId={store.id} storeName={store.name} go={go} />}
+      {tab === "devices" && <Devices call={call} storeId={store.id} storeName={store.name} go={go} isOwner={me.user.role === "owner"} />}
       </div>
     </div>
   );

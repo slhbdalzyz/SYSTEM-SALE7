@@ -12,8 +12,9 @@ const DemoBar = () => (DemoBarLazy ? <Suspense fallback={null}><DemoBarLazy /></
 import { CustomerDisplay } from "./display/CustomerDisplay";
 import { PriceChecker } from "./pricecheck/PriceChecker";
 import { Platform } from "./platform/Platform";
+import { Owner, prefersOwnerView } from "./owner/Owner";
 
-export type Screen = "setup" | "pin" | "pos" | "admin" | "price";
+export type Screen = "setup" | "pin" | "pos" | "admin" | "price" | "owner";
 
 // The demo shop has a ready-made cashier device, so the demo opens on the PIN screen.
 if (DEMO && !session.deviceToken) session.deviceToken = "d".repeat(64);
@@ -21,9 +22,12 @@ if (DEMO && !session.deviceToken) session.deviceToken = "d".repeat(64);
 function initial(): Screen {
   // Coming back from the card payment page: straight to the owner's subscription screen.
   if (new URLSearchParams(location.search).has("payment") && tokenValid(session.adminToken)) return "admin";
+  // A notification tapped on the phone opens the owner's view, even on a till.
+  if (new URLSearchParams(location.search).get("view") === "owner" && tokenValid(session.adminToken)) return "owner";
   if (session.deviceToken && session.deviceKind === "price_checker") return "price";
   if (session.deviceToken) return tokenValid(session.staffToken) ? "pos" : "pin";
-  return tokenValid(session.adminToken) ? "admin" : "setup";
+  if (!tokenValid(session.adminToken)) return "setup";
+  return prefersOwnerView() ? "owner" : "admin";
 }
 
 export function App() {
@@ -43,7 +47,7 @@ export function App() {
 function Main() {
   const [screen, setScreen] = useState<Screen>(initial);
   const page =
-    screen === "price" ? <PriceChecker go={setScreen} /> : screen === "admin" ? <Admin go={setScreen} /> : screen === "pin" ? <PinScreen go={setScreen} /> : screen === "pos" ? <Cashier go={setScreen} /> : <Setup go={setScreen} />;
+    screen === "price" ? <PriceChecker go={setScreen} /> : screen === "owner" ? <Owner go={setScreen} /> : screen === "admin" ? <Admin go={setScreen} /> : screen === "pin" ? <PinScreen go={setScreen} /> : screen === "pos" ? <Cashier go={setScreen} /> : <Setup go={setScreen} />;
   return (
     <>
       <DemoBar />

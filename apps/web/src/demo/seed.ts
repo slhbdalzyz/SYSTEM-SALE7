@@ -15,7 +15,8 @@ export async function seedDemo(db: Q) {
     await addPlatform(db);
     await addSuppliers(db);
     await addBranch(db);
-    return addOffers(db);
+    await addOffers(db);
+    return addOwnerDemo(db);
   }
   const one = async (sql: string, params: unknown[] = []) => (await db.query(sql, params)).rows[0]?.id as string;
   const hash = (s: string) => bcrypt.hash(s, 8);
@@ -76,6 +77,91 @@ export async function seedDemo(db: Q) {
   await addSuppliers(db);
   await addBranch(db);
   await addOffers(db);
+  await addOwnerDemo(db);
+}
+
+/**
+ * A week of past sales so the owner's phone has a chart to show, this month's expenses, and
+ * a few alerts as they would have come in. Sums are made here the same way the server makes them.
+ */
+async function addOwnerDemo(db: Q) {
+  if ((await db.query(`SELECT 1 FROM expenses LIMIT 1`)).rows.length) return;
+  const { tid, sid, did } = (await db.query(`SELECT tenant_id AS tid, store_id AS sid, id AS did FROM devices WHERE kind = 'pos' ORDER BY created_at LIMIT 1`)).rows[0];
+  const uid = (await db.query(`SELECT id FROM users WHERE tenant_id = $1 AND role = 'cashier' LIMIT 1`, [tid])).rows[0].id;
+  const items = (await db.query(
+    `SELECT p.id AS pid, u.id AS uid, p.name, u.price_minor, p.cost_minor FROM products p JOIN product_units u ON u.product_id = p.id AND u.is_base
+     -- Pepsi and milk are already left low on purpose, for the reorder list.
+     WHERE p.tenant_id = $1 AND NOT p.is_weighted AND p.name NOT IN ('بيبسي علبة 330 مل', 'حليب طازج 1 لتر') ORDER BY p.name`,
+    [tid],
+  )).rows;
+  let seed = 7;
+  const rnd = (n: number) => {
+    seed = (seed * 48271) % 2147483647;
+    return seed % n;
+  };
+  // Built here and sent as four statements: one query per row would take minutes in the browser.
+  const sales: { id: string; number: string; total: number; mins: number }[] = [];
+  const lines: { sale: string; pid: string; uid: string; name: string; qty: number; price: number; total: number; cost: number; mins: number }[] = [];
+  // Fewer sales on some days than others, as a grocery would see.
+  for (let daysAgo = 7; daysAgo >= 0; daysAgo--) {
+    const count = daysAgo === 0 ? 9 : 12 + rnd(10);
+    for (let i = 0; i < count; i++) {
+      const id = crypto.randomUUID();
+      const mins = daysAgo === 0 ? 20 + i * 23 : daysAgo * 1440 - 480 + rnd(720);
+      let total = 0;
+      for (let n = 1 + rnd(3); n > 0; n--) {
+        const it = items[rnd(items.length)];
+        const qty = (1 + rnd(2)) * 1000;
+        const amount = Math.round((it.price_minor * qty) / 1000);
+        total += amount;
+        lines.push({ sale: id, pid: it.pid, uid: it.uid, name: it.name, qty, price: it.price_minor, total: amount, cost: Math.round((it.cost_minor * qty) / 1000), mins });
+      }
+      sales.push({ id, number: `D-${String(sales.length + 1).padStart(5, "0")}`, total, mins });
+    }
+  }
+  await db.query(
+    `INSERT INTO sales (id, tenant_id, store_id, device_id, user_id, number, subtotal_minor, discount_minor, tax_minor, total_minor, paid_minor, change_minor, created_at)
+     SELECT x.id, $2, $3, $4, $5, x.number, x.total, 0, 0, x.total, x.total, 0, now() - make_interval(mins => x.mins)
+     FROM jsonb_to_recordset($1::jsonb) AS x(id uuid, number text, total bigint, mins int)`,
+    [JSON.stringify(sales), tid, sid, did, uid],
+  );
+  await db.query(
+    `INSERT INTO payments (tenant_id, sale_id, method, amount_minor) SELECT $2, x.id, 'cash', x.total FROM jsonb_to_recordset($1::jsonb) AS x(id uuid, total bigint)`,
+    [JSON.stringify(sales), tid],
+  );
+  await db.query(
+    `INSERT INTO sale_lines (tenant_id, sale_id, product_id, unit_id, name, qty_milli, price_minor, discount_minor, tax_minor, total_minor, cost_minor)
+     SELECT $2, x.sale, x.pid, x.uid, x.name, x.qty, x.price, 0, 0, x.total, x.cost
+     FROM jsonb_to_recordset($1::jsonb) AS x(sale uuid, pid uuid, uid uuid, name text, qty bigint, price bigint, total bigint, cost bigint)`,
+    [JSON.stringify(lines), tid],
+  );
+  await db.query(
+    `INSERT INTO stock_movements (tenant_id, store_id, product_id, qty_milli, kind, ref_id, created_at)
+     SELECT $2, $3, x.pid, -x.qty, 'sale', x.sale, now() - make_interval(mins => x.mins)
+     FROM jsonb_to_recordset($1::jsonb) AS x(sale uuid, pid uuid, qty bigint, mins int)`,
+    [JSON.stringify(lines), tid, sid],
+  );
+  const owner = (await db.query(`SELECT id FROM users WHERE tenant_id = $1 AND role = 'owner' LIMIT 1`, [tid])).rows[0].id;
+  for (const [category, amount, day, note] of [
+    ["إيجار", 350000, "first", "إيجار المحل"], ["كهرباء", 85000, "-3", null], ["نقل", 25000, "0", "توصيل بضاعة"],
+  ] as const) {
+    await db.query(
+      `INSERT INTO expenses (tenant_id, store_id, category, amount_minor, note, spent_on, user_id)
+       VALUES ($1,$2,$3,$4,$5, CASE WHEN $6 = 'first' THEN date_trunc('month', now() AT TIME ZONE 'Africa/Tripoli')::date ELSE (now() AT TIME ZONE 'Africa/Tripoli')::date + $6::int END, $7)`,
+      [tid, sid, category, amount, note, day, owner],
+    );
+  }
+  for (const [kind, title, body, ago, read] of [
+    ["cash_diff", "الدرج ناقص 12.500 د.ل", "أحمد الكاشير قفل الوردية على كاشير 1", "26 hours", true],
+    ["big_discount", "خصم 25.000 د.ل", "أحمد الكاشير عطى خصم على الفاتورة P1-000231", "5 hours", false],
+    ["low_stock", "قرب يخلص: بيبسي علبة 330 مل", "باقي 6 في الفرع الرئيسي (الحد 10)", "3 hours", false],
+    ["low_stock", "قرب يخلص: حليب طازج 1 لتر", "باقي 6 في الفرع الرئيسي (الحد 10)", "40 minutes", false],
+  ] as const) {
+    await db.query(
+      `INSERT INTO alerts (tenant_id, store_id, kind, title, body, created_at, read_at) VALUES ($1,$2,$3,$4,$5, now() - $6::interval, CASE WHEN $7 THEN now() END)`,
+      [tid, sid, kind, title, body, ago, read],
+    );
+  }
 }
 
 /** A buy-2-get-1 on yoghurt, a 3-for-10 on pasta, and 10% off meat on Fridays. */

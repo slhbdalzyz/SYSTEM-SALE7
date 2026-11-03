@@ -5,6 +5,7 @@ import { db, getMeta, nextInvoiceNumber, setMeta, type HeldCart, type LocalShift
 import { findByCode, searchProducts } from "../lookup";
 import { session, tokenClaims } from "../session";
 import { loadOffers, onSync, refreshCounts, startSyncLoop, syncNow, type SyncState } from "../sync";
+import { autoBackupIfDue } from "../owner/backup";
 import type { Screen } from "../App";
 import { addLine, cartTotals, lineFor, lineTotal, priceCart, toSaleInput, type CartLine } from "./cart";
 import { AmountDialog, Modal, PayDialog } from "./dialogs";
@@ -87,6 +88,20 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   useEffect(() => {
     if (sync?.lastSync) void db.products.count().then(setCatalogSize);
   }, [sync?.lastSync]);
+
+  // Windows app: once a day, when online and the owner allowed it, a full copy goes to this PC's disk.
+  // It checks every 10 minutes; the backup itself decides whether a day has passed.
+  const online = !!sync?.lastSync;
+  useEffect(() => {
+    if (!online) return;
+    const run = () => void autoBackupIfDue(session.staffToken);
+    const first = setTimeout(run, 30_000);
+    const every = setInterval(run, 10 * 60_000);
+    return () => {
+      clearTimeout(first);
+      clearInterval(every);
+    };
+  }, [online]);
 
   // The cash drawer opens only when money goes in or out of it.
   const cashMoved = (r: ReceiptData) =>
