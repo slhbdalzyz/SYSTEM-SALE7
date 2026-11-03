@@ -4,6 +4,8 @@ import pg from "pg";
 pg.types.setTypeParser(20, (v) => Number(v));
 // sum() over bigint returns numeric; the schema has no other numeric columns.
 pg.types.setTypeParser(1700, (v) => Number(v));
+// A date stays "YYYY-MM-DD": as a JS Date it would be local midnight and could shift a day in JSON.
+pg.types.setTypeParser(1082, (v) => v);
 
 export type Db = pg.Pool;
 export type Tx = pg.PoolClient;

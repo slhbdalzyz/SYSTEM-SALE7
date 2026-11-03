@@ -14,7 +14,7 @@ import { Labels, type LabelDraft } from "./Labels";
 import { Subscription, subNotice, type Sub } from "./Subscription";
 import { Expenses } from "./Expenses";
 import { Alerts } from "../owner/Alerts";
-import { AlertSettings, BackupCard } from "../owner/Settings";
+import { AlertSettings, BackupCard, RestoreCard } from "../owner/Settings";
 import { setPreferredView } from "../owner/Owner";
 
 export interface Me {
@@ -120,7 +120,7 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
       {tab === "customers" && <Customers call={call} />}
       {tab === "alerts" && <><Alerts call={call} /><AlertSettings call={call} isOwner={me.user.role === "owner"} /></>}
       {tab === "expenses" && <Expenses call={call} storeId={store.id} stores={open} />}
-      {tab === "backup" && (me.user.role === "owner" ? <BackupCard /> : <div className="notice">النسخة الاحتياطية لصاحب المحل فقط</div>)}
+      {tab === "backup" && (me.user.role === "owner" ? <><BackupCard /><RestoreCard /></> : <div className="notice">النسخة الاحتياطية لصاحب المحل فقط</div>)}
       {tab === "staff" && <Staff call={call} isOwner={me.user.role === "owner"} />}
       {tab === "subscription" && <Subscription call={call} />}
       {tab === "devices" && <Devices call={call} storeId={store.id} storeName={store.name} go={go} isOwner={me.user.role === "owner"} />}

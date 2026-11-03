@@ -821,3 +821,126 @@ describe("the owner's phone: dashboard, alerts, expenses, backup", () => {
     setPusher(null, null);
   });
 });
+
+describe("restoring a backup", () => {
+  type Line = { t: string; r: Record<string, unknown> };
+  async function backup(token: string) {
+    const manifest = (await call("GET", "/backup", token)).body;
+    const lines: Line[] = [];
+    for (const t of manifest.tables as { name: string }[]) {
+      let after: string | null = null;
+      do {
+        const page: { rows: Record<string, unknown>[]; next: string | null } = (await call("GET", `/backup/${t.name}?limit=1000${after ? `&after=${after}` : ""}`, token)).body;
+        lines.push(...page.rows.map((r) => ({ t: t.name, r: JSON.parse(JSON.stringify(r)) })));
+        after = page.next;
+      } while (after);
+    }
+    return { manifest, lines };
+  }
+  async function upload(token: string, b: { manifest: unknown; lines: Line[] }) {
+    const start = await call("POST", "/restore", token, { manifest: b.manifest });
+    if (start.status !== 200) return start;
+    for (let i = 0; i < b.lines.length; i += 500) {
+      const r = await call("POST", `/restore/${start.body.id}/rows`, token, { rows: b.lines.slice(i, i + 500) });
+      expect(r.status).toBe(200);
+    }
+    return start;
+  }
+  const commit = (token: string, id: string, password = "password123") => call("POST", `/restore/${id}/commit`, token, { password });
+  /** The shop's data as a comparable value: rows by table, sorted, without what a restore renumbers or adds. */
+  const shape = (lines: Line[]) => {
+    const out: Record<string, string[]> = {};
+    for (const { t, r } of lines) {
+      if (t === "audit_log") continue;
+      const row = { ...r };
+      if (t === "alerts") delete row.id;
+      if (t === "tenants") delete row.restored_at;
+      if (t === "devices") delete row.last_seen_at; // tills keep syncing
+      (out[t] ??= []).push(JSON.stringify(row));
+    }
+    for (const k in out) out[k].sort();
+    return out;
+  };
+
+  let saved: Awaited<ReturnType<typeof backup>>;
+  let stockBefore: unknown;
+
+  it("puts the shop back exactly as the file had it", async () => {
+    saved = await backup(owner);
+    stockBefore = (await call("GET", "/stock/by-store", owner)).body;
+    const paidUntil = (await db.query(`SELECT paid_until FROM tenants WHERE id = $1`, [saved.manifest.tenantId])).rows[0].paid_until;
+
+    // Things change after the backup...
+    const extra = await call("POST", "/products", owner, { name: "صنف بعد النسخة", units: [{ name: "قطعة", priceMinor: 500, isBase: true, barcodes: ["9999999999994"] }] });
+    expect(extra.status).toBe(200);
+    await call("POST", "/purchases", owner, { storeId, lines: [{ unitId: pepsi.piece, qtyMilli: 50000, unitCostMinor: 900 }] });
+    await call("PUT", "/alerts/settings", owner, { lowStock: false });
+
+    // ...and the restore takes them back.
+    const since = new Date().toISOString();
+    const job = await upload(owner, saved);
+    expect(job.status).toBe(200);
+    expect((await commit(owner, job.body.id, "wrong-password")).status).toBe(401);
+    const done = await commit(owner, job.body.id);
+    expect(done.status).toBe(200);
+    expect(done.body.rows.products).toBe(saved.lines.filter((l) => l.t === "products").length);
+
+    const after = await backup(owner);
+    expect(shape(after.lines)).toEqual(shape(saved.lines));
+    expect((await call("GET", "/stock/by-store", owner)).body).toEqual(stockBefore);
+    expect((await db.query(`SELECT paid_until FROM tenants WHERE id = $1`, [saved.manifest.tenantId])).rows[0].paid_until).toEqual(paidUntil);
+    // Logins and tills keep working, and tills reload their whole catalog.
+    expect((await call("POST", "/auth/login", undefined, { email: "salem@test.ly", password: "password123" })).status).toBe(200);
+    const sync = await call("GET", `/sync/catalog?since=${encodeURIComponent(since)}`, cashierToken);
+    expect(sync.status).toBe(200);
+    expect(sync.body.full).toBe(true);
+    expect(sync.body.products.some((p: { name: string }) => p.name === "صنف بعد النسخة")).toBe(false);
+    const log = await db.query(`SELECT data FROM audit_log WHERE tenant_id = $1 AND action = 'backup.restore'`, [saved.manifest.tenantId]);
+    expect(log.rowCount).toBe(1);
+    // The job and its rows are gone.
+    expect((await db.query(`SELECT count(*)::int AS n FROM restore_jobs`)).rows[0].n).toBe(0);
+  });
+
+  it("refuses a half-uploaded file, and changes nothing", async () => {
+    const start = await call("POST", "/restore", owner, { manifest: saved.manifest });
+    await call("POST", `/restore/${start.body.id}/rows`, owner, { rows: saved.lines.slice(0, 10) });
+    const r = await commit(owner, start.body.id);
+    expect(r.status).toBe(400);
+    expect(r.body.error).toContain("كامل");
+    expect(shape((await backup(owner)).lines)).toEqual(shape(saved.lines));
+  });
+
+  it("keeps a file away from other shops, and other shops' rows out of a file", async () => {
+    const other = await call("POST", "/auth/register", undefined, { businessName: "محل الاسترجاع", storeName: "الرئيسي", ownerName: "سعاد", email: "restore@test.ly", password: "password123" });
+    const o = other.body.token;
+    const theirs = await call("POST", "/products", o, { name: "صنفهم", units: [{ name: "قطعة", priceMinor: 100, isBase: true }] });
+    // Their owner cannot load our file, and a cashier cannot restore at all.
+    expect((await call("POST", "/restore", o, { manifest: saved.manifest })).status).toBe(400);
+    expect((await call("POST", "/restore", cashierToken, { manifest: saved.manifest })).status).toBe(403);
+    expect((await call("POST", "/restore", owner, { manifest: { ...saved.manifest, schema: "999_future.sql" } })).status).toBe(400);
+    expect((await call("POST", "/restore", owner, { manifest: { format: "other" } })).status).toBe(400);
+
+    // A hand-edited file that takes over their product.
+    const stolen = { ...saved, lines: saved.lines.map((l) => (l.t === "products" && l.r.id === pepsi.productId ? { t: l.t, r: { ...l.r, id: theirs.body.id } } : l)) };
+    const a = await upload(owner, stolen);
+    expect((await commit(owner, a.body.id)).body.error).toContain("تعارض");
+    // One that points our barcode at their unit.
+    const linked = { ...saved, lines: saved.lines.map((l, i) => (l.t === "barcodes" && i === saved.lines.findIndex((x) => x.t === "barcodes") ? { t: l.t, r: { ...l.r, unit_id: theirs.body.units[0].id } } : l)) };
+    const b = await upload(owner, linked);
+    expect((await commit(owner, b.body.id)).body.error).toContain("مش تابعة");
+    // One that claims their owner, gives itself a password, and a year of service.
+    const users = saved.lines.filter((l) => l.t === "users");
+    const theirOwner = (await db.query(`SELECT id FROM users WHERE email = 'restore@test.ly'`)).rows[0].id;
+    const hijack = {
+      manifest: { ...saved.manifest, tables: saved.manifest.tables.map((t: { name: string; rows: number }) => (t.name === "users" ? { ...t, rows: t.rows + 1 } : t)) },
+      lines: [...saved.lines.map((l) => (l.t === "tenants" ? { t: l.t, r: { ...l.r, paid_until: "2099-01-01T00:00:00.000Z", status: "active" } } : l)), { t: "users", r: { ...users[0].r, id: theirOwner, password_hash: "x" } }],
+    };
+    const c = await upload(owner, hijack);
+    expect((await commit(owner, c.body.id)).body.error).toContain("مش تابعة");
+
+    expect((await call("GET", "/products", o)).body.map((p: { name: string }) => p.name)).toEqual(["صنفهم"]);
+    expect((await call("POST", "/auth/login", undefined, { email: "restore@test.ly", password: "password123" })).status).toBe(200);
+    expect(shape((await backup(owner)).lines)).toEqual(shape(saved.lines));
+    expect((await db.query(`SELECT paid_until < '2090-01-01' AS ok FROM tenants WHERE id = $1`, [saved.manifest.tenantId])).rows[0].ok).toBe(true);
+  });
+});

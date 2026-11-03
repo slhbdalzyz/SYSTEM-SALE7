@@ -6,7 +6,7 @@ import type { Screen } from "../App";
 import type { Call, Me } from "../admin/Admin";
 import { Expenses } from "../admin/Expenses";
 import { Alerts, ago } from "./Alerts";
-import { AlertSettings, BackupCard } from "./Settings";
+import { AlertSettings, BackupCard, RestoreCard } from "./Settings";
 
 export interface Dashboard {
   date: string;
@@ -109,7 +109,7 @@ export function Owner({ go }: { go: (s: Screen) => void }) {
         {tab === "more" && (
           <div className="stack">
             <AlertSettings call={call} isOwner={me.user.role === "owner"} />
-            {me.user.role === "owner" && <BackupCard />}
+            {me.user.role === "owner" && <><BackupCard /><RestoreCard /></>}
             <div className="card stack">
               <b>{me.user.name}</b>
               <button onClick={full}>الإدارة الكاملة (الأصناف، المشتريات، الموظفين…)</button>
