@@ -117,7 +117,7 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
       {tab === "labels" && <Labels call={call} storeId={store.id} storeName={me.tenant.name} draft={labelDraft} clearDraft={() => setLabelDraft(null)} />}
       {tab === "branches" && <Branches call={call} storeId={store.id} isOwner={me.user.role === "owner"} onStoresChanged={loadMe} />}
       {tab === "offers" && <Offers call={call} storeId={store.id} stores={me.stores} />}
-      {tab === "customers" && <Customers call={call} />}
+      {tab === "customers" && <Customers call={call} isOwner={me.user.role === "owner"} />}
       {tab === "alerts" && <><Alerts call={call} /><AlertSettings call={call} isOwner={me.user.role === "owner"} /></>}
       {tab === "expenses" && <Expenses call={call} storeId={store.id} stores={open} />}
       {tab === "backup" && (me.user.role === "owner" ? <><BackupCard /><RestoreCard /></> : <div className="notice">النسخة الاحتياطية لصاحب المحل فقط</div>)}

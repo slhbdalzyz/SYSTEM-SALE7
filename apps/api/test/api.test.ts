@@ -944,3 +944,110 @@ describe("restoring a backup", () => {
     expect((await db.query(`SELECT paid_until < '2090-01-01' AS ok FROM tenants WHERE id = $1`, [saved.manifest.tenantId])).rows[0].ok).toBe(true);
   });
 });
+
+describe("loyalty points", () => {
+  let t: string;
+  let till: string;
+  let shift: string;
+  let tea: { id: string; piece: string };
+  let cust: string;
+  let store: string;
+  let lastSaleId: string;
+  const points = async () => (await call("GET", "/customers", t)).body.find((c: { id: string }) => c.id === cust).points as number;
+  const sale = (qty: number, payments: { method: string; amountMinor: number }[], customerId: string | null = cust) => {
+    lastSaleId = randomUUID();
+    return {
+      id: lastSaleId, number: `L-${randomUUID().slice(0, 6).toUpperCase()}`, shiftId: shift, createdAt: new Date().toISOString(), customerId,
+      lines: [{ productId: tea.id, unitId: tea.piece, name: "شاهي", qtyMilli: qty * 1000, priceMinor: 5000 }],
+      payments, totalMinor: qty * 5000,
+    };
+  };
+  // Sign-ups and PIN logins are limited per address; this shop comes from its own.
+  const fresh = async (url: string, body: unknown) => (await app.inject({ method: "POST", url, payload: body as object, remoteAddress: "10.0.0.77" })).json();
+  const sell = async (s: ReturnType<typeof sale>) => (await call("POST", "/sales/batch", till, { sales: [s] })).body.results[0];
+
+  it("sets up a shop with a till and a customer", async () => {
+    const r = { body: await fresh("/auth/register", { businessName: "محل النقاط", storeName: "الرئيسي", ownerName: "هند", email: "points@test.ly", password: "password123" }) };
+    expect(r.body).toMatchObject({ storeId: expect.any(String) });
+    t = r.body.token;
+    store = r.body.storeId;
+    const p = await call("POST", "/products", t, { name: "شاهي", costMinor: 3000, units: [{ name: "علبة", priceMinor: 5000, isBase: true }] });
+    tea = { id: p.body.id, piece: p.body.units[0].id };
+    await call("POST", "/purchases", t, { storeId: r.body.storeId, lines: [{ unitId: tea.piece, qtyMilli: 100000, unitCostMinor: 3000 }] });
+    const d = await call("POST", "/devices", t, { storeId: r.body.storeId, name: "كاشير" });
+    // A manager on the till takes returns without asking anyone.
+    const u = await call("POST", "/users", t, { name: "منى", role: "manager", pin: "4321" });
+    till = (await fresh("/auth/pin", { deviceToken: d.body.deviceToken, userId: u.body.id, pin: "4321" })).token;
+    shift = randomUUID();
+    await call("POST", "/shifts/open", till, { id: shift, openingCashMinor: 0 });
+    cust = (await call("POST", "/customers", t, { name: "زبون وفي", phone: "0912223344" })).body.id;
+    expect(await points()).toBe(0);
+  });
+
+  it("is off until the owner turns it on", async () => {
+    expect((await call("GET", "/loyalty/settings", till)).body).toMatchObject({ enabled: false, earnMinorPerPoint: 1000, pointValueMinor: 10 });
+    expect((await sell(sale(2, [{ method: "cash", amountMinor: 10000 }]))).status).toBe("accepted");
+    expect(await points()).toBe(0);
+    const rules = { enabled: true, earnMinorPerPoint: 1000, pointValueMinor: 10, minRedeemPoints: 100 };
+    expect((await call("PUT", "/loyalty/settings", till, rules)).status).toBe(403);
+    expect((await call("PUT", "/loyalty/settings", t, { ...rules, pointValueMinor: 0 })).status).toBe(400);
+    expect((await call("PUT", "/loyalty/settings", t, rules)).status).toBe(200);
+    expect((await call("GET", "/me", till)).body.tenant.loyalty).toMatchObject({ enabled: true });
+  });
+
+  it("earns a point per dinar, also on credit, but only with a customer", async () => {
+    expect((await sell(sale(5, [{ method: "cash", amountMinor: 20000 }, { method: "credit", amountMinor: 5000 }]))).status).toBe("accepted");
+    expect(await points()).toBe(25);
+    await sell(sale(1, [{ method: "cash", amountMinor: 5000 }], null));
+    expect(await points()).toBe(25);
+  });
+
+  it("lets a manager add points by hand, with a reason, but not below zero", async () => {
+    expect((await call("POST", `/customers/${cust}/points`, t, { points: 200, note: "هدية افتتاح" })).body.points).toBe(225);
+    expect((await call("POST", `/customers/${cust}/points`, t, { points: -1000, note: "غلط" })).status).toBe(400);
+    expect((await call("POST", `/customers/${cust}/points`, t, { points: 5 })).status).toBe(400);
+  });
+
+  it("pays with points, and earns only on the rest", async () => {
+    // 10 dinars: 2 paid with 200 points, 8 in cash, which earns 8.
+    expect((await sell(sale(2, [{ method: "points", amountMinor: 2000 }, { method: "cash", amountMinor: 8000 }]))).status).toBe("accepted");
+    expect(await points()).toBe(225 - 200 + 8);
+    const r = await sell(sale(1, [{ method: "points", amountMinor: 1000 }, { method: "cash", amountMinor: 4000 }], null));
+    expect(r.status).toBe("rejected");
+    expect(r.error).toContain("النقاط");
+    expect((await sell(sale(1, [{ method: "points", amountMinor: 6000 }]))).error).toContain("أكبر من الإجمالي");
+  });
+
+  it("gives points and money back in the share they were paid, on a return", async () => {
+    // Return the last paid-with-points sale in two halves.
+    const s = (await call("GET", "/sales?limit=10", till)).body.find((x: { total_minor: number; kind: string }) => x.kind === "sale" && x.total_minor === 10000);
+    const lookup = (await call("GET", `/sales/lookup?number=${s.number}`, till)).body;
+    const half = { lines: [{ saleLineId: lookup.lines[0].id, qtyMilli: 1000 }], refundMethod: "cash", reason: "ما عجبهاش" };
+    const a = await call("POST", "/returns", till, { id: randomUUID(), number: `RT-${randomUUID().slice(0, 6)}`, originalSaleId: lookup.id, ...half });
+    expect(a.body).toMatchObject({ status: "accepted", totalMinor: 5000, refundMinor: 4000, pointsMinor: 1000, pointsBack: 100, pointsTaken: 4 });
+    const b = await call("POST", "/returns", till, { id: randomUUID(), number: `RT-${randomUUID().slice(0, 6)}`, originalSaleId: lookup.id, ...half });
+    expect(b.body).toMatchObject({ refundMinor: 4000, pointsMinor: 1000, pointsBack: 100, pointsTaken: 4 });
+    // Back to where the customer was before that sale.
+    expect(await points()).toBe(225);
+    const h = (await call("GET", `/customers/${cust}/points`, t)).body;
+    expect(h.points).toBe(225);
+    expect(h.entries.map((e: { kind: string }) => e.kind)).toEqual(expect.arrayContaining(["earn", "redeem", "return", "adjust"]));
+    // The drawer only paid out the cash part.
+    const pays = await db.query(`SELECT method, sum(amount_minor)::bigint AS a FROM payments p JOIN sales s ON s.id = p.sale_id WHERE s.original_sale_id = $1 GROUP BY method ORDER BY method`, [lookup.id]);
+    expect(pays.rows).toEqual([{ method: "cash", a: -8000 }, { method: "points", a: -2000 }]);
+  });
+
+  it("keeps a sale from an offline till that spent points the customer no longer had, and flags it", async () => {
+    await call("POST", `/customers/${cust}/points`, t, { points: -200, note: "تصحيح" });
+    expect(await points()).toBe(25);
+    expect((await sell(sale(1, [{ method: "points", amountMinor: 1000 }, { method: "cash", amountMinor: 4000 }]))).status).toBe("accepted");
+    expect(await points()).toBe(25 - 100 + 4);
+    const flag = await db.query(`SELECT data FROM audit_log WHERE action = 'loyalty.overdrawn' AND entity_id = $1`, [cust]);
+    expect(flag.rows[0].data).toMatchObject({ had: 25, spent: 100 });
+    // Points are in the daily report by method, and in the backup.
+    const day = new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Tripoli" }).format(new Date());
+    expect((await call("GET", `/reports/daily?storeId=${store}&date=${day}`, t)).body.byMethod.points).toBe(1000);
+    expect((await call("GET", "/backup/loyalty_entries", t)).body.rows.length).toBeGreaterThan(5);
+    void lastSaleId;
+  });
+});

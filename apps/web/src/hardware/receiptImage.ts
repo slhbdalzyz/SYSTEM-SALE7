@@ -1,7 +1,7 @@
 // Draws a receipt on a canvas the width of the paper. The browser does the Arabic shaping,
 // so the printer only ever gets black and white dots.
 import { computeLine, computeTotals, formatMoney, formatQty } from "@pos/shared";
-import type { ReceiptData } from "../pos/Receipt";
+import { METHOD, type ReceiptData } from "../pos/Receipt";
 
 type Row =
   | { kind: "center"; text: string; size?: number; bold?: boolean }
@@ -10,7 +10,6 @@ type Row =
   | { kind: "rule" }
   | { kind: "space"; h: number };
 
-const METHOD = { cash: "كاش", card: "بطاقة", credit: "آجل" } as const;
 const when = (iso: string) => new Date(iso).toLocaleString("en-GB", { dateStyle: "short", timeStyle: "short" });
 
 export function receiptRows(d: ReceiptData): Row[] {
@@ -30,8 +29,10 @@ export function receiptRows(d: ReceiptData): Row[] {
       { kind: "rule" },
       ...r.lines.map((l): Row => ({ kind: "item", name: l.name, detail: `× ${formatQty(l.qtyMilli, l.qtyMilli % 1000 !== 0)}`, amount: formatMoney(l.totalMinor, "") })),
       { kind: "rule" },
-      { kind: "pair", right: "المبلغ المرجع", left: formatMoney(r.totalMinor), size: 26, bold: true },
+      { kind: "pair", right: "المبلغ المرجع", left: formatMoney(r.refundMinor ?? r.totalMinor), size: 26, bold: true },
       { kind: "pair", right: "طريقة الإرجاع", left: METHOD[r.method] },
+      ...(r.pointsBack > 0 ? [{ kind: "pair", right: "نقاط رجعت", left: `${r.pointsBack} (${formatMoney(r.pointsMinor)})` } as Row] : []),
+      ...(r.pointsTaken > 0 ? [{ kind: "pair", right: "نقاط انسحبت", left: String(r.pointsTaken) } as Row] : []),
       { kind: "pair", right: "السبب", left: r.reason },
     ];
   }
@@ -63,6 +64,14 @@ export function receiptRows(d: ReceiptData): Row[] {
     { kind: "pair", right: "الإجمالي", left: formatMoney(t.total), size: 30, bold: true },
     ...s.payments.map((p): Row => ({ kind: "pair", right: METHOD[p.method], left: formatMoney(p.amountMinor) })),
     ...((d.changeMinor ?? 0) > 0 ? [{ kind: "pair", right: "الباقي", left: formatMoney(d.changeMinor ?? 0) } as Row] : []),
+    ...(d.points
+      ? [
+          { kind: "rule" } as Row,
+          ...(d.points.spent > 0 ? [{ kind: "pair", right: "نقاط مصروفة", left: String(d.points.spent) } as Row] : []),
+          ...(d.points.earned > 0 ? [{ kind: "pair", right: "نقاط كسبتها", left: `+${d.points.earned}` } as Row] : []),
+          { kind: "pair", right: "رصيد نقاطك", left: String(d.points.balance), bold: true } as Row,
+        ]
+      : []),
     { kind: "rule" },
     { kind: "space", h: 6 },
     { kind: "center", text: d.footer ?? "شكراً لزيارتكم" },
