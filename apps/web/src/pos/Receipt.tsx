@@ -10,11 +10,12 @@ export interface ReceiptData {
   sale?: SaleInput;
   changeMinor?: number;
   customerName?: string | null;
+  employeeName?: string | null;
   ret?: ReturnDone;
   payment?: { customerName: string; amountMinor: number; method: "cash" | "card"; balanceMinor: number; at: string };
 }
 
-const METHOD = { cash: "كاش", card: "بطاقة", credit: "آجل" } as const;
+const METHOD = { cash: "كاش", card: "بطاقة", credit: "آجل", payroll: "على الراتب" } as const;
 
 function Head({ data, title, number, at }: { data: ReceiptData; title: string; number?: string; at: string }) {
   return (
@@ -63,6 +64,7 @@ export function Receipt({ data }: { data: ReceiptData | null }) {
     <div className="receipt">
       <Head data={data} title="فاتورة" number={sale.number} at={sale.createdAt} />
       {data.customerName && <div>العميل: {data.customerName}</div>}
+      {data.employeeName && <div>على راتب الموظف: {data.employeeName}</div>}
       <hr />
       <table>
         <tbody>

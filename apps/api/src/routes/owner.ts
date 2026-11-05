@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { audit } from "../db";
-import { HttpError, authenticate, requireRole } from "../auth";
+import { HttpError, authenticate, requirePerm, requireRole } from "../auth";
 import { DEFAULT_ALERT_SETTINGS, alertSettings, pushPublicKey } from "../alerts";
 
 /**
@@ -32,6 +32,8 @@ export const BACKUP_TABLES: { name: string; key: "uuid" | "bigint"; omit?: strin
   { name: "stock_transfer_lines", key: "uuid" },
   { name: "stock_movements", key: "uuid" },
   { name: "expenses", key: "uuid" },
+  { name: "payroll_months", key: "uuid" },
+  { name: "payroll_entries", key: "uuid" },
   { name: "subscription_payments", key: "uuid" },
   { name: "alerts", key: "bigint" },
   { name: "audit_log", key: "bigint" },
@@ -48,7 +50,6 @@ const settingsSchema = z.object({
 });
 
 export async function ownerRoutes(app: FastifyInstance) {
-  const managers = { preHandler: requireRole("owner", "manager") };
   const owners = { preHandler: requireRole("owner") };
 
   async function ownStore(tid: string, storeId: string | undefined) {
@@ -62,7 +63,7 @@ export async function ownerRoutes(app: FastifyInstance) {
    * month so far after expenses, what is running out, who has a till open, and money owed.
    * Without a storeId it adds up every branch.
    */
-  app.get("/dashboard", managers, async (req) => {
+  app.get("/dashboard", { preHandler: requirePerm("reports") }, async (req) => {
     const q = z.object({ storeId: z.string().uuid().optional(), tz: tzSchema }).parse(req.query);
     const tid = req.user.tid;
     await ownStore(tid, q.storeId);
@@ -188,7 +189,7 @@ export async function ownerRoutes(app: FastifyInstance) {
 
   // ---- Alerts ----
 
-  app.get("/alerts", managers, async (req) => {
+  app.get("/alerts", { preHandler: requirePerm("alerts") }, async (req) => {
     const q = z.object({ before: z.coerce.number().int().positive().optional(), limit: z.coerce.number().int().min(1).max(100).default(30) }).parse(req.query);
     const r = await app.db.query(
       `SELECT a.id, a.kind, a.title, a.body, a.created_at, a.read_at, st.name AS store_name FROM alerts a LEFT JOIN stores st ON st.id = a.store_id
@@ -199,7 +200,7 @@ export async function ownerRoutes(app: FastifyInstance) {
     return { alerts: r.rows.map((a) => ({ ...a, id: Number(a.id) })), unread };
   });
 
-  app.post("/alerts/read", managers, async (req) => {
+  app.post("/alerts/read", { preHandler: requirePerm("alerts") }, async (req) => {
     const b = z.object({ ids: z.array(z.number().int().positive()).max(200).optional() }).parse(req.body ?? {});
     await app.db.query(
       `UPDATE alerts SET read_at = now() WHERE tenant_id = $1 AND read_at IS NULL AND ($2::bigint[] IS NULL OR id = ANY($2::bigint[]))`,
@@ -208,7 +209,7 @@ export async function ownerRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
-  app.get("/alerts/settings", managers, async (req) => ({ ...(await alertSettings(app.db, req.user.tid)), pushKey: pushPublicKey() }));
+  app.get("/alerts/settings", { preHandler: requirePerm("alerts") }, async (req) => ({ ...(await alertSettings(app.db, req.user.tid)), pushKey: pushPublicKey() }));
 
   app.put("/alerts/settings", owners, async (req) => {
     const b = settingsSchema.parse({ ...DEFAULT_ALERT_SETTINGS, ...(req.body as object) });
@@ -218,7 +219,7 @@ export async function ownerRoutes(app: FastifyInstance) {
   });
 
   /** A phone that agreed to notifications. The same phone signing up again just refreshes it. */
-  app.post("/push/subscribe", managers, async (req) => {
+  app.post("/push/subscribe", { preHandler: requirePerm("alerts") }, async (req) => {
     if (!pushPublicKey()) throw new HttpError(400, "إشعارات التلفون مش مفعّلة على هذا السيرفر");
     const b = z.object({ endpoint: z.string().url().max(1000), keys: z.object({ p256dh: z.string().min(10).max(200), auth: z.string().min(8).max(100) }) }).parse(req.body);
     if (!b.endpoint.startsWith("https://")) throw new HttpError(400, "عنوان الإشعارات غير صحيح");
@@ -230,7 +231,7 @@ export async function ownerRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
-  app.post("/push/unsubscribe", managers, async (req) => {
+  app.post("/push/unsubscribe", { preHandler: requirePerm("alerts") }, async (req) => {
     const b = z.object({ endpoint: z.string().max(1000) }).parse(req.body);
     await app.db.query(`DELETE FROM push_subscriptions WHERE endpoint = $1 AND tenant_id = $2`, [b.endpoint, req.user.tid]);
     return { ok: true };
@@ -238,7 +239,7 @@ export async function ownerRoutes(app: FastifyInstance) {
 
   // ---- Expenses ----
 
-  app.get("/expenses", managers, async (req) => {
+  app.get("/expenses", { preHandler: requirePerm("expenses") }, async (req) => {
     const q = z.object({ storeId: z.string().uuid().optional(), month: z.string().regex(/^\d{4}-\d{2}$/) }).parse(req.query);
     const r = await app.db.query(
       `SELECT e.id, e.category, e.amount_minor, e.note, to_char(e.spent_on, 'YYYY-MM-DD') AS spent_on, st.name AS store_name, u.name AS user_name
@@ -252,7 +253,7 @@ export async function ownerRoutes(app: FastifyInstance) {
     return { expenses: r.rows, byCategory, totalMinor: Object.values(byCategory).reduce((a, n) => a + n, 0) };
   });
 
-  app.post("/expenses", managers, async (req) => {
+  app.post("/expenses", { preHandler: requirePerm("expenses") }, async (req) => {
     const b = z.object({
       storeId: z.string().uuid(),
       category: z.string().trim().min(1).max(40),
@@ -269,7 +270,7 @@ export async function ownerRoutes(app: FastifyInstance) {
     return { id: r.rows[0].id };
   });
 
-  app.post("/expenses/:id/delete", managers, async (req) => {
+  app.post("/expenses/:id/delete", { preHandler: requirePerm("expenses") }, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const r = await app.db.query(`DELETE FROM expenses WHERE id = $1 AND tenant_id = $2 RETURNING category, amount_minor, spent_on`, [id, req.user.tid]);
     if (!r.rowCount) throw new HttpError(404, "المصروف غير موجود");

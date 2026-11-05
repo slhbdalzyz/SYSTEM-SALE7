@@ -40,7 +40,7 @@ export function DemoBar() {
       {open && !platform && (
         <span>
           الكاشير: <b>أحمد</b> رقمه <b className="num">1234</b> · المالك رقمه <b className="num">9999</b> · الإدارة:{" "}
-          <b className="num">owner@demo.ly</b> / <b className="num">demo12345</b> · باركودات للتجربة: <b className="num">6191234500042</b> (كرتونة بيبسي)،{" "}
+          <b className="num">owner@demo.ly</b> / <b className="num">demo12345</b> (المحاسبة: <b className="num">mona@demo.ly</b>، مدخل البيانات: <b className="num">khaled@demo.ly</b>، بنفس كلمة السر) · باركودات للتجربة: <b className="num">6191234500042</b> (كرتونة بيبسي)،{" "}
           <b className="num">2000101012504</b> (ميزان: طماطم 1.250 كغ)
         </span>
       )}

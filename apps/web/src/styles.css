@@ -322,3 +322,45 @@ button.ghost:hover:not(:disabled) { color: var(--ink); border-color: var(--line)
   .topbar h1 { font-size: 1rem; }
   .topbar button:not(.burger) { font-size: .8rem; padding: 6px 8px; }
 }
+
+/* Salaries: "my salary", the payroll and the staff editor */
+td.ok, .num.ok, b.ok { color: var(--ok); }
+td.bad, .num.bad, b.bad { color: var(--danger); }
+.num.info { color: var(--brand); }
+.row.wrap, .seg.wrap { flex-wrap: wrap; }
+.seg.wrap { display: flex; }
+.seg.wrap button { border-bottom: 1px solid var(--line); }
+.pay-hero { display: grid; gap: 8px; background: linear-gradient(135deg, #0f766e, #115e59); color: #fff; border: 0; }
+.pay-hero > span { color: #ccfbf1; font-weight: 600; }
+.pay-hero > b { font-size: 2.4rem; line-height: 1.1; }
+.pay-hero > b.bad { color: #fecaca; }
+.pay-hero small { color: #ccfbf1; }
+.meter { height: 10px; border-radius: 999px; background: rgba(255,255,255,.22); overflow: hidden; }
+.meter i { display: block; height: 100%; border-radius: 999px; background: #a7f3d0; }
+.chip { background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; font-size: .88rem; }
+.pay-list { list-style: none; margin: 0; padding: 0; display: grid; }
+.pay-list li { display: grid; grid-template-columns: 36px 1fr auto; gap: 10px; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.pay-list li:last-child { border-bottom: 0; }
+.pay-icon { width: 34px; height: 34px; border-radius: 10px; background: var(--bg); display: grid; place-items: center; font-size: 1.05rem; }
+.privacy { font-size: .85rem; }
+.mypay-modal { max-height: 70vh; overflow: auto; }
+.modal:has(.mypay-modal), .modal:has(.staff-editor) { width: min(820px, 100%); }
+.staff-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.staff-card { display: grid; gap: 10px; align-content: start; }
+.staff-card.off { opacity: .6; }
+.staff-card .avatar { color: #fff; display: grid; place-items: center; font-weight: 800; flex: none; }
+.role-pick { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.role-pick button { display: grid; gap: 2px; text-align: start; padding: 10px; border-radius: 12px; }
+.role-pick button small { color: var(--muted); font-weight: 400; font-size: .78rem; }
+.role-pick button.active { border-color: var(--brand); background: var(--brand-soft); box-shadow: 0 0 0 1px var(--brand) inset; }
+.perm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px 14px; }
+label.check { display: flex; flex-direction: row; align-items: center; gap: 8px; font-weight: 500; }
+label.check input { width: auto; }
+label.check.dim { color: var(--muted); }
+.modal .seg { display: flex; }
+.modal .seg button { flex: 1; }
+.seg.wrap { border: 0; gap: 6px; background: none; overflow: visible; }
+.seg.wrap button, .seg.wrap button:last-child { border: 1px solid var(--line); border-radius: 999px; background: var(--panel); }
+.seg.wrap button.active { background: var(--brand); border-color: var(--brand); }
+.kpi.hero b.num { font-size: clamp(1.4rem, 2.2vw, 2rem); white-space: nowrap; }
+.kpi b.num { white-space: nowrap; }

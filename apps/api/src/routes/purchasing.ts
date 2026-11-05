@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { audit, inTx } from "../db";
-import { HttpError, requireRole } from "../auth";
+import { HttpError, requirePerm } from "../auth";
 
 const supplierSchema = z.object({
   name: z.string().min(2).max(120),
@@ -40,7 +40,7 @@ export const purchaseSchema = z.object({
 });
 
 export async function purchasingRoutes(app: FastifyInstance) {
-  const managers = { preHandler: requireRole("owner", "manager") };
+  const managers = { preHandler: requirePerm("purchasing") };
 
   app.get("/suppliers", managers, async (req) => {
     const { q } = z.object({ q: z.string().max(100).optional() }).parse(req.query);
@@ -231,7 +231,7 @@ export async function purchasingRoutes(app: FastifyInstance) {
    * Goods that expire within `days` (or already have), from the expiry dates on supply invoices,
    * for items that are still in stock at this branch. Newest delivery per item and date.
    */
-  app.get("/stock/expiring", managers, async (req) => {
+  app.get("/stock/expiring", { preHandler: requirePerm("purchasing", "reports") }, async (req) => {
     const q = z.object({ storeId: z.string().uuid(), days: z.coerce.number().int().min(0).max(365).default(30) }).parse(req.query);
     const r = await app.db.query(
       `SELECT l.product_id, l.name, p.is_weighted, to_char(l.expiry_date, 'YYYY-MM-DD') AS expiry_date, (l.expiry_date - current_date) AS days_left,

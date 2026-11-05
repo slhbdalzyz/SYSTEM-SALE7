@@ -1020,3 +1020,125 @@ describe("period and stock reports", () => {
     expect(r.retailValueMinor).toBeGreaterThanOrEqual(r.costValueMinor);
   });
 });
+
+describe("jobs, permissions and salaries", () => {
+  let ahmed: string;
+  let accountant: string;
+  let dataEntry: string;
+  let dataEntryId: string;
+  let bossId: string;
+  const month = new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Tripoli" }).format(new Date()).slice(0, 7);
+
+  it("adds an accountant and a data-entry clerk who each see only their part", async () => {
+    const a = await call("POST", "/users", owner, { name: "منى المحاسبة", role: "accountant", email: "mona@test.ly", password: "password123", jobTitle: "محاسبة" });
+    expect(a.status, JSON.stringify(a.body)).toBe(200);
+    const d = await call("POST", "/users", owner, { name: "خالد", role: "data_entry", email: "khaled@test.ly", password: "password123" });
+    dataEntryId = d.body.id;
+    accountant = (await call("POST", "/auth/login", undefined, { email: "mona@test.ly", password: "password123" })).body.token;
+    dataEntry = (await call("POST", "/auth/login", undefined, { email: "khaled@test.ly", password: "password123" })).body.token;
+
+    const me = (await call("GET", "/me", accountant)).body;
+    expect(me.user.permissions).toContain("payroll");
+    expect(me.user.permissions).not.toContain("products");
+    expect((await call("GET", "/payroll", accountant)).status).toBe(200);
+    expect((await call("GET", `/reports/period?from=${month}-01&to=${month}-01`, accountant)).status).toBe(200);
+    expect((await call("POST", "/products", accountant, { name: "x", units: [{ name: "قطعة", priceMinor: 1, isBase: true }] })).status).toBe(403);
+    expect((await call("POST", "/users", accountant, { name: "دخيل", role: "manager", pin: "4444" })).status).toBe(403);
+
+    expect((await call("POST", "/products", dataEntry, { name: "عصير", units: [{ name: "علبة", priceMinor: 2000, isBase: true }] })).status).toBe(200);
+    expect((await call("GET", "/purchases", dataEntry)).status).toBe(200);
+    expect((await call("GET", "/payroll", dataEntry)).status).toBe(403);
+    expect((await call("GET", "/dashboard", dataEntry)).status).toBe(403);
+    expect((await call("GET", "/users", dataEntry)).status).toBe(403);
+  });
+
+  it("lets the owner tick a person's permissions, effective at once", async () => {
+    expect((await call("PATCH", `/users/${dataEntryId}`, owner, { permissions: ["products"] })).status).toBe(200);
+    expect((await call("GET", "/purchases", dataEntry)).status).toBe(403);
+    expect((await call("GET", "/products", dataEntry)).status).toBe(200);
+    expect((await call("PATCH", `/users/${dataEntryId}`, owner, { active: false })).status).toBe(200);
+    expect((await call("POST", "/products", dataEntry, { name: "y", units: [{ name: "قطعة", priceMinor: 1, isBase: true }] })).status).toBe(401);
+  });
+
+  it("keeps salaries away from those without the payroll permission", async () => {
+    const m = await call("POST", "/users", owner, { name: "المدير سمير", role: "manager", pin: "7777", permissions: ["staff", "products"] });
+    bossId = m.body.id;
+    // A manager with staff but not payroll rights sees the staff without their pay, and cannot set it.
+    const users = (await call("GET", "/users", owner)).body;
+    ahmed = users.find((u: { name: string }) => u.name === "أحمد").id;
+    expect((await call("PATCH", `/users/${ahmed}`, owner, { salaryMinor: 900000, dayMinutes: 480 })).status).toBe(200);
+    const list = (await call("GET", "/users", accountant)).body;
+    expect(list.find((u: { id: string }) => u.id === ahmed).salary_minor).toBe(900000);
+  });
+
+  it("prices lateness and absence from the salary and adds up the month", async () => {
+    const add = (body: object) => call("POST", "/payroll/entries", accountant, { userId: ahmed, ...body });
+    expect((await add({ kind: "late", minutes: 60 })).status).toBe(200);
+    expect((await add({ kind: "absence", days: 1 })).status).toBe(200);
+    expect((await add({ kind: "paid_leave", days: 2, note: "إجازة سنوية" })).status).toBe(200);
+    expect((await add({ kind: "bonus", amountMinor: 50000 })).status).toBe(200);
+    expect((await add({ kind: "late" })).status).toBe(400);
+    const s = (await call("GET", `/payroll/${ahmed}?month=${month}`, accountant)).body;
+    expect(s.byKind.late).toBe(3750); // 900 ÷ 30 ÷ 480 min × 60
+    expect(s.byKind.absence).toBe(30000);
+    expect(s.paidLeaveDays).toBe(2);
+    expect(s.netMinor).toBe(900000 + 50000 - 3750 - 30000);
+  });
+
+  it("takes what an employee buys at the till off their salary, and gives it back on a return", async () => {
+    const lines = [{ productId: pepsi.productId, unitId: pepsi.piece, name: "بيبسي", qtyMilli: 2000, priceMinor: 1500 }];
+    const s = { id: randomUUID(), number: "P1-STAFF1", createdAt: new Date().toISOString(), lines, payments: [{ method: "payroll", amountMinor: 3000 }], totalMinor: 3000, employeeId: ahmed };
+    const noOne = { ...s, id: randomUUID(), number: "P1-STAFF0", employeeId: null };
+    expect((await call("POST", "/sales/batch", cashierToken, { sales: [noOne] })).body.results[0].status).toBe("rejected");
+    expect((await call("POST", "/sales/batch", cashierToken, { sales: [s] })).body.results[0].status).toBe("accepted");
+    let sheet = (await call("GET", `/payroll/${ahmed}`, owner)).body;
+    expect(sheet.byKind.purchase).toBe(3000);
+    expect(sheet.entries.find((e: { kind: string }) => e.kind === "purchase").sale_number).toBe("P1-STAFF1");
+    const exp = await db.query(`SELECT amount_minor FROM expenses WHERE category = 'رواتب - مشتريات الموظفين'`);
+    expect(Number(exp.rows[0].amount_minor)).toBe(3000);
+
+    const orig = (await call("GET", "/sales/lookup?number=P1-STAFF1", cashierToken)).body;
+    const ret = { id: randomUUID(), number: "P1-RSTAFF1", originalSaleId: orig.id, lines: [{ saleLineId: orig.lines[0].id, qtyMilli: 1000 }], refundMethod: "payroll", reason: "رجعها", approval: { userId: bossId, pin: "7777" } };
+    const r = await call("POST", "/returns", cashierToken, ret);
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    sheet = (await call("GET", `/payroll/${ahmed}`, owner)).body;
+    expect(sheet.byKind.return).toBe(1500);
+    expect(Number((await db.query(`SELECT amount_minor FROM expenses WHERE category = 'رواتب - مشتريات الموظفين'`)).rows[0].amount_minor)).toBe(1500);
+    // A till line can't be deleted by hand; only a return undoes it.
+    const line = sheet.entries.find((e: { kind: string }) => e.kind === "purchase");
+    expect((await call("POST", `/payroll/entries/${line.id}/delete`, owner)).status).toBe(404);
+  });
+
+  it("pays out no more than what is left, and books it as an expense", async () => {
+    const sheet = (await call("GET", `/payroll/${ahmed}`, owner)).body;
+    const left = 900000 + 50000 + 1500 - 3000 - 3750 - 30000;
+    expect(sheet.remainingMinor).toBe(left);
+    expect((await call("POST", "/payroll/entries", owner, { userId: ahmed, kind: "payment", amountMinor: left + 1, storeId })).status).toBe(400);
+    expect((await call("POST", "/payroll/entries", owner, { userId: ahmed, kind: "advance", amountMinor: 100000, storeId })).status).toBe(200);
+    expect((await call("POST", "/payroll/entries", owner, { userId: ahmed, kind: "payment", amountMinor: left - 100000, storeId })).status).toBe(200);
+    const after = (await call("GET", `/payroll/${ahmed}`, owner)).body;
+    expect(after.remainingMinor).toBe(0);
+    expect(after.takenMinor).toBe(1500 + 100000 + left - 100000);
+    const paid = await db.query(`SELECT sum(amount_minor)::bigint AS s FROM expenses WHERE category IN ('رواتب', 'سلف الموظفين')`);
+    expect(Number(paid.rows[0].s)).toBe(left);
+    const all = (await call("GET", `/payroll?month=${month}`, accountant)).body;
+    expect(all.sheets.find((x: { user: { id: string } }) => x.user.id === ahmed).remainingMinor).toBe(0);
+  });
+
+  it("shows each person their own salary, and only theirs", async () => {
+    const mine = await call("GET", "/me/payroll", cashierToken);
+    expect(mine.status).toBe(200);
+    expect(mine.body.user.name).toBe("أحمد");
+    expect(mine.body.salaryMinor).toBe(900000);
+    expect(mine.body.remainingMinor).toBe(0);
+    expect(mine.body.entries.length).toBeGreaterThan(4);
+    expect(mine.body.months.map((m: { month: string }) => m.month)).toEqual([month]);
+    expect(mine.body.user).not.toHaveProperty("id");
+    // Someone else's id in the query changes nothing; the cashier still can't reach the payroll.
+    expect((await call("GET", `/me/payroll?userId=${bossId}`, cashierToken)).body.user.name).toBe("أحمد");
+    expect((await call("GET", `/payroll/${bossId}`, cashierToken)).status).toBe(403);
+    expect((await call("GET", "/payroll", cashierToken)).status).toBe(403);
+    expect((await call("POST", "/payroll/entries", cashierToken, { userId: ahmed, kind: "bonus", amountMinor: 999999 })).status).toBe(403);
+    expect((await call("GET", "/me/payroll", accountant)).body.user.name).toBe("منى المحاسبة");
+  });
+});

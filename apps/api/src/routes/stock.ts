@@ -1,10 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { audit } from "../db";
-import { HttpError, requireRole } from "../auth";
+import { HttpError, requirePerm } from "../auth";
 
 export async function stockRoutes(app: FastifyInstance) {
-  const managers = { preHandler: requireRole("owner", "manager") };
+  const managers = { preHandler: requirePerm("products", "purchasing") };
 
   /** Count correction, damage or loss. A positive or negative quantity in the base unit. */
   app.post("/stock/adjust", managers, async (req) => {

@@ -24,7 +24,13 @@ export async function seedDemo(db: Q) {
   const tid = await one(`INSERT INTO tenants (name) VALUES ('سوبرماركت التجربة') RETURNING id`);
   const sid = await one(`INSERT INTO stores (tenant_id, name, address, receipt_footer) VALUES ($1,'الفرع الرئيسي','طرابلس','شكراً لزيارتكم') RETURNING id`, [tid]);
   await db.query(`INSERT INTO users (tenant_id, name, email, password_hash, pin_hash, role) VALUES ($1,'المالك','owner@demo.ly',$2,$3,'owner')`, [tid, await hash("demo12345"), await hash("9999")]);
-  await db.query(`INSERT INTO users (tenant_id, name, pin_hash, role) VALUES ($1,'أحمد الكاشير',$2,'cashier')`, [tid, await hash("1234")]);
+  await db.query(`INSERT INTO users (tenant_id, name, pin_hash, role, job_title, salary_minor, hired_on) VALUES ($1,'أحمد الكاشير',$2,'cashier','كاشير',900000,'2025-03-01')`, [tid, await hash("1234")]);
+  await db.query(
+    `INSERT INTO users (tenant_id, name, email, password_hash, pin_hash, role, job_title, salary_minor, hired_on) VALUES
+       ($1,'منى المحاسبة','mona@demo.ly',$2,NULL,'accountant','محاسبة',1200000,'2024-09-15'),
+       ($1,'خالد','khaled@demo.ly',$2,$3,'data_entry','مدخل بيانات',800000,'2026-01-10')`,
+    [tid, await hash("demo12345"), await hash("2222")],
+  );
   await db.query(`INSERT INTO devices (tenant_id, store_id, name, prefix, token_hash) VALUES ($1,$2,'كاشير 1','P1',$3)`, [tid, sid, hashToken(DEMO_DEVICE_TOKEN)]);
   await addPriceChecker(db);
   await addPlatform(db);
@@ -153,6 +159,7 @@ async function addOwnerDemo(db: Q) {
       [tid, sid, category, amount, note, day, owner],
     );
   }
+  await seedPayroll(db, tid, sid, owner);
   for (const [kind, title, body, ago, read] of [
     ["cash_diff", "الدرج ناقص 12.500 د.ل", "أحمد الكاشير قفل الوردية على كاشير 1", "26 hours", true],
     ["big_discount", "خصم 25.000 د.ل", "أحمد الكاشير عطى خصم على الفاتورة P1-000231", "5 hours", false],
@@ -294,5 +301,39 @@ async function addPlatform(db: Q) {
     );
     if (name === "ملحمة الأصيل") await pay(tid, "basic", 2, 150000, 2, "cash");
     if (name === "أسواق الواحة") await pay(tid, "chain", 3, 700000, 0, "bank");
+  }
+}
+
+/** A month and a half of pay for the demo cashier, so "my salary" and the payroll have something to show. */
+async function seedPayroll(db: Q, tid: string, sid: string, owner: string) {
+  const u = (await db.query(`SELECT id FROM users WHERE tenant_id = $1 AND role = 'cashier' LIMIT 1`, [tid])).rows[0].id;
+  const m = `date_trunc('month', now() AT TIME ZONE 'Africa/Tripoli')::date`;
+  await db.query(
+    `INSERT INTO payroll_months (tenant_id, user_id, month, salary_minor) SELECT tenant_id, id, ${m}, salary_minor FROM users WHERE tenant_id = $1
+     UNION ALL SELECT $1, $2, (${m} - interval '1 month')::date, 900000`,
+    [tid, u],
+  );
+  const advance = (await db.query(
+    `INSERT INTO expenses (tenant_id, store_id, category, amount_minor, note, spent_on, user_id) VALUES ($1,$2,'سلف الموظفين',150000,'أحمد الكاشير',LEAST(${m} + 3, (now() AT TIME ZONE 'Africa/Tripoli')::date),$3) RETURNING id`,
+    [tid, sid, owner],
+  )).rows[0].id;
+  const paid = (await db.query(
+    `INSERT INTO expenses (tenant_id, store_id, category, amount_minor, note, spent_on, user_id) VALUES ($1,$2,'رواتب',900000,'أحمد الكاشير — الشهر الماضي',(${m} - interval '1 day')::date,$3) RETURNING id`,
+    [tid, sid, owner],
+  )).rows[0].id;
+  for (const [month, kind, amount, days, minutes, day, note, expense] of [
+    ["prev", "payment", 900000, null, null, 30, "راتب الشهر كامل", paid],
+    ["this", "late", 1250, null, 20, 2, "زحمة الطريق", null],
+    ["this", "advance", 150000, null, null, 4, null, advance],
+    ["this", "paid_leave", 0, 1, null, 6, "إجازة عائلية", null],
+    ["this", "purchase", 23500, null, null, 7, "مشتريات من المحل", null],
+    ["this", "bonus", 50000, null, null, 8, "شغل إضافي يوم الجمعة", null],
+  ] as const) {
+    const mm = month === "prev" ? `(${m} - interval '1 month')::date` : m;
+    await db.query(
+      `INSERT INTO payroll_entries (tenant_id, user_id, month, kind, amount_minor, days, minutes, on_date, note, expense_id, created_by)
+       VALUES ($1,$2,${mm},$3,$4,$5,$6,LEAST(${mm} + $7::int - 1, (now() AT TIME ZONE 'Africa/Tripoli')::date),$8,$9,$10)`,
+      [tid, u, kind, amount, days, minutes, day, note, expense, owner],
+    );
   }
 }

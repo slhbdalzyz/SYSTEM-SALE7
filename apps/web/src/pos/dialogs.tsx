@@ -56,31 +56,39 @@ export function AmountDialog({ title, label, initial = "", onDone, onClose, scal
   );
 }
 
-export function PayDialog({ totalMinor, customer, onPay, onClose }: {
-  totalMinor: number; customer: CatalogCustomer | null; onPay: (p: { method: PaymentMethod; amountMinor: number }[]) => void; onClose: () => void;
+export interface Employee { id: string; name: string }
+
+export function PayDialog({ totalMinor, customer, employees, onPay, onClose }: {
+  totalMinor: number; customer: CatalogCustomer | null; employees: Employee[];
+  onPay: (p: { method: PaymentMethod; amountMinor: number }[], employeeId: string | null) => void; onClose: () => void;
 }) {
   const [cash, setCash] = useState(String(totalMinor / 1000));
   const [card, setCard] = useState("0");
   const [credit, setCredit] = useState("0");
+  const [staff, setStaff] = useState(false);
+  const [employeeId, setEmployeeId] = useState("");
   const num = (v: string) => toMinor(Number(v.replace(",", ".")) || 0);
   const cashM = num(cash);
   const cardM = num(card);
   const creditM = customer ? num(credit) : 0;
   const room = customer ? creditRoom(customer) : 0;
-  const paid = cashM + cardM + creditM;
+  // A member of staff buying for themselves: the whole bill comes off their salary.
+  const salaryM = staff && employeeId ? totalMinor : 0;
+  const paid = staff ? salaryM : cashM + cardM + creditM;
   const change = paid - totalMinor;
-  const overLimit = creditM > 0 && room !== null && creditM > room;
-  const valid = paid >= totalMinor && change <= cashM && cardM + creditM <= totalMinor && !overLimit;
+  const overLimit = !staff && creditM > 0 && room !== null && creditM > room;
+  const valid = staff ? !!employeeId : paid >= totalMinor && change <= cashM && cardM + creditM <= totalMinor && !overLimit;
   const quick = [totalMinor, ...[5000, 10000, 20000, 50000].filter((n) => n > totalMinor).slice(0, 3)];
 
   function pay() {
     if (!valid) return;
+    if (staff) return onPay([{ method: "payroll", amountMinor: totalMinor }], employeeId);
     const p: { method: PaymentMethod; amountMinor: number }[] = [];
     if (cashM > 0) p.push({ method: "cash", amountMinor: cashM });
     if (cardM > 0) p.push({ method: "card", amountMinor: cardM });
     if (creditM > 0) p.push({ method: "credit", amountMinor: creditM });
     if (!p.length) p.push({ method: "cash", amountMinor: 0 });
-    onPay(p);
+    onPay(p, null);
   }
 
   return (
@@ -88,6 +96,24 @@ export function PayDialog({ totalMinor, customer, onPay, onClose }: {
       <div className="totals" style={{ border: 0, padding: 0 }}>
         <div className="grand num">{formatMoney(totalMinor)}</div>
       </div>
+      {employees.length > 0 && (
+        <div className="seg" role="tablist">
+          <button className={!staff ? "active" : ""} onClick={() => setStaff(false)}>زبون</button>
+          <button className={staff ? "active" : ""} onClick={() => setStaff(true)}>موظف: يخصم من راتبه</button>
+        </div>
+      )}
+      {staff ? (
+        <>
+          <label>
+            الموظف
+            <select value={employeeId} onChange={(e) => setEmployeeId(e.target.value)} autoFocus>
+              <option value="">— اختار الموظف —</option>
+              {employees.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
+            </select>
+          </label>
+          <div className="notice">الفاتورة كاملة <b className="num">{formatMoney(totalMinor)}</b> تنخصم من راتب الموظف تلقائيا، ويشوفها في صفحة «راتبي».</div>
+        </>
+      ) : <>
       <label>
         كاش
         <input className="num" inputMode="decimal" value={cash} onChange={(e) => setCash(e.target.value)} onKeyDown={(e) => e.key === "Enter" && pay()} autoFocus onFocus={(e) => e.target.select()} />
@@ -115,7 +141,8 @@ export function PayDialog({ totalMinor, customer, onPay, onClose }: {
         <span>الباقي:</span>
         <b className="num" style={{ fontSize: "1.4rem", color: change >= 0 ? "var(--ok)" : "var(--danger)" }}>{formatMoney(Math.max(change, 0))}</b>
       </div>
-      {!valid && <div className="error">{overLimit ? "الآجل أكبر من المتاح للعميل" : paid < totalMinor ? "المبلغ ناقص" : "الباقي يكون من الكاش بس"}</div>}
+      </>}
+      {!valid && !staff && <div className="error">{overLimit ? "الآجل أكبر من المتاح للعميل" : paid < totalMinor ? "المبلغ ناقص" : "الباقي يكون من الكاش بس"}</div>}
       <div className="row">
         <span className="spacer" />
         <button onClick={onClose}>رجوع</button>

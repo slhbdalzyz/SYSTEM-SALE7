@@ -69,7 +69,7 @@ export function lineTotal(l: CartLine) {
 }
 
 export function toSaleInput(
-  a: { id: string; number: string; shiftId: string | null; lines: CartLine[]; offers: Offer[]; invoiceDiscountMinor: number; payments: SaleInput["payments"]; customerId?: string | null },
+  a: { id: string; number: string; shiftId: string | null; lines: CartLine[]; offers: Offer[]; invoiceDiscountMinor: number; payments: SaleInput["payments"]; customerId?: string | null; employeeId?: string | null },
 ): SaleInput {
   const at = new Date();
   const lines = priceCart(a.lines, a.offers, at).lines;
@@ -94,6 +94,7 @@ export function toSaleInput(
     invoiceDiscountMinor: a.invoiceDiscountMinor,
     payments: a.payments,
     totalMinor: totals.total,
+    employeeId: a.employeeId ?? null,
     customerId: a.customerId ?? null,
   };
 }

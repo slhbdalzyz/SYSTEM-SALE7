@@ -3,7 +3,7 @@ import { z } from "zod";
 import { offerInputSchema, type Offer, type OfferInput } from "@pos/shared";
 import type { Db, Tx } from "../db";
 import { audit } from "../db";
-import { HttpError, authenticate, requireRole } from "../auth";
+import { HttpError, authenticate, requirePerm } from "../auth";
 
 const COLS = `id, name, kind, percent_bp, amount_minor, buy_qty, get_qty, bundle_qty, bundle_price_minor, product_ids, category_ids, store_ids,
   starts_at, ends_at, days, hour_from, hour_to, active, updated_at`;
@@ -44,7 +44,7 @@ const values = (b: OfferInput) => [
 ];
 
 export async function offerRoutes(app: FastifyInstance) {
-  const managers = { preHandler: requireRole("owner", "manager") };
+  const managers = { preHandler: requirePerm("offers") };
 
   /** All offers, with how much each one has given away so far. */
   app.get("/offers", managers, async (req) => {

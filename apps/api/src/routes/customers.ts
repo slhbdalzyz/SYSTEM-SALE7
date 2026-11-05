@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { customerInputSchema, type CatalogCustomer } from "@pos/shared";
 import { audit } from "../db";
-import { HttpError, authenticate, requireDevice, requireRole } from "../auth";
+import { HttpError, authenticate, requireDevice, requirePerm } from "../auth";
 
 function conflict(e: unknown): never {
   const err = e as { code?: string };
@@ -11,7 +11,7 @@ function conflict(e: unknown): never {
 }
 
 export async function customerRoutes(app: FastifyInstance) {
-  const managers = { preHandler: requireRole("owner", "manager") };
+  const managers = { preHandler: requirePerm("customers") };
 
   async function list(tenantId: string, q?: string, id?: string): Promise<CatalogCustomer[]> {
     const r = await app.db.query(
