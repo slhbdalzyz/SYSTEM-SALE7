@@ -3,7 +3,8 @@
 import { computeLine, computeTotals, formatMoney, formatQty } from "@pos/shared";
 import type { ReceiptData } from "../pos/Receipt";
 
-type Row =
+export type Row =
+  | { kind: "image"; src: string }
   | { kind: "center"; text: string; size?: number; bold?: boolean }
   | { kind: "pair"; right: string; left: string; size?: number; bold?: boolean }
   | { kind: "item"; name: string; detail: string; amount: string }
@@ -14,12 +15,40 @@ const METHOD = { cash: "كاش", card: "بطاقة", credit: "آجل", payroll: 
 const when = (iso: string) => new Date(iso).toLocaleString("en-GB", { dateStyle: "short", timeStyle: "short" });
 
 export function receiptRows(d: ReceiptData): Row[] {
+  const shop = d.shop;
+  const r = shop?.settings.receipt;
+  const set = shop?.settings;
+  const center = (text: string | false | null | undefined, size?: number, bold?: boolean): Row[] => (text ? [{ kind: "center", text, size, bold }] : []);
+  // The shop (its logo, name, branch, address, phone, tax number), then what this paper is.
   const head = (title: string, at: string): Row[] => [
-    { kind: "center", text: d.storeName, size: 30, bold: true },
+    ...(r?.showLogo && set?.logo ? [{ kind: "image", src: set.logo } as Row] : []),
+    ...center(shop?.name ?? d.storeName, 30, true),
+    ...center(shop && r?.showBranch && d.storeName !== shop.name && d.storeName, 20),
+    ...center(r?.header),
+    ...center(r?.showAddress && [set?.address, set?.city].filter(Boolean).join("، ")),
+    ...center(r?.showPhone && [set?.phone, set?.phone2].filter(Boolean).join(" · ")),
+    ...center(r?.showTaxNumber && set?.taxNumber && `الرقم الضريبي: ${set.taxNumber}`),
+    ...center(r?.showTaxNumber && set?.commercialReg && `السجل التجاري: ${set.commercialReg}`),
+    { kind: "rule" },
+    ...center(d.copy ? "*** نسخة ***" : null, 22, true),
     { kind: "center", text: title, size: 24, bold: true },
     { kind: "center", text: when(at) },
-    { kind: "center", text: `${d.deviceName} · ${d.cashierName}` },
+    ...center(r?.showCashier === false ? d.deviceName : `${d.deviceName} · ${d.cashierName}`),
     { kind: "rule" },
+  ];
+  const bank = set?.bank;
+  const tail: Row[] = [
+    ...(r?.showBank && bank && (bank.accountNumber || bank.iban)
+      ? [
+          { kind: "center", text: [bank.name, bank.branch].filter(Boolean).join(" - ") || "الحساب المصرفي", bold: true } as Row,
+          ...center(bank.accountName),
+          ...center(bank.accountNumber && `رقم الحساب: ${bank.accountNumber}`),
+          ...center(bank.iban && `IBAN: ${bank.iban}`),
+          { kind: "rule" } as Row,
+        ]
+      : []),
+    { kind: "space", h: 6 },
+    { kind: "center", text: d.footer || r?.footer || "شكراً لزيارتكم" },
   ];
   if (d.ret) {
     const r = d.ret;
@@ -33,6 +62,8 @@ export function receiptRows(d: ReceiptData): Row[] {
       { kind: "pair", right: "المبلغ المرجع", left: formatMoney(r.totalMinor), size: 26, bold: true },
       { kind: "pair", right: "طريقة الإرجاع", left: METHOD[r.method] },
       { kind: "pair", right: "السبب", left: r.reason },
+      { kind: "rule" },
+      ...tail,
     ];
   }
   if (d.payment) {
@@ -43,10 +74,14 @@ export function receiptRows(d: ReceiptData): Row[] {
       { kind: "pair", right: "المبلغ", left: formatMoney(p.amountMinor), size: 26, bold: true },
       { kind: "pair", right: "الطريقة", left: METHOD[p.method] },
       { kind: "pair", right: "الرصيد المتبقي", left: formatMoney(p.balanceMinor) },
+      { kind: "rule" },
+      ...tail,
     ];
   }
   const s = d.sale!;
   const t = computeTotals(s.lines, s.invoiceDiscountMinor);
+  // Offer savings get their own line; "الخصم" is only what the cashier took off.
+  const promo = s.lines.reduce((a, l) => a + (l.promoMinor ?? 0), 0);
   return [
     ...head(`فاتورة ${s.number}`, s.createdAt),
     ...(d.customerName ? [{ kind: "pair", right: "العميل", left: d.customerName } as Row, { kind: "rule" } as Row] : []),
@@ -58,22 +93,38 @@ export function receiptRows(d: ReceiptData): Row[] {
       amount: formatMoney(computeLine(l).total, ""),
     })),
     { kind: "rule" },
-    ...(t.discount > 0 ? [{ kind: "pair", right: "الخصم", left: formatMoney(t.discount) } as Row] : []),
-    ...(s.lines.some((l) => l.promoMinor) ? [{ kind: "pair", right: "وفّرت من العروض", left: formatMoney(s.lines.reduce((a, l) => a + (l.promoMinor ?? 0), 0)) } as Row] : []),
+    ...(t.discount - promo > 0 ? [{ kind: "pair", right: "الخصم", left: formatMoney(t.discount - promo) } as Row] : []),
+    ...(r?.showSavings !== false && promo > 0 ? [{ kind: "pair", right: "وفّرت من العروض", left: formatMoney(promo) } as Row] : []),
     ...(t.tax > 0 ? [{ kind: "pair", right: "منها ضريبة", left: formatMoney(t.tax) } as Row] : []),
     { kind: "pair", right: "الإجمالي", left: formatMoney(t.total), size: 30, bold: true },
     ...s.payments.map((p): Row => ({ kind: "pair", right: METHOD[p.method], left: formatMoney(p.amountMinor) })),
     ...((d.changeMinor ?? 0) > 0 ? [{ kind: "pair", right: "الباقي", left: formatMoney(d.changeMinor ?? 0) } as Row] : []),
     { kind: "rule" },
-    { kind: "space", h: 6 },
-    { kind: "center", text: d.footer ?? "شكراً لزيارتكم" },
+    ...tail,
   ];
 }
 
 const FONT = `"Cairo", "Segoe UI", Tahoma, Arial, sans-serif`;
 
+/** Loads the pictures a receipt shows (the logo), so drawing it stays synchronous. */
+export async function loadReceiptImages(rows: Row[]): Promise<Map<string, HTMLImageElement>> {
+  const out = new Map<string, HTMLImageElement>();
+  for (const r of rows) {
+    if (r.kind !== "image" || out.has(r.src)) continue;
+    const img = new Image();
+    img.src = r.src;
+    try {
+      await img.decode();
+      out.set(r.src, img);
+    } catch {
+      /* a broken logo is left out */
+    }
+  }
+  return out;
+}
+
 /** Lays the rows out on a canvas `dots` wide (384 for 58 mm, 576 for 80 mm paper). */
-export function drawReceipt(rows: Row[], dots: number): HTMLCanvasElement {
+export function drawReceipt(rows: Row[], dots: number, images = new Map<string, HTMLImageElement>()): HTMLCanvasElement {
   const pad = Math.round(dots * 0.02);
   const base = dots >= 576 ? 22 : 20;
   const scale = base / 22;
@@ -107,6 +158,16 @@ export function drawReceipt(rows: Row[], dots: number): HTMLCanvasElement {
   let y = pad;
   for (const r of rows) {
     if (r.kind === "space") y += r.h;
+    else if (r.kind === "image") {
+      const img = images.get(r.src);
+      if (!img) continue;
+      // At most half the paper wide and 160 dots high, centred.
+      const k = Math.min((dots * 0.5) / img.width, 160 / img.height, 1);
+      const w = Math.round(img.width * k);
+      const h = Math.round(img.height * k);
+      ctx.drawImage(img, Math.round((dots - w) / 2), y, w, h);
+      y += h + 8;
+    }
     else if (r.kind === "rule") {
       ctx.setLineDash([6, 4]);
       ctx.lineWidth = 2;

@@ -3,7 +3,7 @@
 // Chrome/Edge, or the browser's own print dialog as the fallback that always works.
 import { PAPER_DOTS, receiptJob, toMonochrome, trimBottom, type PaperWidth } from "@pos/shared";
 import type { ReceiptData } from "../pos/Receipt";
-import { drawReceipt, receiptRows } from "./receiptImage";
+import { drawReceipt, loadReceiptImages, receiptRows } from "./receiptImage";
 
 export type PrinterMode = "browser" | "system" | "network" | "serial";
 
@@ -76,8 +76,9 @@ export async function send(bytes: Uint8Array, s: Pick<PrinterSettings, "mode" | 
   if (s.mode === "serial") return sendSerial(bytes, s.baudRate);
 }
 
-export function receiptBitmap(data: ReceiptData, paper: PaperWidth) {
-  const canvas = drawReceipt(receiptRows(data), PAPER_DOTS[paper]);
+export async function receiptBitmap(data: ReceiptData, paper: PaperWidth) {
+  const rows = receiptRows(data);
+  const canvas = drawReceipt(rows, PAPER_DOTS[paper], await loadReceiptImages(rows));
   const img = canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height);
   return trimBottom(toMonochrome(img.data, canvas.width, canvas.height));
 }
@@ -89,7 +90,10 @@ export async function printReceipt(data: ReceiptData, opts: { openDrawer?: boole
     return false;
   }
   await document.fonts?.ready;
-  await send(receiptJob(receiptBitmap(data, s.paper), { openDrawer: opts.openDrawer && s.openDrawerOnCash }), s);
+  const copies = data.copy ? 1 : Math.max(1, data.shop?.settings.receipt.copies ?? 1);
+  for (let i = 0; i < copies; i++) {
+    await send(receiptJob(await receiptBitmap(i ? { ...data, copy: true } : data, s.paper), { openDrawer: !i && opts.openDrawer && s.openDrawerOnCash }), s);
+  }
   return true;
 }
 

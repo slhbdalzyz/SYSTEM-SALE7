@@ -102,6 +102,29 @@ describe("receipt rows for the thermal printer", async () => {
     expect(p).toContain("محمد");
     expect(p).toContain("50.000");
   });
+
+  it("prints the shop's own details from its settings, and marks a reprint as a copy", async () => {
+    const { readShopSettings } = await import("@pos/shared");
+    const settings = readShopSettings({
+      phone: "0911111111", address: "شارع الجمهورية", city: "طرابلس", taxNumber: "TX-55", logo: "data:image/png;base64,AAAA",
+      bank: { name: "مصرف الوحدة", accountNumber: "998877" }, receipt: { header: "مفتوح 24 ساعة", footer: "نورتونا", showBank: true, showTaxNumber: true, showCashier: false },
+    });
+    const sale = { id: water.id, number: "P1-0009", createdAt: "2026-10-24T10:00:00Z", invoiceDiscountMinor: 0, totalMinor: 750,
+      lines: [{ productId: water.id, unitId: water.units[0].id, name: "مياه", qtyMilli: 1000, priceMinor: 750, discountMinor: 0, promoMinor: 0, taxBp: 0 }],
+      payments: [{ method: "cash" as const, amountMinor: 750 }] };
+    const rows = receiptRows({ ...base, storeName: "فرع السوق", shop: { name: "سوبرماركت النور", settings }, sale });
+    const t = text(rows);
+    expect(rows[0]).toEqual({ kind: "image", src: "data:image/png;base64,AAAA" });
+    for (const s of ["سوبرماركت النور", "فرع السوق", "مفتوح 24 ساعة", "شارع الجمهورية، طرابلس", "0911111111", "TX-55", "مصرف الوحدة", "998877", "نورتونا"]) expect(t).toContain(s);
+    expect(t).not.toContain("أحمد");
+    expect(t).not.toContain("نسخة");
+    expect(text(receiptRows({ ...base, shop: { name: "سوبرماركت النور", settings }, sale, copy: true }))).toContain("*** نسخة ***");
+    // Without settings it still prints a plain receipt under the branch's name.
+    const plain = text(receiptRows({ ...base, sale }));
+    expect(plain).toContain("المحل");
+    expect(plain).toContain("أحمد");
+    expect(plain).not.toContain("998877");
+  });
 });
 
 describe("switching the packing sold", () => {

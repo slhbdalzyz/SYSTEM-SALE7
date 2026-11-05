@@ -20,6 +20,8 @@ import { setPreferredView } from "../owner/Owner";
 import { Payroll } from "./Payroll";
 import { Money } from "./Money";
 import { MyPay } from "./MyPay";
+import { ShopSettings } from "./ShopSettings";
+import { Invoices } from "./Invoices";
 import { ROLE_NAMES, type Permission } from "@pos/shared";
 
 export interface Me {
@@ -34,10 +36,10 @@ export type Call = <T>(path: string, opts?: { method?: string; body?: unknown })
 const NAV = [
   { group: "", items: { home: ["🏠", "لوحة التحكم"], reports: ["📊", "التقارير"], alerts: ["🔔", "التنبيهات"] } },
   { group: "المخزون", items: { products: ["📦", "الأصناف والأقسام"], purchasing: ["🚚", "المشتريات والموردين"], branches: ["🏬", "الفروع والتحويلات"], labels: ["🏷️", "ملصقات الباركود"] } },
-  { group: "المبيعات", items: { customers: ["👥", "العملاء والديون"], offers: ["🎁", "العروض"] } },
+  { group: "المبيعات", items: { invoices: ["🧾", "المبيعات والفواتير"], customers: ["👥", "العملاء والديون"], offers: ["🎁", "العروض"] } },
   { group: "المال", items: { money: ["🏦", "الخزينة والأرصدة"], expenses: ["💸", "المصروفات"] } },
   { group: "الموظفين", items: { staff: ["🧑‍💼", "الموظفين والصلاحيات"], payroll: ["💰", "الرواتب"], mypay: ["💼", "راتبي"] } },
-  { group: "الإدارة", items: { devices: ["🖥️", "الأجهزة"], backup: ["💾", "النسخ الاحتياطي"], subscription: ["⭐", "الاشتراك"] } },
+  { group: "الإدارة", items: { settings: ["⚙️", "الإعدادات"], devices: ["🖥️", "الأجهزة"], backup: ["💾", "النسخ الاحتياطي"], subscription: ["⭐", "الاشتراك"] } },
 ] as const;
 type ItemKeys<T> = T extends { items: infer I } ? keyof I : never;
 type Tab = ItemKeys<(typeof NAV)[number]>;
@@ -46,7 +48,7 @@ const TABS = Object.assign({}, ...NAV.map((g) => g.items)) as Record<Tab, readon
 /** What opens each screen. "owner" = the shop owner only; null = everyone (their own pay). */
 const NEEDS: Record<Tab, Permission | "owner" | null> = {
   home: "reports", reports: "reports", alerts: "alerts", products: "products", purchasing: "purchasing", branches: "branches", labels: "products",
-  customers: "customers", offers: "offers", expenses: "expenses", money: "money", staff: "staff", payroll: "payroll", mypay: null, devices: "devices",
+  invoices: "sales", settings: "settings", customers: "customers", offers: "offers", expenses: "expenses", money: "money", staff: "staff", payroll: "payroll", mypay: null, devices: "devices",
   backup: "owner", subscription: "owner",
 };
 
@@ -174,6 +176,8 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
           {shown === "branches" && <Branches call={call} storeId={store.id} isOwner={isOwner} onStoresChanged={loadMe} />}
           {shown === "offers" && <Offers call={call} storeId={store.id} stores={me.stores} />}
           {shown === "customers" && <Customers call={call} />}
+          {shown === "invoices" && <Invoices call={call} storeId={store.id} stores={open} />}
+          {shown === "settings" && <ShopSettings call={call} storeName={store.name} onSaved={loadMe} openAlerts={() => setTab("alerts")} />}
           {shown === "alerts" && <><Alerts call={call} /><AlertSettings call={call} isOwner={isOwner} /></>}
           {shown === "expenses" && <Expenses call={call} storeId={store.id} stores={open} />}
           {shown === "backup" && (isOwner ? <><BackupCard /><RestoreCard /></> : <div className="notice">النسخة الاحتياطية لصاحب المحل فقط</div>)}

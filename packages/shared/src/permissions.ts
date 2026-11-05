@@ -1,6 +1,7 @@
 /** What a member of staff may open in the back office. The owner can do everything. */
 export const PERMISSIONS = {
   reports: "لوحة التحكم والتقارير والأرباح",
+  sales: "المبيعات والفواتير والورديات",
   products: "الأصناف والأقسام والملصقات",
   purchasing: "المشتريات والموردين والمخزون",
   branches: "الفروع والتحويلات",
@@ -12,6 +13,7 @@ export const PERMISSIONS = {
   alerts: "التنبيهات",
   staff: "الموظفين وصلاحياتهم",
   devices: "أجهزة الكاشير",
+  settings: "إعدادات المحل والفاتورة والكاشير",
 } as const;
 export type Permission = keyof typeof PERMISSIONS;
 export const PERMISSION_KEYS = Object.keys(PERMISSIONS) as Permission[];
@@ -27,8 +29,8 @@ export const ROLE_NAMES = {
 /** What each job can do unless the owner ticks something else for that person. */
 export const ROLE_PERMISSIONS: Record<keyof typeof ROLE_NAMES, readonly Permission[]> = {
   owner: PERMISSION_KEYS,
-  manager: ["reports", "products", "purchasing", "branches", "customers", "offers", "expenses", "money", "payroll", "alerts", "staff", "devices"],
-  accountant: ["reports", "purchasing", "customers", "expenses", "money", "payroll", "alerts"],
+  manager: ["reports", "sales", "settings", "products", "purchasing", "branches", "customers", "offers", "expenses", "money", "payroll", "alerts", "staff", "devices"],
+  accountant: ["reports", "sales", "purchasing", "customers", "expenses", "money", "payroll", "alerts"],
   data_entry: ["products", "purchasing", "offers"],
   cashier: [],
 };
