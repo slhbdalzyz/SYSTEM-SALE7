@@ -3,8 +3,7 @@ import { z } from "zod";
 export const ROLES = ["owner", "manager", "cashier"] as const;
 export type Role = (typeof ROLES)[number];
 
-/** "points" is a customer paying with loyalty points; its amount is what the points are worth. */
-export const PAYMENT_METHODS = ["cash", "card", "credit", "points"] as const;
+export const PAYMENT_METHODS = ["cash", "card", "credit"] as const;
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
 
 const minor = z.number().int();
@@ -148,8 +147,6 @@ export interface CatalogCustomer {
   phone: string | null;
   creditLimitMinor: number | null;
   balanceMinor: number;
-  /** Loyalty points held. */
-  points: number;
   active: boolean;
 }
 

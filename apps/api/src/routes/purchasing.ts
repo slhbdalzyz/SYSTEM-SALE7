@@ -10,7 +10,10 @@ const supplierSchema = z.object({
   active: z.boolean().optional(),
 });
 
-const METHODS = ["cash", "bank", "cheque", "other"] as const;
+/** How a supplier is paid. */
+const METHODS = ["cash", "card", "transfer", "cheque", "other"] as const;
+/** How a supply invoice is settled: on credit (all owed), or paid now by one of these. */
+const INVOICE_METHODS = ["credit", "cash", "card", "transfer", "cheque"] as const;
 
 export const purchaseSchema = z.object({
   storeId: z.string().uuid(),
@@ -19,10 +22,21 @@ export const purchaseSchema = z.object({
   invoiceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   note: z.string().max(300).optional(),
   updateCost: z.boolean().default(true),
-  /** Paid to the supplier now; the rest is owed. Without a supplier the whole invoice counts as paid. */
+  /**
+   * credit: nothing paid now, the whole invoice is owed to the supplier. Otherwise paidMinor is
+   * paid now by that method (all of it when left out) and the rest is owed.
+   * Without a supplier the whole invoice counts as paid.
+   */
   paidMinor: z.number().int().nonnegative().optional(),
-  paymentMethod: z.enum(METHODS).default("cash"),
-  lines: z.array(z.object({ unitId: z.string().uuid(), qtyMilli: z.number().int().positive(), unitCostMinor: z.number().int().nonnegative() })).min(1).max(500),
+  paymentMethod: z.enum(INVOICE_METHODS).default("cash"),
+  lines: z.array(z.object({
+    unitId: z.string().uuid(),
+    qtyMilli: z.number().int().positive(),
+    unitCostMinor: z.number().int().nonnegative(),
+    /** The new selling price of this unit, set as the goods come in. */
+    sellPriceMinor: z.number().int().nonnegative().optional(),
+    expiryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  })).min(1).max(500),
 });
 
 export async function purchasingRoutes(app: FastifyInstance) {
@@ -117,18 +131,24 @@ export async function purchasingRoutes(app: FastifyInstance) {
         units.push({ ...l, ...u, total: Math.round((l.qtyMilli * l.unitCostMinor) / 1000) });
       }
       const total = units.reduce((a, l) => a + l.total, 0);
-      const paid = b.supplierId ? (b.paidMinor ?? total) : total;
+      if (!b.supplierId && b.paymentMethod === "credit") throw new HttpError(400, "الآجل يحتاج مورد");
+      const paid = !b.supplierId ? total : b.paymentMethod === "credit" ? 0 : (b.paidMinor ?? total);
       if (paid > total) throw new HttpError(400, "المدفوع أكبر من قيمة الفاتورة");
       const inv = (await tx.query(
-        `INSERT INTO purchase_invoices (tenant_id, store_id, supplier_id, supplier_ref, invoice_date, total_minor, note, user_id)
-         VALUES ($1,$2,$3,$4,COALESCE($5::date, current_date),$6,$7,$8) RETURNING id`,
-        [req.user.tid, b.storeId, b.supplierId ?? null, b.supplierRef ?? null, b.invoiceDate ?? null, total, b.note ?? null, req.user.sub],
+        `INSERT INTO purchase_invoices (tenant_id, store_id, supplier_id, supplier_ref, invoice_date, total_minor, note, user_id, payment_method)
+         VALUES ($1,$2,$3,$4,COALESCE($5::date, current_date),$6,$7,$8,$9) RETURNING id`,
+        [req.user.tid, b.storeId, b.supplierId ?? null, b.supplierRef ?? null, b.invoiceDate ?? null, total, b.note ?? null, req.user.sub, paid === 0 && b.supplierId ? "credit" : b.paymentMethod],
       )).rows[0].id as string;
       for (const l of units) {
         await tx.query(
-          `INSERT INTO purchase_lines (tenant_id, invoice_id, product_id, unit_id, name, unit_name, qty_milli, unit_cost_minor, total_minor) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-          [req.user.tid, inv, l.product_id, l.unitId, l.name, l.unit_name, l.qtyMilli, l.unitCostMinor, l.total],
+          `INSERT INTO purchase_lines (tenant_id, invoice_id, product_id, unit_id, name, unit_name, qty_milli, unit_cost_minor, total_minor, sell_price_minor, expiry_date)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+          [req.user.tid, inv, l.product_id, l.unitId, l.name, l.unit_name, l.qtyMilli, l.unitCostMinor, l.total, l.sellPriceMinor ?? null, l.expiryDate ?? null],
         );
+        if (l.sellPriceMinor !== undefined) {
+          await tx.query(`UPDATE product_units SET price_minor = $2 WHERE id = $1 AND price_minor <> $2`, [l.unitId, l.sellPriceMinor]);
+          await tx.query(`UPDATE products SET updated_at = now() WHERE id = $1`, [l.product_id]); // tills pick up the new price
+        }
         await tx.query(
           `INSERT INTO stock_movements (tenant_id, store_id, product_id, qty_milli, kind, ref_id, note, user_id) VALUES ($1,$2,$3,$4,'purchase',$5,$6,$7)`,
           [req.user.tid, b.storeId, l.product_id, Math.round((l.qtyMilli * l.factor_milli) / 1000), inv, b.note ?? null, req.user.sub],
@@ -140,7 +160,7 @@ export async function purchasingRoutes(app: FastifyInstance) {
       if (b.supplierId && paid > 0) {
         await tx.query(
           `INSERT INTO supplier_payments (tenant_id, supplier_id, invoice_id, amount_minor, method, user_id) VALUES ($1,$2,$3,$4,$5,$6)`,
-          [req.user.tid, b.supplierId, inv, paid, b.paymentMethod, req.user.sub],
+          [req.user.tid, b.supplierId, inv, paid, b.paymentMethod === "credit" ? "cash" : b.paymentMethod, req.user.sub],
         );
       }
       await audit(tx, { tenantId: req.user.tid, userId: req.user.sub, action: "stock.purchase", entity: "purchase", entityId: inv, data: { lines: b.lines.length, totalMinor: total, paidMinor: paid } });
@@ -152,7 +172,7 @@ export async function purchasingRoutes(app: FastifyInstance) {
   app.get("/purchases", managers, async (req) => {
     const q = z.object({ supplierId: z.string().uuid().optional(), from: z.string().optional(), to: z.string().optional() }).parse(req.query);
     const r = await app.db.query(
-      `SELECT i.id, i.supplier_ref, i.invoice_date, i.total_minor, i.created_at, i.note, s.name AS supplier_name, st.name AS store_name,
+      `SELECT i.id, i.supplier_ref, i.invoice_date, i.total_minor, i.payment_method, i.created_at, i.note, s.name AS supplier_name, st.name AS store_name,
               COALESCE((SELECT sum(amount_minor) FROM supplier_payments p WHERE p.invoice_id = i.id), CASE WHEN i.supplier_id IS NULL THEN i.total_minor ELSE 0 END) AS paid_minor,
               (SELECT count(*)::int FROM purchase_lines l WHERE l.invoice_id = i.id) AS lines
        FROM purchase_invoices i LEFT JOIN suppliers s ON s.id = i.supplier_id JOIN stores st ON st.id = i.store_id
@@ -171,7 +191,7 @@ export async function purchasingRoutes(app: FastifyInstance) {
       [id, req.user.tid],
     )).rows[0];
     if (!i) throw new HttpError(404, "الفاتورة غير موجودة");
-    const lines = (await app.db.query(`SELECT name, unit_name, qty_milli, unit_cost_minor, total_minor FROM purchase_lines WHERE invoice_id = $1`, [id])).rows;
+    const lines = (await app.db.query(`SELECT name, unit_name, qty_milli, unit_cost_minor, total_minor, sell_price_minor, to_char(expiry_date, 'YYYY-MM-DD') AS expiry_date FROM purchase_lines WHERE invoice_id = $1`, [id])).rows;
     const payments = (await app.db.query(`SELECT amount_minor, method, created_at FROM supplier_payments WHERE invoice_id = $1`, [id])).rows;
     return { ...i, lines, payments };
   });
@@ -203,6 +223,27 @@ export async function purchasingRoutes(app: FastifyInstance) {
        ) last ON true
        ORDER BY last.supplier_name NULLS LAST, st.name`,
       [req.user.tid, storeId],
+    );
+    return r.rows;
+  });
+
+  /**
+   * Goods that expire within `days` (or already have), from the expiry dates on supply invoices,
+   * for items that are still in stock at this branch. Newest delivery per item and date.
+   */
+  app.get("/stock/expiring", managers, async (req) => {
+    const q = z.object({ storeId: z.string().uuid(), days: z.coerce.number().int().min(0).max(365).default(30) }).parse(req.query);
+    const r = await app.db.query(
+      `SELECT l.product_id, l.name, p.is_weighted, to_char(l.expiry_date, 'YYYY-MM-DD') AS expiry_date, (l.expiry_date - current_date) AS days_left,
+              sum(l.qty_milli * u.factor_milli / 1000)::bigint AS received_milli, max(s.name) AS supplier_name,
+              (SELECT COALESCE(sum(m.qty_milli), 0) FROM stock_movements m WHERE m.product_id = l.product_id AND m.store_id = $2)::bigint AS stock_milli
+       FROM purchase_lines l JOIN purchase_invoices i ON i.id = l.invoice_id JOIN products p ON p.id = l.product_id
+       JOIN product_units u ON u.id = l.unit_id LEFT JOIN suppliers s ON s.id = i.supplier_id
+       WHERE l.tenant_id = $1 AND i.store_id = $2 AND l.expiry_date IS NOT NULL AND l.expiry_date <= current_date + $3::int
+       GROUP BY l.product_id, l.name, p.is_weighted, l.expiry_date
+       HAVING (SELECT COALESCE(sum(m.qty_milli), 0) FROM stock_movements m WHERE m.product_id = l.product_id AND m.store_id = $2) > 0
+       ORDER BY l.expiry_date, l.name`,
+      [req.user.tid, q.storeId, q.days],
     );
     return r.rows;
   });

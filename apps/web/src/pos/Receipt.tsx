@@ -12,11 +12,9 @@ export interface ReceiptData {
   customerName?: string | null;
   ret?: ReturnDone;
   payment?: { customerName: string; amountMinor: number; method: "cash" | "card"; balanceMinor: number; at: string };
-  /** Loyalty points on this sale, worked out on the till. */
-  points?: { earned: number; spent: number; balance: number };
 }
 
-export const METHOD = { cash: "كاش", card: "بطاقة", credit: "آجل", points: "نقاط" } as const;
+const METHOD = { cash: "كاش", card: "بطاقة", credit: "آجل" } as const;
 
 function Head({ data, title, number, at }: { data: ReceiptData; title: string; number?: string; at: string }) {
   return (
@@ -42,10 +40,8 @@ export function Receipt({ data }: { data: ReceiptData | null }) {
           <tr key={i}><td>{l.name} <span className="num">× {formatQty(l.qtyMilli, l.qtyMilli % 1000 !== 0)}</span></td><td className="num" style={{ textAlign: "left" }}>{formatMoney(l.totalMinor, "")}</td></tr>
         ))}</tbody></table>
         <hr />
-        <div style={{ fontSize: 14 }}><b>المبلغ المرجع: <span className="num">{formatMoney(r.refundMinor)}</span></b></div>
+        <div style={{ fontSize: 14 }}><b>المبلغ المرجع: <span className="num">{formatMoney(r.totalMinor)}</span></b></div>
         <div>{METHOD[r.method]} · السبب: {r.reason}</div>
-        {r.pointsBack > 0 && <div>رجعتلك <span className="num">{r.pointsBack}</span> نقطة (<span className="num">{formatMoney(r.pointsMinor)}</span>)</div>}
-        {r.pointsTaken > 0 && <div>انسحبت <span className="num">{r.pointsTaken}</span> نقطة كسبتها من الفاتورة</div>}
       </div>
     );
   }
@@ -89,14 +85,6 @@ export function Receipt({ data }: { data: ReceiptData | null }) {
         <div key={i}>{METHOD[p.method]}: <span className="num">{formatMoney(p.amountMinor)}</span></div>
       ))}
       {(data.changeMinor ?? 0) > 0 && <div>الباقي: <span className="num">{formatMoney(data.changeMinor ?? 0)}</span></div>}
-      {data.points && (
-        <>
-          <hr />
-          {data.points.spent > 0 && <div>نقاط مصروفة: <span className="num">{data.points.spent}</span></div>}
-          {data.points.earned > 0 && <div>نقاط كسبتها: <span className="num">+{data.points.earned}</span></div>}
-          <div><b>رصيد نقاطك: <span className="num">{data.points.balance}</span></b></div>
-        </>
-      )}
       <hr />
       <div style={{ textAlign: "center" }}>{data.footer ?? "شكراً لزيارتكم"}</div>
     </div>

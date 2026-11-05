@@ -29,19 +29,15 @@ export async function seedDemo(db: Q) {
   await addPriceChecker(db);
   await addPlatform(db);
   await db.query(`INSERT INTO customers (tenant_id, name, phone, credit_limit_minor) VALUES ($1,'محمد الطرابلسي','0912345678',200000), ($1,'مطعم الواحة','0923456789',NULL)`, [tid]);
-  // Points are on, and a regular customer already has some to spend.
-  await db.query(`UPDATE tenants SET loyalty = '{"enabled": true, "earnMinorPerPoint": 1000, "pointValueMinor": 10, "minRedeemPoints": 100}' WHERE id = $1`, [tid]);
-  await db.query(
-    `INSERT INTO loyalty_entries (tenant_id, customer_id, points, kind, note) SELECT $1, id, 350, 'adjust', 'رصيد افتتاحي' FROM customers WHERE tenant_id = $1 AND phone = '0912345678'`,
-    [tid],
-  );
 
-  const cat = (n: string) => one(`INSERT INTO categories (tenant_id, name) VALUES ($1,$2) RETURNING id`, [tid, n]);
-  const drinks = await cat("مشروبات");
-  const dairy = await cat("ألبان");
-  const veg = await cat("خضرة وفواكه");
-  const meat = await cat("لحوم");
-  const pantry = await cat("مواد غذائية");
+  // The same departments a new shop gets at sign-up.
+  await db.query(`SELECT pos_default_departments($1)`, [tid]);
+  const cat = (n: string) => one(`SELECT id FROM categories WHERE tenant_id = $1 AND name = $2`, [tid, n]);
+  const drinks = await cat("المشروبات");
+  const dairy = await cat("الألبان والأجبان");
+  const veg = await cat("الخضروات والفواكه");
+  const meat = await cat("اللحوم والدواجن");
+  const pantry = await cat("المواد الغذائية");
 
   type U = { name: string; factor: number; price: number; barcodes: string[] };
   const product = async (name: string, categoryId: string, cost: number, units: U[], scaleCode: string | null = null) => {
@@ -175,7 +171,7 @@ async function addOffers(db: Q) {
   if ((await db.query(`SELECT 1 FROM offers LIMIT 1`)).rows.length) return;
   const tid = (await db.query(`SELECT tenant_id FROM devices ORDER BY created_at LIMIT 1`)).rows[0].tenant_id;
   const pid = async (name: string) => (await db.query(`SELECT id FROM products WHERE tenant_id = $1 AND name = $2`, [tid, name])).rows[0].id;
-  const meat = (await db.query(`SELECT id FROM categories WHERE tenant_id = $1 AND name = 'لحوم'`, [tid])).rows[0].id;
+  const meat = (await db.query(`SELECT id FROM categories WHERE tenant_id = $1 AND name = 'اللحوم والدواجن'`, [tid])).rows[0].id;
   await db.query(`INSERT INTO offers (tenant_id, name, kind, buy_qty, get_qty, product_ids) VALUES ($1, 'ياغورت 2+1', 'buy_get', 2, 1, $2)`, [tid, [await pid("ياغورت فراولة")]]);
   await db.query(
     `INSERT INTO offers (tenant_id, name, kind, bundle_qty, bundle_price_minor, product_ids, ends_at) VALUES ($1, 'مكرونة 3 بـ 3.5', 'bundle', 3, 3500, $2, now() + interval '10 days')`,
@@ -208,7 +204,7 @@ async function addSuppliers(db: Q) {
   const sup = async (name: string, phone: string) =>
     (await db.query(`INSERT INTO suppliers (tenant_id, name, phone) VALUES ($1,$2,$3) RETURNING id`, [tid, name, phone])).rows[0].id as string;
   const drinks = await sup("شركة المشروبات الوطنية", "0214441122");
-  await sup("مخازن الألبان", "0913332211");
+  const dairy = await sup("مخازن الألبان", "0913332211");
   const unit = async (name: string) =>
     (await db.query(`SELECT u.id, u.product_id, u.factor_milli FROM product_units u JOIN products p ON p.id = u.product_id WHERE p.tenant_id = $1 AND u.name = $2 ORDER BY u.factor_milli DESC LIMIT 1`, [tid, name])).rows[0];
   const carton = await unit("كرتونة 24");
@@ -223,6 +219,21 @@ async function addSuppliers(db: Q) {
     [tid, inv, carton.product_id, carton.id],
   );
   await db.query(`INSERT INTO supplier_payments (tenant_id, supplier_id, invoice_id, amount_minor, method, created_at) VALUES ($1,$2,$3,50000,'cash', now() - interval '5 days')`, [tid, drinks, inv]);
+  // A dairy delivery on credit with expiry dates, one of them close, for «قرب انتهاء الصلاحية».
+  const inv2 = (await db.query(
+    `INSERT INTO purchase_invoices (tenant_id, store_id, supplier_id, supplier_ref, invoice_date, total_minor, payment_method, created_at)
+     VALUES ($1,$2,$3,'L-388', current_date - 2, 44000, 'credit', now() - interval '2 days') RETURNING id`,
+    [tid, sid, dairy],
+  )).rows[0].id as string;
+  for (const [name, qty, cost, price, days] of [["ياغورت فراولة", 40000, 600, 1000, 4], ["جبنة مثلثات 8 قطع", 6250, 3200, 4250, 25]] as const) {
+    const u = (await db.query(`SELECT u.id, u.product_id FROM product_units u JOIN products p ON p.id = u.product_id WHERE p.tenant_id = $1 AND p.name = $2 AND u.is_base`, [tid, name])).rows[0];
+    await db.query(
+      `INSERT INTO purchase_lines (tenant_id, invoice_id, product_id, unit_id, name, unit_name, qty_milli, unit_cost_minor, total_minor, sell_price_minor, expiry_date)
+       VALUES ($1,$2,$3,$4,$5,'علبة',$6,$7,$8,$9, current_date + $10::int)`,
+      [tid, inv2, u.product_id, u.id, name, qty, cost, Math.round((qty * cost) / 1000), price, days],
+    );
+    await db.query(`INSERT INTO stock_movements (tenant_id, store_id, product_id, qty_milli, kind, ref_id) VALUES ($1,$2,$3,$4,'purchase',$5)`, [tid, sid, u.product_id, qty, inv2]);
+  }
   // Sell most of the stock of two items so they show up as running low.
   for (const name of ["بيبسي علبة 330 مل", "حليب طازج 1 لتر"]) {
     await db.query(

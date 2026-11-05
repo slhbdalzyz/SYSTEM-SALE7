@@ -46,7 +46,6 @@ export function Report({ call, storeId }: { call: Call; storeId: string }) {
             <div className="kpi"><span className="muted">كاش</span><b className="num">{formatMoney(r.byMethod.cash ?? 0)}</b></div>
             <div className="kpi"><span className="muted">بطاقة</span><b className="num">{formatMoney(r.byMethod.card ?? 0)}</b></div>
             <div className="kpi"><span className="muted">آجل</span><b className="num">{formatMoney(r.byMethod.credit ?? 0)}</b></div>
-            {!!r.byMethod.points && <div className="kpi"><span className="muted">نقاط</span><b className="num">{formatMoney(r.byMethod.points)}</b></div>}
             <div className="kpi"><span className="muted">المرتجعات ({r.returns_count})</span><b className="num">{formatMoney(r.returns_minor)}</b></div>
             <div className="kpi"><span className="muted">تسديد ديون</span><b className="num">{formatMoney((r.customerPayments.cash ?? 0) + (r.customerPayments.card ?? 0))}</b></div>
             <div className="kpi"><span className="muted">الخصومات</span><b className="num">{formatMoney(r.discount_minor)}</b></div>

@@ -24,7 +24,6 @@ export const BACKUP_TABLES: { name: string; key: "uuid" | "bigint"; omit?: strin
   { name: "sales", key: "uuid" },
   { name: "sale_lines", key: "uuid" },
   { name: "payments", key: "uuid" },
-  { name: "loyalty_entries", key: "uuid" },
   { name: "customer_payments", key: "uuid" },
   { name: "purchase_invoices", key: "uuid" },
   { name: "purchase_lines", key: "uuid" },

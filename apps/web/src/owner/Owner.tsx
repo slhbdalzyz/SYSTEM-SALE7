@@ -5,6 +5,7 @@ import { session } from "../session";
 import type { Screen } from "../App";
 import type { Call, Me } from "../admin/Admin";
 import { Expenses } from "../admin/Expenses";
+import { Reports } from "../admin/Reports";
 import { Alerts, ago } from "./Alerts";
 import { AlertSettings, BackupCard, RestoreCard } from "./Settings";
 
@@ -21,7 +22,7 @@ export interface Dashboard {
   unreadAlerts: number;
 }
 
-type Tab = "home" | "alerts" | "expenses" | "more";
+type Tab = "home" | "reports" | "alerts" | "expenses" | "more";
 const DAYS = ["أحد", "اثنين", "ثلاثاء", "أربعاء", "خميس", "جمعة", "سبت"];
 const dayName = (iso: string) => DAYS[new Date(`${iso}T12:00:00Z`).getUTCDay()];
 
@@ -104,6 +105,7 @@ export function Owner({ go }: { go: (s: Screen) => void }) {
       </header>
       <main className="owner-main">
         {tab === "home" && <Home call={call} storeId={current} onUnread={setUnread} />}
+        {tab === "reports" && <Reports call={call} storeId={current ?? open[0].id} stores={open} />}
         {tab === "alerts" && <Alerts call={call} onRead={setUnread} />}
         {tab === "expenses" && <Expenses key={current ?? "all"} call={call} storeId={current} stores={open} />}
         {tab === "more" && (
@@ -120,7 +122,7 @@ export function Owner({ go }: { go: (s: Screen) => void }) {
         )}
       </main>
       <nav className="owner-nav">
-        {([["home", "🏠", "اليوم"], ["alerts", "🔔", "التنبيهات"], ["expenses", "🧾", "المصروفات"], ["more", "⚙️", "المزيد"]] as const).map(([k, icon, label]) => (
+        {([["home", "🏠", "اليوم"], ["reports", "📊", "التقارير"], ["alerts", "🔔", "التنبيهات"], ["expenses", "🧾", "المصروفات"], ["more", "⚙️", "المزيد"]] as const).map(([k, icon, label]) => (
           <button key={k} className={tab === k ? "active" : ""} onClick={() => setTab(k)}>
             <span aria-hidden>{icon}</span>
             {label}

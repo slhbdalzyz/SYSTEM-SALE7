@@ -41,6 +41,7 @@ export async function authRoutes(app: FastifyInstance) {
         `INSERT INTO users (tenant_id, name, email, password_hash, role) VALUES ($1,$2,$3,$4,'owner') RETURNING id`,
         [tid, b.ownerName, email, hash],
       );
+      await tx.query(`SELECT pos_default_departments($1)`, [tid]);
       await audit(tx, { tenantId: tid, userId: u.rows[0].id, action: "tenant.register" });
       return { tid, sid: s.rows[0].id as string, uid: u.rows[0].id as string };
     });
@@ -91,7 +92,7 @@ export async function authRoutes(app: FastifyInstance) {
 
   app.get("/me", { preHandler: authenticate }, async (req) => {
     const u = (await app.db.query(`SELECT id, name, email, role FROM users WHERE id = $1 AND tenant_id = $2`, [req.user.sub, req.user.tid])).rows[0];
-    const t = (await app.db.query(`SELECT id, name, currency, business_type, loyalty FROM tenants WHERE id = $1`, [req.user.tid])).rows[0];
+    const t = (await app.db.query(`SELECT id, name, currency, business_type FROM tenants WHERE id = $1`, [req.user.tid])).rows[0];
     const stores = await app.db.query(`SELECT id, name, address, phone, receipt_footer, active FROM stores WHERE tenant_id = $1 ORDER BY created_at`, [req.user.tid]);
     return { user: u, tenant: t, stores: stores.rows, deviceId: req.user.did ?? null, storeId: req.user.sid ?? null };
   });

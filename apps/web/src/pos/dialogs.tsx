@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { creditRoom, formatMoney, maxPointsPayment, pointsFor, toMinor, type CatalogCustomer, type LoyaltySettings, type PaymentMethod } from "@pos/shared";
+import { creditRoom, formatMoney, toMinor, type CatalogCustomer, type PaymentMethod } from "@pos/shared";
 import { readScaleWeight, scaleSupported } from "../scale";
 
 export function Modal({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
@@ -56,33 +56,21 @@ export function AmountDialog({ title, label, initial = "", onDone, onClose, scal
   );
 }
 
-export function PayDialog({ totalMinor, customer, rules, onPay, onClose }: {
-  totalMinor: number; customer: CatalogCustomer | null; rules?: LoyaltySettings | null;
-  onPay: (p: { method: PaymentMethod; amountMinor: number }[]) => void; onClose: () => void;
+export function PayDialog({ totalMinor, customer, onPay, onClose }: {
+  totalMinor: number; customer: CatalogCustomer | null; onPay: (p: { method: PaymentMethod; amountMinor: number }[]) => void; onClose: () => void;
 }) {
   const [cash, setCash] = useState(String(totalMinor / 1000));
   const [card, setCard] = useState("0");
   const [credit, setCredit] = useState("0");
-  const [usePoints, setUsePoints] = useState(0);
   const num = (v: string) => toMinor(Number(v.replace(",", ".")) || 0);
   const cashM = num(cash);
   const cardM = num(card);
   const creditM = customer ? num(credit) : 0;
   const room = customer ? creditRoom(customer) : 0;
-  // Points: the most this customer can pay with what they hold, in whole points.
-  const pointsMax = customer && rules ? maxPointsPayment(rules, customer.points ?? 0, totalMinor) : 0;
-  const pointsM = Math.min(usePoints, pointsMax);
-  const paid = cashM + cardM + creditM + pointsM;
+  const paid = cashM + cardM + creditM;
   const change = paid - totalMinor;
   const overLimit = creditM > 0 && room !== null && creditM > room;
-  const valid = paid >= totalMinor && change <= cashM && cardM + creditM + pointsM <= totalMinor && !overLimit;
-
-  function spendPoints(on: boolean) {
-    const v = on ? pointsMax : 0;
-    setUsePoints(v);
-    // The rest is cash, unless the cashier already split it otherwise.
-    if (cardM === 0 && creditM === 0) setCash(String((totalMinor - v) / 1000));
-  }
+  const valid = paid >= totalMinor && change <= cashM && cardM + creditM <= totalMinor && !overLimit;
   const quick = [totalMinor, ...[5000, 10000, 20000, 50000].filter((n) => n > totalMinor).slice(0, 3)];
 
   function pay() {
@@ -91,7 +79,6 @@ export function PayDialog({ totalMinor, customer, rules, onPay, onClose }: {
     if (cashM > 0) p.push({ method: "cash", amountMinor: cashM });
     if (cardM > 0) p.push({ method: "card", amountMinor: cardM });
     if (creditM > 0) p.push({ method: "credit", amountMinor: creditM });
-    if (pointsM > 0) p.push({ method: "points", amountMinor: pointsM });
     if (!p.length) p.push({ method: "cash", amountMinor: 0 });
     onPay(p);
   }
@@ -121,23 +108,9 @@ export function PayDialog({ totalMinor, customer, rules, onPay, onClose }: {
           <input className="num" inputMode="decimal" value={credit} onChange={(e) => setCredit(e.target.value)} onFocus={(e) => e.target.select()} />
         </label>
       )}
-      {customer && rules?.enabled && (
-        <div className="points-box">
-          <span>⭐ {customer.points ?? 0} نقطة{(customer.points ?? 0) > 0 && <span className="muted"> (تسوى {formatMoney((customer.points ?? 0) * rules.pointValueMinor)})</span>}</span>
-          <span className="spacer" />
-          {pointsMax > 0 ? (
-            <label className="check">
-              <input type="checkbox" checked={pointsM > 0} onChange={(e) => spendPoints(e.target.checked)} />
-              ادفع {formatMoney(pointsMax)} بالنقاط ({pointsFor(rules, pointsMax)} نقطة)
-            </label>
-          ) : (
-            <span className="muted small">{(customer.points ?? 0) > 0 ? `يقدر يصرف من ${rules.minRedeemPoints} نقطة` : ""}</span>
-          )}
-        </div>
-      )}
       <div className="row">
-        <button onClick={() => { setCard(String((totalMinor - pointsM) / 1000)); setCash("0"); setCredit("0"); }}>الكل بطاقة</button>
-        {customer && room !== 0 && <button onClick={() => { setCredit(String((totalMinor - pointsM) / 1000)); setCash("0"); setCard("0"); }}>الكل آجل</button>}
+        <button onClick={() => { setCard(String(totalMinor / 1000)); setCash("0"); setCredit("0"); }}>الكل بطاقة</button>
+        {customer && room !== 0 && <button onClick={() => { setCredit(String(totalMinor / 1000)); setCash("0"); setCard("0"); }}>الكل آجل</button>}
         <span className="spacer" />
         <span>الباقي:</span>
         <b className="num" style={{ fontSize: "1.4rem", color: change >= 0 ? "var(--ok)" : "var(--danger)" }}>{formatMoney(Math.max(change, 0))}</b>

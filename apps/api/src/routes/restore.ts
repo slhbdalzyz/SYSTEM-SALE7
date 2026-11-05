@@ -20,8 +20,8 @@ import { BACKUP_TABLES } from "./owner";
  *    exist keep theirs; ones that come back from the file need a new password or pairing;
  *  - branches, staff and tills that exist now but not in the file. They are kept (only updated
  *    from the file), because tills and logins depend on them.
- * Everything else (catalog, sales, stock, customers and their points, suppliers, purchases,
- * transfers, offers, expenses, alerts) is replaced by the file's copy.
+ * Everything else (catalog, sales, stock, customers, suppliers, purchases, transfers, offers,
+ * expenses, alerts) is replaced by the file's copy.
  */
 
 /** Kept and updated from the file, never deleted. */
@@ -29,7 +29,7 @@ const MERGE = ["stores", "users", "devices"];
 /** Never restored from a file. */
 const SKIP = ["tenants", "subscription_payments", "audit_log"];
 /** The only shop settings a file may change. */
-const TENANT_COLS = ["name", "currency", "business_type", "phone", "alert_settings", "loyalty"];
+const TENANT_COLS = ["name", "currency", "business_type", "phone", "alert_settings"];
 
 const REPLACE = BACKUP_TABLES.filter((t) => !MERGE.includes(t.name) && !SKIP.includes(t.name));
 const RESTORED = BACKUP_TABLES.filter((t) => !SKIP.includes(t.name) || t.name === "tenants");

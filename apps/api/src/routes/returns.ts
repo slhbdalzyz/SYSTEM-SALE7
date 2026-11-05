@@ -4,7 +4,6 @@ import { refundFor, returnInputSchema } from "@pos/shared";
 import { audit, inTx } from "../db";
 import { HttpError, authenticate, requireDevice, verifyApproval } from "../auth";
 import { alertBigReturn, flushPushes } from "../alerts";
-import { addPoints } from "../loyalty";
 
 export async function returnRoutes(app: FastifyInstance) {
   async function loadSale(tenantId: string, where: { id?: string; number?: string }) {
@@ -65,25 +64,6 @@ export async function returnRoutes(app: FastifyInstance) {
     const total = priced.reduce((a, p) => a + p.totalMinor, 0);
     const tax = priced.reduce((a, p) => a + p.taxMinor, 0);
 
-    // Loyalty: the part of the sale paid with points comes back as points, not money, and the points
-    // the sale earned go back in the same share. Worked out on the running total of everything
-    // returned from this sale, so several partial returns never add up to more than the whole.
-    const loyalty = { pointsMinor: 0, pointsBack: 0, pointsTaken: 0 };
-    if (orig.customer_id && orig.total_minor > 0) {
-      const pointsPaid = orig.payments.filter((p: { method: string }) => p.method === "points").reduce((a: number, p: { amount_minor: number }) => a + p.amount_minor, 0);
-      const ledger = (await app.db.query(
-        `SELECT COALESCE(-sum(points) FILTER (WHERE kind = 'redeem'), 0)::bigint AS redeemed, COALESCE(sum(points) FILTER (WHERE kind = 'earn'), 0)::bigint AS earned
-         FROM loyalty_entries WHERE sale_id = $1`,
-        [orig.id],
-      )).rows[0];
-      const before = Number((await app.db.query(`SELECT COALESCE(-sum(total_minor), 0)::bigint AS t FROM sales WHERE original_sale_id = $1 AND kind = 'return'`, [orig.id])).rows[0].t);
-      const share = (n: number, upto: number) => Math.round((n * Math.min(upto, orig.total_minor)) / orig.total_minor);
-      const part = (n: number) => share(n, before + total) - share(n, before);
-      loyalty.pointsMinor = Math.min(part(pointsPaid), total);
-      loyalty.pointsBack = part(Number(ledger.redeemed));
-      loyalty.pointsTaken = part(Number(ledger.earned));
-    }
-
     try {
       await inTx(app.db, async (tx) => {
         await tx.query(
@@ -103,20 +83,10 @@ export async function returnRoutes(app: FastifyInstance) {
             [who.tid, who.sid, p.l.product_id, Math.round((p.qty * p.l.factor_milli) / 1000), b.id, b.reason, who.sub],
           );
         }
-        if (loyalty.pointsMinor > 0) {
-          await tx.query(`INSERT INTO payments (tenant_id, sale_id, method, amount_minor) VALUES ($1,$2,'points',$3)`, [who.tid, b.id, -loyalty.pointsMinor]);
-        }
-        if (total - loyalty.pointsMinor > 0 || loyalty.pointsMinor === 0) {
-          await tx.query(`INSERT INTO payments (tenant_id, sale_id, method, amount_minor) VALUES ($1,$2,$3,$4)`, [who.tid, b.id, b.refundMethod, -(total - loyalty.pointsMinor)]);
-        }
-        if (orig.customer_id) {
-          const p = { tenantId: who.tid, customerId: orig.customer_id, kind: "return" as const, saleId: b.id, userId: who.sub };
-          await addPoints(tx, { ...p, points: loyalty.pointsBack, note: "نقاط مدفوعة رجعت" });
-          await addPoints(tx, { ...p, points: -loyalty.pointsTaken, note: "نقاط الفاتورة انسحبت" });
-        }
+        await tx.query(`INSERT INTO payments (tenant_id, sale_id, method, amount_minor) VALUES ($1,$2,$3,$4)`, [who.tid, b.id, b.refundMethod, -total]);
         await audit(tx, {
           tenantId: who.tid, userId: who.sub, deviceId: who.did, action: "sale.return", entity: "sale", entityId: orig.id,
-          data: { returnNumber: b.number, original: orig.number, total, method: b.refundMethod, approvedBy, reason: b.reason, ...(loyalty.pointsMinor || loyalty.pointsTaken ? { loyalty } : {}) },
+          data: { returnNumber: b.number, original: orig.number, total, method: b.refundMethod, approvedBy, reason: b.reason },
         });
         const cashier = (await tx.query(`SELECT name FROM users WHERE id = $1`, [who.sub])).rows[0]?.name ?? "";
         await alertBigReturn(tx, { tenantId: who.tid, storeId: who.sid!, totalMinor: total, number: b.number, original: orig.number, reason: b.reason, cashier });
@@ -128,6 +98,6 @@ export async function returnRoutes(app: FastifyInstance) {
       throw e;
     }
     await flushPushes(app.db, who.tid);
-    return { id: b.id, status: "accepted", totalMinor: total, refundMinor: total - loyalty.pointsMinor, ...loyalty, lines: priced.map((p) => ({ name: p.l.name, qtyMilli: p.qty, priceMinor: p.l.price_minor, totalMinor: p.totalMinor })) };
+    return { id: b.id, status: "accepted", totalMinor: total, lines: priced.map((p) => ({ name: p.l.name, qtyMilli: p.qty, priceMinor: p.l.price_minor, totalMinor: p.totalMinor })) };
   });
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { formatMoney, formatQty, pointsEarned, pointsFor, type CatalogCustomer, type CatalogProduct, type LoyaltySettings, type Offer, type PaymentMethod } from "@pos/shared";
+import { formatMoney, formatQty, type CatalogCustomer, type CatalogProduct, type Offer, type PaymentMethod } from "@pos/shared";
 import { api } from "../api";
 import { db, getMeta, nextInvoiceNumber, setMeta, type HeldCart, type LocalShift } from "../localdb";
 import { findByCode, searchProducts } from "../lookup";
@@ -45,7 +45,6 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   const [receipt, setReceipt] = useState<ReceiptData | null>(null);
   const [catalogSize, setCatalogSize] = useState(0);
   const [customer, setCustomer] = useState<CatalogCustomer | null>(null);
-  const [rules, setRules] = useState<LoyaltySettings | null>(null);
   const scanRef = useRef<HTMLInputElement>(null);
   const device = session.device;
   const role = tokenClaims(session.staffToken)?.role;
@@ -76,16 +75,11 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
       setShift(open);
       if (!open) setDialog({ kind: "openShift" });
       setCatalogSize(await db.products.count());
-      setRules((await getMeta<LoyaltySettings>("loyalty")) ?? null);
       try {
-        const me = await api<{ stores: { id: string; receipt_footer: string | null }[]; storeId: string; tenant: { loyalty?: LoyaltySettings } }>("/me", { token: session.staffToken });
+        const me = await api<{ stores: { id: string; receipt_footer: string | null }[]; storeId: string }>("/me", { token: session.staffToken });
         await setMeta("store", { footer: me.stores.find((s) => s.id === me.storeId)?.receipt_footer });
-        if (me.tenant.loyalty) {
-          await setMeta("loyalty", me.tenant.loyalty);
-          setRules(me.tenant.loyalty);
-        }
       } catch {
-        /* offline: keep the footer and the points rules saved last time */
+        /* offline: keep the footer saved last time */
       }
     })();
     return () => void off();
@@ -244,21 +238,10 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
       await db.sales.put({ id, number, shiftId: sale.shiftId ?? null, createdAt: sale.createdAt, totalMinor: sale.totalMinor, cashInMinor: cashIn, changeMinor: change, cashierName, input: sale });
       await db.outbox.add({ kind: "sale", refId: id, payload: sale, createdAt: sale.createdAt });
     });
-    // Until the next sync, count the new debt and points locally so limits still hold offline.
+    // Until the next sync, count the new debt locally so the credit limit still holds offline.
     if (customer && credit > 0) await db.customers.update(customer.id, { balanceMinor: customer.balanceMinor + credit });
-    let points: ReceiptData["points"];
-    if (customer && rules) {
-      const pointsPaid = payments.filter((p) => p.method === "points").reduce((a, p) => a + p.amountMinor, 0);
-      const spent = pointsPaid > 0 ? pointsFor(rules, pointsPaid) : 0;
-      const earned = pointsEarned(rules, sale.totalMinor, pointsPaid);
-      const balance = (customer.points ?? 0) - spent + earned;
-      if (spent || earned) {
-        await db.customers.update(customer.id, { points: balance });
-        points = { earned, spent, balance };
-      }
-    }
     const store = await getMeta<{ footer?: string }>("store");
-    setReceipt({ storeName: device.storeName, footer: store?.footer, deviceName: device.name, cashierName, sale, changeMinor: change, customerName: customer?.name, points });
+    setReceipt({ storeName: device.storeName, footer: store?.footer, deviceName: device.name, cashierName, sale, changeMinor: change, customerName: customer?.name });
     clearCart();
     setDialog(null);
     flash(change > 0 ? `الباقي ${formatMoney(change)}` : "تم البيع");
@@ -271,11 +254,11 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     if (!device) return;
     await db.sales.put({
       id: crypto.randomUUID(), number: r.number, shiftId: shift?.id ?? null, createdAt: new Date().toISOString(), totalMinor: -r.totalMinor,
-      cashInMinor: r.method === "cash" ? -r.refundMinor : 0, changeMinor: 0, cashierName, input: null, kind: "return",
+      cashInMinor: r.method === "cash" ? -r.totalMinor : 0, changeMinor: 0, cashierName, input: null, kind: "return",
     });
     setReceipt({ storeName: device.storeName, deviceName: device.name, cashierName, ret: r });
     setDialog(null);
-    flash(r.method === "cash" && r.refundMinor > 0 ? `رجّع للزبون ${formatMoney(r.refundMinor)} كاش` : "تم المرتجع");
+    flash(r.method === "cash" ? `رجّع للزبون ${formatMoney(r.totalMinor)} كاش` : "تم المرتجع");
     void syncNow();
     focusScan();
   }
@@ -491,7 +474,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
             {customer && (
               <div className="line" style={{ background: "var(--brand-soft)", padding: "6px 10px", borderRadius: 8 }}>
                 <span>👤 {customer.name}</span>
-                <span className="num">الرصيد {formatMoney(customer.balanceMinor)}{rules?.enabled && <> · ⭐ {customer.points ?? 0}</>}</span>
+                <span className="num">الرصيد {formatMoney(customer.balanceMinor)}</span>
               </div>
             )}
             {message && lines.length > 0 && <div className={message.bad ? "error" : "badge ok"} style={{ textAlign: "center" }}>{message.text}</div>}
@@ -518,7 +501,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
       <Receipt data={receipt} />
 
       {dialog?.kind === "printer" && <PrinterDialog onClose={() => { setDialog(null); focusScan(); }} />}
-      {dialog?.kind === "pay" && <PayDialog totalMinor={totals.total} customer={customer} rules={rules} onPay={pay} onClose={() => { setDialog(null); focusScan(); }} />}
+      {dialog?.kind === "pay" && <PayDialog totalMinor={totals.total} customer={customer} onPay={pay} onClose={() => { setDialog(null); focusScan(); }} />}
       {dialog?.kind === "weight" && (
         <AmountDialog
           title={dialog.product.name}

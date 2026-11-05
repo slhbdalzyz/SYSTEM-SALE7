@@ -7,4 +7,3 @@ export * from "./escpos";
 export * from "./offers";
 export * from "./symbology";
 export * from "./tspl";
-export * from "./loyalty";
