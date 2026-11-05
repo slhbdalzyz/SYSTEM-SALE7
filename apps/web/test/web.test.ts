@@ -3,12 +3,12 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { makeScaleBarcode, type CatalogProduct } from "@pos/shared";
 import { db, storeCatalog, nextInvoiceNumber } from "../src/localdb";
 import { findByCode } from "../src/lookup";
-import { addLine, lineFor } from "../src/pos/cart";
+import { addLine, lineFor, switchUnit } from "../src/pos/cart";
 import { parseScaleLine, parseScaleOutput } from "../src/scale";
 
 const water: CatalogProduct = {
   id: "11111111-1111-4111-8111-111111111111", name: "مياه", sku: "W1", categoryId: null, isWeighted: false, scaleCode: null, taxBp: 0,
-  costMinor: 400, minStockMilli: 0, active: true, updatedAt: new Date().toISOString(),
+  costMinor: 400, minStockMilli: 0, active: true, trackExpiry: false, updatedAt: new Date().toISOString(),
   units: [
     { id: "21111111-1111-4111-8111-111111111111", name: "قنينة", factorMilli: 1000, priceMinor: 750, isBase: true, barcodes: ["6191234500011"] },
     { id: "31111111-1111-4111-8111-111111111111", name: "شد 6", factorMilli: 6000, priceMinor: 4000, isBase: false, barcodes: ["6191234500028"] },
@@ -101,5 +101,16 @@ describe("receipt rows for the thermal printer", async () => {
     const p = text(receiptRows({ ...base, payment: { customerName: "محمد", amountMinor: 50000, method: "cash", balanceMinor: 20000, at: "2026-10-24T10:00:00Z" } }));
     expect(p).toContain("محمد");
     expect(p).toContain("50.000");
+  });
+});
+
+describe("switching the packing sold", () => {
+  it("sells the same line as a pack at the pack's price, and back", () => {
+    const piece = lineFor(water, water.units[0], 2000);
+    expect(piece.units?.map((u) => u.name)).toEqual(["قنينة", "شد 6"]);
+    const pack = switchUnit({ ...piece, discountMinor: 100 }, water.units[1].id);
+    expect(pack).toMatchObject({ key: piece.key, unitId: water.units[1].id, unitName: "شد 6", priceMinor: 4000, qtyMilli: 2000, discountMinor: 0, isBaseUnit: false, name: "مياه (شد 6)" });
+    expect(switchUnit(pack, water.units[0].id)).toMatchObject({ priceMinor: 750, name: "مياه (قنينة)" });
+    expect(lineFor(tomato, tomato.units[0], 1000).units).toBeUndefined();
   });
 });

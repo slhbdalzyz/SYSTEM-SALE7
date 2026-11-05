@@ -64,6 +64,10 @@ export const productInputSchema = z.object({
   costMinor: posMinor.default(0),
   minStockMilli: z.number().int().nonnegative().default(0),
   active: z.boolean().default(true),
+  /** Supply lines of this item must carry an expiry date. */
+  trackExpiry: z.boolean().default(false),
+  /** Give the base unit an in-store barcode (or a weighed item a scale code) when it has none. */
+  autoCode: z.boolean().default(false),
   units: z.array(unitInputSchema).min(1).max(10),
 });
 export type ProductInput = z.infer<typeof productInputSchema>;
@@ -109,6 +113,7 @@ export interface CatalogProduct {
   costMinor: number;
   minStockMilli: number;
   active: boolean;
+  trackExpiry: boolean;
   updatedAt: string;
   units: CatalogUnit[];
 }

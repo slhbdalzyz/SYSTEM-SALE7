@@ -7,7 +7,7 @@ import { session, tokenClaims } from "../session";
 import { loadOffers, onSync, refreshCounts, startSyncLoop, syncNow, type SyncState } from "../sync";
 import { autoBackupIfDue } from "../owner/backup";
 import type { Screen } from "../App";
-import { addLine, cartTotals, lineFor, lineTotal, priceCart, toSaleInput, type CartLine } from "./cart";
+import { addLine, cartTotals, lineFor, lineTotal, priceCart, switchUnit, toSaleInput, type CartLine } from "./cart";
 import { AmountDialog, Modal, PayDialog, type Employee } from "./dialogs";
 import { MyPay } from "../admin/MyPay";
 import { Receipt, type ReceiptData } from "./Receipt";
@@ -448,6 +448,15 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
                       <td className="num">{i + 1}</td>
                       <td>
                         {l.name}
+                        {l.units && (
+                          <div className="unit-pick" role="group" aria-label="العبوة">
+                            {l.units.map((u) => (
+                              <button key={u.id} type="button" className={u.id === l.unitId ? "active" : ""} disabled={!u.priceMinor && u.id !== l.unitId}
+                                title={u.priceMinor ? formatMoney(u.priceMinor) : "ما عندهاش سعر"}
+                                onClick={(e) => { e.stopPropagation(); setLines((ls) => ls.map((x) => (x.key === l.key ? switchUnit(x, u.id) : x))); setSelected(l.key); }}>{u.name}</button>
+                            ))}
+                          </div>
+                        )}
                         {l.discountMinor > 0 && <div className="muted">خصم {formatMoney(l.discountMinor)}</div>}
                         {(l.promoMinor ?? 0) > 0 && <div className="offer-tag">🏷 {l.offerName} −{formatMoney(l.promoMinor!)}</div>}
                       </td>

@@ -13,6 +13,9 @@ export interface CartLine {
   isWeighted: boolean;
   categoryId?: string | null;
   isBaseUnit?: boolean;
+  /** The item's other packings (piece, box…), so the cashier can switch the one sold. Only when it has several. */
+  units?: { id: string; name: string; priceMinor: number; isBase: boolean }[];
+  productName?: string;
   /** Filled in by priceCart from the running offers; never stored on the line itself. */
   promoMinor?: number;
   offerId?: string | null;
@@ -33,6 +36,19 @@ export function lineFor(product: CatalogProduct, unit: CatalogUnit, qtyMilli: nu
     isWeighted: product.isWeighted,
     categoryId: product.categoryId,
     isBaseUnit: unit.isBase,
+    ...(product.units.length > 1 && !product.isWeighted
+      ? { units: product.units.map((u) => ({ id: u.id, name: u.name, priceMinor: u.priceMinor, isBase: u.isBase })), productName: product.name }
+      : {}),
+  };
+}
+
+/** The same line sold in another of the item's packings (a box instead of a piece), at that packing's price. */
+export function switchUnit(line: CartLine, unitId: string): CartLine {
+  const u = line.units?.find((x) => x.id === unitId);
+  if (!u || u.id === line.unitId) return line;
+  return {
+    ...line, unitId: u.id, unitName: u.name, priceMinor: u.priceMinor, isBaseUnit: u.isBase, discountMinor: 0,
+    name: `${line.productName ?? line.name.replace(/ \([^)]*\)$/, "")} (${u.name})`,
   };
 }
 

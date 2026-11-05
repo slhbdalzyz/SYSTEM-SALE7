@@ -1210,3 +1210,67 @@ describe("the treasury: cash, card and bank", () => {
     expect((await call("GET", "/money/summary", till)).status).toBe(403);
   });
 });
+
+describe("the item card", () => {
+  let t: string;
+  let store: string;
+  beforeAll(async () => {
+    const r = (await app.inject({ method: "POST", url: "/auth/register", remoteAddress: "10.0.0.92", payload: { businessName: "بقالة البطاقة", storeName: "الرئيسي", ownerName: "سالم", email: "card@test.ly", password: "password123" } })).json();
+    t = r.token;
+    store = r.storeId;
+  });
+
+  it("makes a card with its packing and no prices, and gives it a barcode when it has none", async () => {
+    const a = await call("POST", "/products", t, {
+      name: "مياه 330 مل", autoCode: true, trackExpiry: true, minStockMilli: 48000,
+      units: [{ name: "حبة", priceMinor: 0, isBase: true }, { name: "صندوق", factorMilli: 24000, priceMinor: 0, barcodes: ["6281234567890"] }],
+    });
+    expect(a.body.error ?? a.status).toBe(200);
+    expect(a.body).toMatchObject({ trackExpiry: true, minStockMilli: 48000 });
+    const piece = a.body.units.find((u: { isBase: boolean }) => u.isBase);
+    expect(piece.barcodes[0]).toMatch(/^299\d{10}$/);
+    expect(a.body.units.find((u: { name: string }) => u.name === "صندوق").barcodes).toEqual(["6281234567890"]);
+    const b = await call("POST", "/products", t, { name: "عصير", autoCode: true, units: [{ name: "حبة", priceMinor: 0, isBase: true }] });
+    expect(Number(b.body.units[0].barcodes[0].slice(3, 12))).toBe(Number(piece.barcodes[0].slice(3, 12)) + 1);
+    // A barcode it came with is kept; a weighed item gets the next scale code instead.
+    const c = await call("POST", "/products", t, { name: "حليب", autoCode: true, units: [{ name: "حبة", priceMinor: 0, isBase: true, barcodes: ["111222333"] }] });
+    expect(c.body.units[0].barcodes).toEqual(["111222333"]);
+    const w1 = await call("POST", "/products", t, { name: "طماطم", isWeighted: true, autoCode: true, units: [{ name: "كيلو", priceMinor: 0, isBase: true }] });
+    const w2 = await call("POST", "/products", t, { name: "بصل", isWeighted: true, autoCode: true, units: [{ name: "كيلو", priceMinor: 0, isBase: true }, { name: "كيس", factorMilli: 25000, priceMinor: 0 }] });
+    expect(w1.body.units[0].barcodes).toEqual([]);
+    expect(Number(w2.body.scaleCode)).toBe(Number(w1.body.scaleCode) + 1);
+  });
+
+  it("asks for the expiry on supply lines of items that have one, and prices the piece from a box", async () => {
+    const water = (await call("GET", "/products", t)).body.find((p: { name: string }) => p.name === "مياه 330 مل");
+    const piece = water.units.find((u: { isBase: boolean }) => u.isBase).id;
+    const box = water.units.find((u: { isBase: boolean }) => !u.isBase).id;
+    const line = { unitId: box, qtyMilli: 10000, unitCostMinor: 12000, sellPriceMinor: 750, sellUnitId: piece };
+    const no = await call("POST", "/purchases", t, { storeId: store, lines: [line] });
+    expect(no.status).toBe(400);
+    expect(no.body.error).toContain("الصلاحية");
+    const ok = await call("POST", "/purchases", t, { storeId: store, lines: [{ ...line, expiryDate: "2027-06-01" }] });
+    expect(ok.status).toBe(200);
+    const after = (await call("GET", `/products?storeId=${store}`, t)).body.find((p: { name: string }) => p.name === "مياه 330 مل");
+    expect(after.units.find((u: { id: string }) => u.id === piece).priceMinor).toBe(750);
+    expect(after.units.find((u: { id: string }) => u.id === box).priceMinor).toBe(0);
+    expect(after).toMatchObject({ stockMilli: 240000, costMinor: 500 });
+    const inv = (await call("GET", `/purchases/${ok.body.id}`, t)).body;
+    expect(inv.lines[0]).toMatchObject({ unit_name: "صندوق", sell_unit_name: "حبة", sell_price_minor: 750, expiry_date: "2027-06-01" });
+    // A selling unit from another item is refused.
+    const juice = (await call("GET", "/products", t)).body.find((p: { name: string }) => p.name === "عصير");
+    expect((await call("POST", "/purchases", t, { storeId: store, lines: [{ ...line, expiryDate: "2027-06-01", sellUnitId: juice.units[0].id }] })).status).toBe(400);
+  });
+
+  it("sets the piece's and the box's selling prices on one line", async () => {
+    const water = (await call("GET", "/products", t)).body.find((p: { name: string }) => p.name === "مياه 330 مل");
+    const piece = water.units.find((u: { isBase: boolean }) => u.isBase).id;
+    const box = water.units.find((u: { isBase: boolean }) => !u.isBase).id;
+    const r = await call("POST", "/purchases", t, { storeId: store, lines: [{ unitId: box, qtyMilli: 2000, unitCostMinor: 12000, expiryDate: "2027-07-01", unitPrices: [{ unitId: piece, priceMinor: 500 }, { unitId: box, priceMinor: 5000 }] }] });
+    expect(r.status).toBe(200);
+    const after = (await call("GET", "/products", t)).body.find((p: { name: string }) => p.name === "مياه 330 مل");
+    expect(after.units.map((u: { priceMinor: number }) => u.priceMinor)).toEqual([500, 5000]);
+    // The line keeps the price of the unit bought.
+    expect((await call("GET", `/purchases/${r.body.id}`, t)).body.lines[0]).toMatchObject({ sell_price_minor: 5000, sell_unit_name: "صندوق" });
+  });
+});
