@@ -382,3 +382,13 @@ label.check.dim { color: var(--muted); }
 .stack > *, .grid-main > *, .grid-2 > * { min-width: 0; }
 .panel > *, .card > * { min-width: 0; }
 .chart { min-width: 0; overflow: hidden; }
+
+/* The item card */
+.item-card { display: flex; flex-direction: column; gap: 12px; min-width: min(560px, 100%); }
+.item-card .hint { font-size: .88rem; color: var(--muted); background: var(--brand-soft); border-radius: var(--radius); padding: 6px 10px; }
+.item-box { border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 12px 12px; display: flex; flex-direction: column; gap: 8px; margin: 0; }
+.item-box legend { padding: 0 6px; font-weight: 600; }
+.pack-row { display: grid; grid-template-columns: minmax(90px, 1fr) auto 70px auto minmax(120px, 1.4fr) auto; gap: 6px; align-items: center; }
+@media (max-width: 560px) { .pack-row { grid-template-columns: 1fr auto 70px auto; } .pack-row > input:nth-of-type(3) { grid-column: 1 / 4; } }
+input.need { border-color: var(--danger); background: var(--danger-soft); }
+.item-card .seg button { white-space: nowrap; }

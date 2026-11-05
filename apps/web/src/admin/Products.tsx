@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { formatMoney, formatQty, toMinor, type CatalogProduct } from "@pos/shared";
 import { Modal } from "../pos/dialogs";
 import type { Call } from "./Admin";
+import { ItemCard } from "./ItemCard";
 
 export interface Dept { id: string; name: string; icon: string | null; sort: number; products: number }
 
@@ -18,18 +19,14 @@ interface Form {
   cost: string;
   minStock: string;
   active: boolean;
+  trackExpiry: boolean;
   units: UnitForm[];
 }
-
-const blank = (): Form => ({
-  name: "", sku: "", categoryId: "", isWeighted: false, scaleCode: "", cost: "0", minStock: "0", active: true,
-  units: [{ name: "حبة", factor: "1", price: "", barcodes: "", isBase: true }],
-});
 
 function toForm(p: CatalogProduct): Form {
   return {
     id: p.id, name: p.name, sku: p.sku ?? "", categoryId: p.categoryId ?? "", isWeighted: p.isWeighted, scaleCode: p.scaleCode ?? "",
-    cost: String(p.costMinor / 1000), minStock: String(p.minStockMilli / 1000), active: p.active,
+    cost: String(p.costMinor / 1000), minStock: String(p.minStockMilli / 1000), active: p.active, trackExpiry: !!p.trackExpiry,
     units: p.units.map((u) => ({ id: u.id, name: u.name, factor: String(u.factorMilli / 1000), price: String(u.priceMinor / 1000), barcodes: u.barcodes.join(", "), isBase: u.isBase })),
   };
 }
@@ -41,6 +38,7 @@ export function Products({ call, storeId }: { call: Call; storeId: string }) {
   const [dept, setDept] = useState<string>("all");
   const [manage, setManage] = useState(false);
   const [form, setForm] = useState<Form | null>(null);
+  const [card, setCard] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = async () => {
@@ -73,6 +71,7 @@ export function Products({ call, storeId }: { call: Call; storeId: string }) {
       costMinor: toMinor(Number(form.cost) || 0),
       minStockMilli: toMinor(Number(form.minStock) || 0),
       active: form.active,
+      trackExpiry: form.trackExpiry,
       units: form.units.map((u) => ({
         id: u.id,
         name: u.name,
@@ -105,7 +104,7 @@ export function Products({ call, storeId }: { call: Call; storeId: string }) {
   if (form) {
     return (
       <div className="card stack">
-        <h2 style={{ margin: 0 }}>{form.id ? "تعديل صنف" : "صنف جديد"}</h2>
+        <h2 style={{ margin: 0 }}>تعديل صنف</h2>
         <div className="kpis">
           <label>الاسم<input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} autoFocus /></label>
           <label>القسم
@@ -133,8 +132,11 @@ export function Products({ call, storeId }: { call: Call; storeId: string }) {
             <input type="checkbox" style={{ width: "auto" }} checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })} />
             فعال
           </label>
+          <label className="row" style={{ color: "var(--ink)" }}>
+            <input type="checkbox" style={{ width: "auto" }} checked={form.trackExpiry} onChange={(e) => setForm({ ...form, trackExpiry: e.target.checked })} />
+            خاضع للصلاحية
+          </label>
         </div>
-        {!form.id && <div className="notice">بطاقة الصنف ما فيهاش كمية. الكمية تدخل للمخزون من فاتورة توريد في «المشتريات والموردين».</div>}
         <b>وحدات البيع</b>
         <div className="units-grid muted" style={{ fontSize: ".85rem" }}>
           <span>الوحدة</span><span>فيها كم وحدة أساسية</span><span>السعر (د.ل)</span><span>الباركود (أكثر من واحد بفاصلة)</span><span>أساسية</span><span />
@@ -177,8 +179,12 @@ export function Products({ call, storeId }: { call: Call; storeId: string }) {
       <div className="row">
         <input placeholder="بحث بالاسم أو الباركود" value={q} onChange={(e) => setQ(e.target.value)} style={{ maxWidth: 360 }} />
         <span className="spacer" />
-        <button className="primary" onClick={() => setForm({ ...blank(), categoryId: dept !== "all" && dept !== "none" ? dept : "" })}>+ بطاقة صنف جديدة</button>
+        <button className="primary" onClick={() => setCard(true)}>+ بطاقة صنف جديدة</button>
       </div>
+      {card && (
+        <ItemCard call={call} initial={q.trim()} categoryId={dept !== "all" && dept !== "none" ? dept : ""} onClose={() => setCard(false)}
+          onCreated={() => { setCard(false); setQ(""); void load(); }} />
+      )}
       {manage && <Departments call={call} list={cats} reload={load} onClose={() => setManage(false)} />}
       <div className="card" style={{ padding: 0, overflow: "auto" }}>
         <table>
@@ -188,9 +194,9 @@ export function Products({ call, storeId }: { call: Call; storeId: string }) {
               const low = p.stockMilli !== null && p.minStockMilli > 0 && p.stockMilli <= p.minStockMilli;
               return (
                 <tr key={p.id} style={{ opacity: p.active ? 1 : 0.5 }}>
-                  <td>{p.name}{p.isWeighted && <span className="muted"> ⚖️ {p.scaleCode}</span>}</td>
+                  <td>{p.name}{p.isWeighted && <span className="muted"> ⚖️ {p.scaleCode}</span>}{p.trackExpiry && <span className="muted" title="خاضع للصلاحية"> ⏳</span>}</td>
                   <td className="muted">{catName(p.categoryId) || "—"}</td>
-                  <td>{p.units.map((u) => <div key={u.id}>{u.name}: <span className="num">{formatMoney(u.priceMinor)}</span></div>)}</td>
+                  <td>{p.units.map((u) => <div key={u.id}>{u.name}{!u.isBase && <span className="muted"> ({formatQty(u.factorMilli, false)})</span>}: {u.priceMinor ? <span className="num">{formatMoney(u.priceMinor)}</span> : <span className="muted">بدون سعر</span>}</div>)}</td>
                   <td className="num">{formatMoney(p.costMinor)}</td>
                   <td><span className={low ? "badge bad" : ""}><span className="num">{formatQty(p.stockMilli ?? 0, p.isWeighted)}</span></span></td>
                   <td><button onClick={() => setForm(toForm(p))}>تعديل</button></td>

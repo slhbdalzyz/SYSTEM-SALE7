@@ -33,8 +33,9 @@ export const purchaseSchema = z.object({
     unitId: z.string().uuid(),
     qtyMilli: z.number().int().positive(),
     unitCostMinor: z.number().int().nonnegative(),
-    /** The new selling price of this unit, set as the goods come in. */
+    /** The new selling price, set as the goods come in: of this unit, or of sellUnitId (a box bought, a piece priced). */
     sellPriceMinor: z.number().int().nonnegative().optional(),
+    sellUnitId: z.string().uuid().optional(),
     expiryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   })).min(1).max(500),
 });
@@ -124,11 +125,18 @@ export async function purchasingRoutes(app: FastifyInstance) {
       const units = [];
       for (const l of b.lines) {
         const u = (await tx.query(
-          `SELECT u.product_id, u.factor_milli, u.name AS unit_name, p.name FROM product_units u JOIN products p ON p.id = u.product_id WHERE u.id = $1 AND u.tenant_id = $2`,
+          `SELECT u.product_id, u.factor_milli, u.name AS unit_name, p.name, p.track_expiry FROM product_units u JOIN products p ON p.id = u.product_id WHERE u.id = $1 AND u.tenant_id = $2`,
           [l.unitId, req.user.tid],
         )).rows[0];
         if (!u) throw new HttpError(400, "وحدة غير موجودة");
-        units.push({ ...l, ...u, total: Math.round((l.qtyMilli * l.unitCostMinor) / 1000) });
+        if (u.track_expiry && !l.expiryDate) throw new HttpError(400, `«${u.name}» خاضع للصلاحية، اكتب تاريخ الصلاحية`);
+        let sellUnit = { id: l.unitId, name: u.unit_name as string };
+        if (l.sellUnitId && l.sellUnitId !== l.unitId) {
+          const s = (await tx.query(`SELECT id, name FROM product_units WHERE id = $1 AND product_id = $2`, [l.sellUnitId, u.product_id])).rows[0];
+          if (!s) throw new HttpError(400, "وحدة البيع مش من نفس الصنف");
+          sellUnit = s;
+        }
+        units.push({ ...l, ...u, sellUnit, total: Math.round((l.qtyMilli * l.unitCostMinor) / 1000) });
       }
       const total = units.reduce((a, l) => a + l.total, 0);
       if (!b.supplierId && b.paymentMethod === "credit") throw new HttpError(400, "الآجل يحتاج مورد");
@@ -141,12 +149,12 @@ export async function purchasingRoutes(app: FastifyInstance) {
       )).rows[0].id as string;
       for (const l of units) {
         await tx.query(
-          `INSERT INTO purchase_lines (tenant_id, invoice_id, product_id, unit_id, name, unit_name, qty_milli, unit_cost_minor, total_minor, sell_price_minor, expiry_date)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-          [req.user.tid, inv, l.product_id, l.unitId, l.name, l.unit_name, l.qtyMilli, l.unitCostMinor, l.total, l.sellPriceMinor ?? null, l.expiryDate ?? null],
+          `INSERT INTO purchase_lines (tenant_id, invoice_id, product_id, unit_id, name, unit_name, qty_milli, unit_cost_minor, total_minor, sell_price_minor, expiry_date, sell_unit_name)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+          [req.user.tid, inv, l.product_id, l.unitId, l.name, l.unit_name, l.qtyMilli, l.unitCostMinor, l.total, l.sellPriceMinor ?? null, l.expiryDate ?? null, l.sellPriceMinor === undefined ? null : l.sellUnit.name],
         );
         if (l.sellPriceMinor !== undefined) {
-          await tx.query(`UPDATE product_units SET price_minor = $2 WHERE id = $1 AND price_minor <> $2`, [l.unitId, l.sellPriceMinor]);
+          await tx.query(`UPDATE product_units SET price_minor = $2 WHERE id = $1 AND price_minor <> $2`, [l.sellUnit.id, l.sellPriceMinor]);
           await tx.query(`UPDATE products SET updated_at = now() WHERE id = $1`, [l.product_id]); // tills pick up the new price
         }
         await tx.query(
@@ -191,7 +199,7 @@ export async function purchasingRoutes(app: FastifyInstance) {
       [id, req.user.tid],
     )).rows[0];
     if (!i) throw new HttpError(404, "الفاتورة غير موجودة");
-    const lines = (await app.db.query(`SELECT name, unit_name, qty_milli, unit_cost_minor, total_minor, sell_price_minor, to_char(expiry_date, 'YYYY-MM-DD') AS expiry_date FROM purchase_lines WHERE invoice_id = $1`, [id])).rows;
+    const lines = (await app.db.query(`SELECT name, unit_name, qty_milli, unit_cost_minor, total_minor, sell_price_minor, sell_unit_name, to_char(expiry_date, 'YYYY-MM-DD') AS expiry_date FROM purchase_lines WHERE invoice_id = $1`, [id])).rows;
     const payments = (await app.db.query(`SELECT amount_minor, method, created_at FROM supplier_payments WHERE invoice_id = $1`, [id])).rows;
     return { ...i, lines, payments };
   });

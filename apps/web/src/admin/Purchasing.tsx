@@ -3,6 +3,7 @@ import { formatMoney, formatQty, toMinor, type CatalogProduct } from "@pos/share
 import { Modal } from "../pos/dialogs";
 import type { Call } from "./Admin";
 import type { LabelDraft } from "./Labels";
+import { ItemCard } from "./ItemCard";
 
 interface Supplier { id: string; name: string; phone: string | null; note: string | null; active: boolean; balance_minor: number; last_purchase_at: string | null }
 interface Invoice { id: string; supplier_ref: string | null; invoice_date: string; total_minor: number; paid_minor: number; payment_method: keyof typeof INVOICE_METHOD; supplier_name: string | null; store_name: string; lines: number; created_at: string }
@@ -11,7 +12,8 @@ interface Reorder {
   base_unit_id: string; base_unit_name: string; last_unit_id: string | null; last_unit_name: string | null; last_factor_milli: number | null;
   last_cost_minor: number | null; supplier_id: string | null; supplier_name: string | null;
 }
-interface Line { key: string; productId: string; name: string; unitId: string; units: CatalogProduct["units"]; qty: string; cost: string; price: string; expiry: string }
+/** A supply line: bought in unitId, sold (priced) in sellUnitId, which may be a smaller unit. */
+interface Line { key: string; productId: string; name: string; unitId: string; sellUnitId: string; units: CatalogProduct["units"]; qty: string; cost: string; price: string; expiry: string; trackExpiry: boolean }
 
 /** Paying a supplier. */
 const METHOD = { cash: "نقدي", card: "بطاقة مصرفية", transfer: "تحويل مصرفي", cheque: "صك", other: "أخرى" } as const;
@@ -21,14 +23,20 @@ const date = (d: string) => new Date(d).toLocaleDateString("en-GB");
 const dinars = (minor: number) => String(minor / 1000);
 const TABS = { invoice: "فاتورة توريد جديدة", invoices: "فواتير التوريد", suppliers: "الموردين", reorder: "النواقص" } as const;
 
-/** A new line for a product, in the given unit, priced from what the product has now. */
-function lineFor(p: CatalogProduct, unitId: string, qty = "1", cost?: string): Line {
+/**
+ * A new line for a product, in the given unit, costed from what the product has now. The selling
+ * price is the piece's (the base unit's) unless asked for another unit.
+ */
+function lineFor(p: CatalogProduct, unitId: string, qty = "1", cost?: string, sellUnitId?: string): Line {
   const u = p.units.find((x) => x.id === unitId) ?? p.units[0];
+  const s = p.units.find((x) => x.id === sellUnitId) ?? p.units.find((x) => x.isBase) ?? u;
   return {
-    key: crypto.randomUUID(), productId: p.id, name: p.name, unitId: u.id, units: p.units, qty,
-    cost: cost ?? dinars(Math.round((p.costMinor * u.factorMilli) / 1000)), price: dinars(u.priceMinor), expiry: "",
+    key: crypto.randomUUID(), productId: p.id, name: p.name, unitId: u.id, sellUnitId: s.id, units: p.units, qty,
+    cost: cost ?? (p.costMinor ? dinars(Math.round((p.costMinor * u.factorMilli) / 1000)) : ""), price: s.priceMinor ? dinars(s.priceMinor) : "", expiry: "",
+    trackExpiry: !!p.trackExpiry,
   };
 }
+const factor = (l: Line, id: string) => l.units.find((u) => u.id === id)?.factorMilli ?? 1000;
 
 export function Purchasing({ call, storeId, onLabels }: { call: Call; storeId: string; onLabels: (d: LabelDraft[]) => void }) {
   const [tab, setTab] = useState<keyof typeof TABS>("invoice");
@@ -92,16 +100,23 @@ function NewInvoice({ call, storeId, suppliers, reloadSuppliers, draft, clearDra
     setFind("");
   }
   const edit = (key: string, patch: Partial<Line>) => setLines((ls) => ls.map((l) => (l.key === key ? { ...l, ...patch } : l)));
-  /** Another unit: its cost and price are the product's for that unit. */
+  /** Bought in another unit: its cost is the product's for that unit; the selling price stays. */
   const changeUnit = (l: Line, unitId: string) => {
     const p = products.find((x) => x.id === l.productId);
-    if (p) edit(l.key, { ...lineFor(p, unitId, l.qty), key: l.key, expiry: l.expiry });
+    if (p) edit(l.key, { ...lineFor(p, unitId, l.qty, undefined, l.sellUnitId), key: l.key, expiry: l.expiry, price: l.price });
   };
+  /** Priced in another unit: that unit's current price. */
+  const changeSellUnit = (l: Line, sellUnitId: string) => {
+    const u = l.units.find((x) => x.id === sellUnitId);
+    edit(l.key, { sellUnitId, price: u?.priceMinor ? dinars(u.priceMinor) : "" });
+  };
+  /** Profit on the selling price, with the cost brought to the unit it is sold in. */
   const margin = (l: Line) => {
-    const c = Number(l.cost) || 0;
+    const c = ((Number(l.cost) || 0) * factor(l, l.sellUnitId)) / factor(l, l.unitId);
     const pr = Number(l.price) || 0;
     return c > 0 && pr > 0 ? Math.round(((pr - c) / c) * 100) : null;
   };
+  const missingExpiry = lines.filter((l) => l.trackExpiry && !l.expiry);
 
   async function newSupplier() {
     const name = prompt("اسم المورد");
@@ -121,7 +136,7 @@ function NewInvoice({ call, storeId, suppliers, reloadSuppliers, draft, clearDra
           paidMinor: method === "credit" ? undefined : paidMinor,
           lines: lines.map((l) => ({
             unitId: l.unitId, qtyMilli: toMinor(Number(l.qty) || 0), unitCostMinor: toMinor(Number(l.cost) || 0),
-            sellPriceMinor: l.price === "" ? undefined : toMinor(Number(l.price) || 0), expiryDate: l.expiry || undefined,
+            sellPriceMinor: l.price === "" ? undefined : toMinor(Number(l.price) || 0), sellUnitId: l.sellUnitId, expiryDate: l.expiry || undefined,
           })),
         },
       });
@@ -170,9 +185,11 @@ function NewInvoice({ call, storeId, suppliers, reloadSuppliers, draft, clearDra
         )}
       </div>
       {quick !== null && (
-        <QuickProduct call={call} initial={quick} onClose={() => setQuick(null)} onCreated={(p) => {
+        <ItemCard call={call} initial={quick} onClose={() => setQuick(null)} onCreated={(p) => {
           setProducts((ps) => [...ps, p]);
-          setLines((ls) => [...ls, { ...lineFor(p, p.units[0].id), cost: "", price: "" }]);
+          // Bought in its biggest packing (a box), priced by the piece.
+          const big = [...p.units].sort((a, b) => b.factorMilli - a.factorMilli)[0];
+          setLines((ls) => [...ls, { ...lineFor(p, big.id), cost: "", price: "" }]);
           setQuick(null);
           setFind("");
         }} />
@@ -184,7 +201,7 @@ function NewInvoice({ call, storeId, suppliers, reloadSuppliers, draft, clearDra
             <tbody>
               {lines.map((l) => (
                 <tr key={l.key}>
-                  <td>{l.name}</td>
+                  <td style={{ minWidth: 140 }}>{l.name}</td>
                   <td>
                     <select value={l.unitId} onChange={(e) => changeUnit(l, e.target.value)} style={{ width: "auto" }}>
                       {l.units.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
@@ -192,9 +209,22 @@ function NewInvoice({ call, storeId, suppliers, reloadSuppliers, draft, clearDra
                   </td>
                   <td><input className="num" value={l.qty} onChange={(e) => edit(l.key, { qty: e.target.value })} style={{ width: 80 }} /></td>
                   <td><input className="num" value={l.cost} onChange={(e) => edit(l.key, { cost: e.target.value })} style={{ width: 90 }} aria-label="سعر الشراء" /></td>
-                  <td><input className="num" value={l.price} onChange={(e) => edit(l.key, { price: e.target.value })} style={{ width: 90 }} aria-label="سعر البيع" /></td>
+                  <td>
+                    <div className="row" style={{ flexWrap: "nowrap", gap: 4 }}>
+                      <input className="num" value={l.price} onChange={(e) => edit(l.key, { price: e.target.value })} style={{ width: 90 }} aria-label="سعر البيع" />
+                      {l.units.length > 1 ? (
+                        <select value={l.sellUnitId} onChange={(e) => changeSellUnit(l, e.target.value)} style={{ width: "auto" }} aria-label="سعر البيع لـ">
+                          {l.units.map((u) => <option key={u.id} value={u.id}>/ {u.name}</option>)}
+                        </select>
+                      ) : <span className="muted">/ {l.units[0].name}</span>}
+                    </div>
+                  </td>
                   <td className="num">{(() => { const m = margin(l); return m === null ? "—" : <span className={m < 0 ? "badge bad" : "muted"}>{m}%</span>; })()}</td>
-                  <td><input type="date" value={l.expiry} onChange={(e) => edit(l.key, { expiry: e.target.value })} style={{ width: 150 }} aria-label="تاريخ الصلاحية" /></td>
+                  <td>
+                    {l.trackExpiry || l.expiry
+                      ? <input type="date" className={l.trackExpiry && !l.expiry ? "need" : ""} value={l.expiry} onChange={(e) => edit(l.key, { expiry: e.target.value })} style={{ width: 150 }} aria-label="تاريخ الصلاحية" required={l.trackExpiry} />
+                      : <button type="button" className="ghost muted" onClick={() => edit(l.key, { trackExpiry: false, expiry: new Date().toISOString().slice(0, 10) })} title="الصنف مش خاضع للصلاحية">لا يخضع · + تاريخ</button>}
+                  </td>
                   <td className="num">{formatMoney(lineTotal(l))}</td>
                   <td><button className="danger" onClick={() => setLines((ls) => ls.filter((x) => x.key !== l.key))}>✕</button></td>
                 </tr>
@@ -217,7 +247,8 @@ function NewInvoice({ call, storeId, suppliers, reloadSuppliers, draft, clearDra
         )}
         {total - paidMinor > 0 && <span className="badge off">يتسجل دين للمورد {formatMoney(total - paidMinor)}</span>}
         <span className="spacer" />
-        <button className="primary big" disabled={!supplierId || !lines.length || lines.some((l) => !(Number(l.qty) > 0) || l.cost === "")} onClick={save}>حفظ الفاتورة وإدخال البضاعة</button>
+        {missingExpiry.length > 0 && <span className="badge bad">ناقص تاريخ صلاحية: {missingExpiry.map((l) => l.name).join("، ")}</span>}
+        <button className="primary big" disabled={!supplierId || !lines.length || missingExpiry.length > 0 || lines.some((l) => !(Number(l.qty) > 0) || l.cost === "")} onClick={save}>حفظ الفاتورة وإدخال البضاعة</button>
       </div>
       {msg && (
         <div className="row">
@@ -231,7 +262,7 @@ function NewInvoice({ call, storeId, suppliers, reloadSuppliers, draft, clearDra
 
 function Invoices({ call }: { call: Call }) {
   const [list, setList] = useState<Invoice[]>([]);
-  const [open, setOpen] = useState<(Invoice & { lines: { name: string; unit_name: string; qty_milli: number; unit_cost_minor: number; total_minor: number; sell_price_minor: number | null; expiry_date: string | null }[] }) | null>(null);
+  const [open, setOpen] = useState<(Invoice & { lines: { name: string; unit_name: string; qty_milli: number; unit_cost_minor: number; total_minor: number; sell_price_minor: number | null; sell_unit_name: string | null; expiry_date: string | null }[] }) | null>(null);
   useEffect(() => void call<Invoice[]>("/purchases").then(setList), [call]);
   return (
     <div className="card" style={{ padding: 0, overflow: "auto" }}>
@@ -259,8 +290,8 @@ function Invoices({ call }: { call: Call }) {
             <tbody>
               {open.lines.map((l, k) => (
                 <tr key={k}>
-                  <td>{l.name}</td><td className="num">{formatQty(l.qty_milli, false)} {l.unit_name}</td><td className="num">{formatMoney(l.unit_cost_minor)}</td>
-                  <td className="num">{l.sell_price_minor === null ? "—" : formatMoney(l.sell_price_minor)}</td>
+                  <td style={{ minWidth: 140 }}>{l.name}</td><td className="num">{formatQty(l.qty_milli, false)} {l.unit_name}</td><td className="num">{formatMoney(l.unit_cost_minor)}</td>
+                  <td className="num">{l.sell_price_minor === null ? "—" : `${formatMoney(l.sell_price_minor)}${l.sell_unit_name && l.sell_unit_name !== l.unit_name ? ` / ${l.sell_unit_name}` : ""}`}</td>
                   <td className="num">{l.expiry_date ? date(l.expiry_date) : "—"}</td>
                   <td className="num">{formatMoney(l.total_minor)}</td>
                 </tr>
@@ -426,54 +457,5 @@ function ReorderList({ call, storeId, order }: { call: Call; storeId: string; or
         </div>
       ))}
     </div>
-  );
-}
-
-/**
- * A product card made from the supply invoice when an item isn't in the list yet: just its name,
- * department and barcode. No quantity: stock only ever comes in on an invoice.
- */
-function QuickProduct({ call, initial, onClose, onCreated }: { call: Call; initial: string; onClose: () => void; onCreated: (p: CatalogProduct) => void }) {
-  const isCode = /^\d{6,}$/.test(initial);
-  const [f, setF] = useState({ name: isCode ? "" : initial, barcode: isCode ? initial : "", categoryId: "", unit: "حبة", weighted: false });
-  const [cats, setCats] = useState<{ id: string; name: string; icon: string | null }[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => void call<typeof cats>("/categories").then(setCats), [call]);
-  async function save() {
-    setError(null);
-    try {
-      const r = await call<CatalogProduct>("/products", {
-        body: {
-          name: f.name, categoryId: f.categoryId || null, isWeighted: f.weighted,
-          units: [{ name: f.weighted ? "كيلو" : f.unit, factorMilli: 1000, priceMinor: 0, isBase: true, barcodes: f.barcode && !f.weighted ? [f.barcode] : [] }],
-        },
-      });
-      onCreated(r);
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }
-  return (
-    <Modal title="بطاقة صنف جديدة" onClose={onClose}>
-      <label>اسم الصنف<input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} autoFocus /></label>
-      <label>القسم
-        <select value={f.categoryId} onChange={(e) => setF({ ...f, categoryId: e.target.value })}>
-          <option value="">—</option>
-          {cats.map((c) => <option key={c.id} value={c.id}>{c.icon ? `${c.icon} ` : ""}{c.name}</option>)}
-        </select>
-      </label>
-      <label className="row" style={{ color: "var(--ink)" }}>
-        <input type="checkbox" style={{ width: "auto" }} checked={f.weighted} onChange={(e) => setF({ ...f, weighted: e.target.checked })} /> يباع بالوزن (كيلو)
-      </label>
-      {!f.weighted && (
-        <div className="row">
-          <label style={{ flex: 1 }}>وحدة البيع<input value={f.unit} onChange={(e) => setF({ ...f, unit: e.target.value })} /></label>
-          <label style={{ flex: 2 }}>الباركود<input className="num" value={f.barcode} onChange={(e) => setF({ ...f, barcode: e.target.value.trim() })} /></label>
-        </div>
-      )}
-      <p className="muted" style={{ margin: 0 }}>سعر الشراء والبيع والكمية تدخلهم في الفاتورة. وحدات أكبر (كرتونة…) تضيفها من صفحة الأصناف.</p>
-      {error && <div className="error">{error}</div>}
-      <div className="row"><span className="spacer" /><button onClick={onClose}>إلغاء</button><button className="primary" disabled={f.name.trim().length < 2} onClick={save}>إضافة للفاتورة</button></div>
-    </Modal>
   );
 }

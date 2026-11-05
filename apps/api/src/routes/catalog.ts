@@ -16,7 +16,7 @@ export async function loadProducts(q: Db | Tx, tenantId: string, opts: { since?:
     where.push(`p.id = ANY($${args.length})`);
   }
   const r = await q.query(
-    `SELECT p.id, p.name, p.sku, p.category_id, p.is_weighted, p.scale_code, p.tax_bp, p.cost_minor, p.min_stock_milli, p.active, p.updated_at,
+    `SELECT p.id, p.name, p.sku, p.category_id, p.is_weighted, p.scale_code, p.tax_bp, p.cost_minor, p.min_stock_milli, p.active, p.track_expiry, p.updated_at,
        COALESCE(json_agg(json_build_object(
          'id', u.id, 'name', u.name, 'factorMilli', u.factor_milli, 'priceMinor', u.price_minor, 'isBase', u.is_base,
          'barcodes', COALESCE((SELECT json_agg(b.code ORDER BY b.code) FROM barcodes b WHERE b.unit_id = u.id), '[]'::json)
@@ -37,14 +37,41 @@ export async function loadProducts(q: Db | Tx, tenantId: string, opts: { since?:
     costMinor: p.cost_minor,
     minStockMilli: p.min_stock_milli,
     active: p.active,
+    trackExpiry: p.track_expiry,
     updatedAt: p.updated_at.toISOString(),
     units: p.units.map((u: CatalogProduct["units"][number]) => ({ ...u, factorMilli: Number(u.factorMilli), priceMinor: Number(u.priceMinor) })),
   }));
 }
 
+/**
+ * The shop's next in-store barcode: EAN-13 starting 299 (the in-store range), numbered per shop.
+ * The exact match is looked up before scale labels on the till, so they never read as a weight.
+ */
+async function nextInStoreCode(tx: Tx, tenantId: string): Promise<string> {
+  await tx.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`barcode:${tenantId}`]);
+  const last = (await tx.query(
+    `SELECT max(substring(code, 4, 9)::bigint) AS n FROM barcodes WHERE tenant_id = $1 AND code ~ '^299[0-9]{10}$'`,
+    [tenantId],
+  )).rows[0].n;
+  for (let n = Number(last ?? 0) + 1; ; n++) {
+    const body = `299${String(n).padStart(9, "0")}`;
+    const code = body + ean13CheckDigit(body);
+    if (!(await tx.query(`SELECT 1 FROM barcodes WHERE tenant_id = $1 AND code = $2`, [tenantId, code])).rowCount) return code;
+  }
+}
+
+/** The next free scale code for a weighed item. */
+async function nextScaleCode(tx: Tx, tenantId: string): Promise<string> {
+  await tx.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`scale:${tenantId}`]);
+  const r = (await tx.query(`SELECT COALESCE(max(scale_code::int), 0) + 1 AS n FROM products WHERE tenant_id = $1 AND scale_code ~ '^[0-9]{1,6}$'`, [tenantId])).rows[0];
+  return String(r.n);
+}
+
 async function saveProduct(tx: Tx, tenantId: string, id: string | null, input: unknown) {
   const b = productInputSchema.parse(input);
   if (b.units.filter((u) => u.isBase).length !== 1) throw new HttpError(400, "لازم وحدة أساسية وحدة بالضبط");
+  if (b.autoCode && b.isWeighted && !b.scaleCode) b.scaleCode = await nextScaleCode(tx, tenantId);
+  const autoBase = b.autoCode && !b.isWeighted && !b.units.some((u) => u.isBase && u.barcodes.some((c) => c.trim()));
   if (b.isWeighted && !b.scaleCode) throw new HttpError(400, "الصنف الموزون يحتاج كود ميزان");
   const base = b.units.find((u) => u.isBase)!;
   if (base.factorMilli !== 1000) throw new HttpError(400, "معامل الوحدة الأساسية لازم يكون 1");
@@ -53,11 +80,11 @@ async function saveProduct(tx: Tx, tenantId: string, id: string | null, input: u
     if (!c.rowCount) throw new HttpError(400, "التصنيف غير موجود");
   }
 
-  const cols = [b.name, b.sku ?? null, b.categoryId ?? null, b.isWeighted, b.scaleCode ?? null, b.taxBp, b.costMinor, b.minStockMilli, b.active];
+  const cols = [b.name, b.sku ?? null, b.categoryId ?? null, b.isWeighted, b.scaleCode ?? null, b.taxBp, b.costMinor, b.minStockMilli, b.active, b.trackExpiry];
   let pid: string;
   if (id) {
     const r = await tx.query(
-      `UPDATE products SET name=$3, sku=$4, category_id=$5, is_weighted=$6, scale_code=$7, tax_bp=$8, cost_minor=$9, min_stock_milli=$10, active=$11, updated_at=now()
+      `UPDATE products SET name=$3, sku=$4, category_id=$5, is_weighted=$6, scale_code=$7, tax_bp=$8, cost_minor=$9, min_stock_milli=$10, active=$11, track_expiry=$12, updated_at=now()
        WHERE id=$1 AND tenant_id=$2 RETURNING id`,
       [id, tenantId, ...cols],
     );
@@ -65,8 +92,8 @@ async function saveProduct(tx: Tx, tenantId: string, id: string | null, input: u
     pid = id;
   } else {
     const r = await tx.query(
-      `INSERT INTO products (tenant_id, name, sku, category_id, is_weighted, scale_code, tax_bp, cost_minor, min_stock_milli, active)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+      `INSERT INTO products (tenant_id, name, sku, category_id, is_weighted, scale_code, tax_bp, cost_minor, min_stock_milli, active, track_expiry)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
       [tenantId, ...cols],
     );
     pid = r.rows[0].id;
@@ -87,7 +114,9 @@ async function saveProduct(tx: Tx, tenantId: string, id: string | null, input: u
     }
     keep.add(uid);
     await tx.query(`DELETE FROM barcodes WHERE unit_id = $1`, [uid]);
-    for (const code of new Set(u.barcodes.map((c) => c.trim()).filter(Boolean))) {
+    const codes = u.barcodes.map((c) => c.trim()).filter(Boolean);
+    if (autoBase && u.isBase) codes.push(await nextInStoreCode(tx, tenantId));
+    for (const code of new Set(codes)) {
       await tx.query(`INSERT INTO barcodes (tenant_id, unit_id, code) VALUES ($1,$2,$3)`, [tenantId, uid, code]);
     }
   }
@@ -207,37 +236,20 @@ export async function catalogRoutes(app: FastifyInstance) {
     return after;
   });
 
-  /** Devices pull the catalog changes since their last sync and keep a local copy for offline selling. */
-  /**
-   * Gives a unit its own barcode when it came without one (loose bread, local products…).
-   * Codes are EAN-13 starting 299, the in-store range, numbered per shop; the exact match is looked
-   * up before scale labels on the till, so they never read as a weight.
-   */
+  /** Gives a unit its own in-store barcode when it came without one (loose bread, local products…). */
   app.post("/barcodes/generate", managers, async (req) => {
     const { unitId } = z.object({ unitId: z.string().uuid() }).parse(req.body);
     return inTx(app.db, async (tx) => {
       const u = (await tx.query(`SELECT product_id FROM product_units WHERE id = $1 AND tenant_id = $2`, [unitId, req.user.tid])).rows[0];
       if (!u) throw new HttpError(404, "الوحدة غير موجودة");
-      await tx.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`barcode:${req.user.tid}`]);
-      const last = (await tx.query(
-        `SELECT max(substring(code, 4, 9)::bigint) AS n FROM barcodes WHERE tenant_id = $1 AND code ~ '^299[0-9]{10}$'`,
-        [req.user.tid],
-      )).rows[0].n;
-      let n = Number(last ?? 0) + 1;
-      for (;;) {
-        const body = `299${String(n).padStart(9, "0")}`;
-        const code = body + ean13CheckDigit(body);
-        const taken = await tx.query(`SELECT 1 FROM barcodes WHERE tenant_id = $1 AND code = $2`, [req.user.tid, code]);
-        if (!taken.rowCount) {
-          await tx.query(`INSERT INTO barcodes (tenant_id, unit_id, code) VALUES ($1,$2,$3)`, [req.user.tid, unitId, code]);
-          await tx.query(`UPDATE products SET updated_at = now() WHERE id = $1`, [u.product_id]);
-          return { code };
-        }
-        n++;
-      }
+      const code = await nextInStoreCode(tx, req.user.tid);
+      await tx.query(`INSERT INTO barcodes (tenant_id, unit_id, code) VALUES ($1,$2,$3)`, [req.user.tid, unitId, code]);
+      await tx.query(`UPDATE products SET updated_at = now() WHERE id = $1`, [u.product_id]);
+      return { code };
     });
   });
 
+  /** Devices pull the catalog changes since their last sync and keep a local copy for offline selling. */
   app.get("/sync/catalog", { preHandler: authenticate }, async (req) => {
     const { since } = z.object({ since: z.string().datetime().optional() }).parse(req.query);
     const serverTime = (await app.db.query(`SELECT now() AS t`)).rows[0].t as Date;

@@ -8,7 +8,7 @@ import { parseScaleLine, parseScaleOutput } from "../src/scale";
 
 const water: CatalogProduct = {
   id: "11111111-1111-4111-8111-111111111111", name: "مياه", sku: "W1", categoryId: null, isWeighted: false, scaleCode: null, taxBp: 0,
-  costMinor: 400, minStockMilli: 0, active: true, updatedAt: new Date().toISOString(),
+  costMinor: 400, minStockMilli: 0, active: true, trackExpiry: false, updatedAt: new Date().toISOString(),
   units: [
     { id: "21111111-1111-4111-8111-111111111111", name: "قنينة", factorMilli: 1000, priceMinor: 750, isBase: true, barcodes: ["6191234500011"] },
     { id: "31111111-1111-4111-8111-111111111111", name: "شد 6", factorMilli: 6000, priceMinor: 4000, isBase: false, barcodes: ["6191234500028"] },
