@@ -12,8 +12,8 @@ interface Reorder {
   base_unit_id: string; base_unit_name: string; last_unit_id: string | null; last_unit_name: string | null; last_factor_milli: number | null;
   last_cost_minor: number | null; supplier_id: string | null; supplier_name: string | null;
 }
-/** A supply line: bought in unitId, sold (priced) in sellUnitId, which may be a smaller unit. */
-interface Line { key: string; productId: string; name: string; unitId: string; sellUnitId: string; units: CatalogProduct["units"]; qty: string; cost: string; price: string; expiry: string; trackExpiry: boolean }
+/** A supply line: bought in unitId, with a selling price for each of the item's units (the piece, the box…). */
+interface Line { key: string; productId: string; name: string; unitId: string; units: CatalogProduct["units"]; qty: string; cost: string; prices: Record<string, string>; expiry: string; trackExpiry: boolean }
 
 /** Paying a supplier. */
 const METHOD = { cash: "نقدي", card: "بطاقة مصرفية", transfer: "تحويل مصرفي", cheque: "صك", other: "أخرى" } as const;
@@ -24,19 +24,31 @@ const dinars = (minor: number) => String(minor / 1000);
 const TABS = { invoice: "فاتورة توريد جديدة", invoices: "فواتير التوريد", suppliers: "الموردين", reorder: "النواقص" } as const;
 
 /**
- * A new line for a product, in the given unit, costed from what the product has now. The selling
- * price is the piece's (the base unit's) unless asked for another unit.
+ * A new line for a product, in the given unit, costed from what the product has now, with each
+ * unit's current selling price filled in (blank where it has none yet).
  */
-function lineFor(p: CatalogProduct, unitId: string, qty = "1", cost?: string, sellUnitId?: string): Line {
+function lineFor(p: CatalogProduct, unitId: string, qty = "1", cost?: string): Line {
   const u = p.units.find((x) => x.id === unitId) ?? p.units[0];
-  const s = p.units.find((x) => x.id === sellUnitId) ?? p.units.find((x) => x.isBase) ?? u;
   return {
-    key: crypto.randomUUID(), productId: p.id, name: p.name, unitId: u.id, sellUnitId: s.id, units: p.units, qty,
-    cost: cost ?? (p.costMinor ? dinars(Math.round((p.costMinor * u.factorMilli) / 1000)) : ""), price: s.priceMinor ? dinars(s.priceMinor) : "", expiry: "",
+    key: crypto.randomUUID(), productId: p.id, name: p.name, unitId: u.id, units: p.units, qty,
+    cost: cost ?? (p.costMinor ? dinars(Math.round((p.costMinor * u.factorMilli) / 1000)) : ""),
+    prices: Object.fromEntries(p.units.map((x) => [x.id, x.priceMinor ? dinars(x.priceMinor) : ""])), expiry: "",
     trackExpiry: !!p.trackExpiry,
   };
 }
-const factor = (l: Line, id: string) => l.units.find((u) => u.id === id)?.factorMilli ?? 1000;
+/**
+ * The selling price of one unit on a line, in dirham: as typed, or, left blank, the piece's price
+ * times what the unit holds (a box of 12 at 0.5 a piece is 6). null when there is nothing to go on.
+ */
+function priceOf(l: Line, unitId: string): number | null {
+  const typed = l.prices[unitId];
+  if (typed !== undefined && typed !== "") return toMinor(Number(typed) || 0);
+  const base = l.units.find((x) => x.isBase);
+  const unit = l.units.find((x) => x.id === unitId);
+  const bp = base ? l.prices[base.id] : "";
+  if (!base || !unit || unit.isBase || bp === undefined || bp === "") return null;
+  return Math.round((toMinor(Number(bp) || 0) * unit.factorMilli) / 1000);
+}
 
 export function Purchasing({ call, storeId, onLabels }: { call: Call; storeId: string; onLabels: (d: LabelDraft[]) => void }) {
   const [tab, setTab] = useState<keyof typeof TABS>("invoice");
@@ -100,20 +112,16 @@ function NewInvoice({ call, storeId, suppliers, reloadSuppliers, draft, clearDra
     setFind("");
   }
   const edit = (key: string, patch: Partial<Line>) => setLines((ls) => ls.map((l) => (l.key === key ? { ...l, ...patch } : l)));
-  /** Bought in another unit: its cost is the product's for that unit; the selling price stays. */
+  /** Bought in another unit: its cost is the product's for that unit; the selling prices stay. */
   const changeUnit = (l: Line, unitId: string) => {
     const p = products.find((x) => x.id === l.productId);
-    if (p) edit(l.key, { ...lineFor(p, unitId, l.qty, undefined, l.sellUnitId), key: l.key, expiry: l.expiry, price: l.price });
+    if (p) edit(l.key, { ...lineFor(p, unitId, l.qty), key: l.key, expiry: l.expiry, prices: l.prices });
   };
-  /** Priced in another unit: that unit's current price. */
-  const changeSellUnit = (l: Line, sellUnitId: string) => {
-    const u = l.units.find((x) => x.id === sellUnitId);
-    edit(l.key, { sellUnitId, price: u?.priceMinor ? dinars(u.priceMinor) : "" });
-  };
-  /** Profit on the selling price, with the cost brought to the unit it is sold in. */
+  const setPrice = (l: Line, unitId: string, v: string) => edit(l.key, { prices: { ...l.prices, [unitId]: v } });
+  /** Profit on the unit bought: its selling price against what it cost. */
   const margin = (l: Line) => {
-    const c = ((Number(l.cost) || 0) * factor(l, l.sellUnitId)) / factor(l, l.unitId);
-    const pr = Number(l.price) || 0;
+    const c = toMinor(Number(l.cost) || 0);
+    const pr = priceOf(l, l.unitId) ?? 0;
     return c > 0 && pr > 0 ? Math.round(((pr - c) / c) * 100) : null;
   };
   const missingExpiry = lines.filter((l) => l.trackExpiry && !l.expiry);
@@ -136,7 +144,8 @@ function NewInvoice({ call, storeId, suppliers, reloadSuppliers, draft, clearDra
           paidMinor: method === "credit" ? undefined : paidMinor,
           lines: lines.map((l) => ({
             unitId: l.unitId, qtyMilli: toMinor(Number(l.qty) || 0), unitCostMinor: toMinor(Number(l.cost) || 0),
-            sellPriceMinor: l.price === "" ? undefined : toMinor(Number(l.price) || 0), sellUnitId: l.sellUnitId, expiryDate: l.expiry || undefined,
+            unitPrices: l.units.flatMap((u) => { const pr = priceOf(l, u.id); return pr === null ? [] : [{ unitId: u.id, priceMinor: pr }]; }),
+            expiryDate: l.expiry || undefined,
           })),
         },
       });
@@ -189,7 +198,7 @@ function NewInvoice({ call, storeId, suppliers, reloadSuppliers, draft, clearDra
           setProducts((ps) => [...ps, p]);
           // Bought in its biggest packing (a box), priced by the piece.
           const big = [...p.units].sort((a, b) => b.factorMilli - a.factorMilli)[0];
-          setLines((ls) => [...ls, { ...lineFor(p, big.id), cost: "", price: "" }]);
+          setLines((ls) => [...ls, { ...lineFor(p, big.id), cost: "" }]);
           setQuick(null);
           setFind("");
         }} />
@@ -210,13 +219,17 @@ function NewInvoice({ call, storeId, suppliers, reloadSuppliers, draft, clearDra
                   <td><input className="num" value={l.qty} onChange={(e) => edit(l.key, { qty: e.target.value })} style={{ width: 80 }} /></td>
                   <td><input className="num" value={l.cost} onChange={(e) => edit(l.key, { cost: e.target.value })} style={{ width: 90 }} aria-label="سعر الشراء" /></td>
                   <td>
-                    <div className="row" style={{ flexWrap: "nowrap", gap: 4 }}>
-                      <input className="num" value={l.price} onChange={(e) => edit(l.key, { price: e.target.value })} style={{ width: 90 }} aria-label="سعر البيع" />
-                      {l.units.length > 1 ? (
-                        <select value={l.sellUnitId} onChange={(e) => changeSellUnit(l, e.target.value)} style={{ width: "auto" }} aria-label="سعر البيع لـ">
-                          {l.units.map((u) => <option key={u.id} value={u.id}>/ {u.name}</option>)}
-                        </select>
-                      ) : <span className="muted">/ {l.units[0].name}</span>}
+                    <div className="sell-prices">
+                      {l.units.map((u) => {
+                        const auto = !u.isBase && (l.prices[u.id] ?? "") === "" ? priceOf(l, u.id) : null;
+                        return (
+                          <label key={u.id} className="sell-price">
+                            <input className="num" value={l.prices[u.id] ?? ""} onChange={(e) => setPrice(l, u.id, e.target.value)}
+                              placeholder={auto !== null ? `${dinars(auto)} تلقائي` : ""} aria-label={`سعر البيع / ${u.name}`} />
+                            <span className="muted">/ {u.name}</span>
+                          </label>
+                        );
+                      })}
                     </div>
                   </td>
                   <td className="num">{(() => { const m = margin(l); return m === null ? "—" : <span className={m < 0 ? "badge bad" : "muted"}>{m}%</span>; })()}</td>

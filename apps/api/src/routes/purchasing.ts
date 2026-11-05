@@ -36,6 +36,8 @@ export const purchaseSchema = z.object({
     /** The new selling price, set as the goods come in: of this unit, or of sellUnitId (a box bought, a piece priced). */
     sellPriceMinor: z.number().int().nonnegative().optional(),
     sellUnitId: z.string().uuid().optional(),
+    /** New selling prices for any of the item's units at once (the piece and the box). */
+    unitPrices: z.array(z.object({ unitId: z.string().uuid(), priceMinor: z.number().int().nonnegative() })).max(10).optional(),
     expiryDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   })).min(1).max(500),
 });
@@ -130,13 +132,18 @@ export async function purchasingRoutes(app: FastifyInstance) {
         )).rows[0];
         if (!u) throw new HttpError(400, "وحدة غير موجودة");
         if (u.track_expiry && !l.expiryDate) throw new HttpError(400, `«${u.name}» خاضع للصلاحية، اكتب تاريخ الصلاحية`);
-        let sellUnit = { id: l.unitId, name: u.unit_name as string };
-        if (l.sellUnitId && l.sellUnitId !== l.unitId) {
-          const s = (await tx.query(`SELECT id, name FROM product_units WHERE id = $1 AND product_id = $2`, [l.sellUnitId, u.product_id])).rows[0];
-          if (!s) throw new HttpError(400, "وحدة البيع مش من نفس الصنف");
-          sellUnit = s;
-        }
-        units.push({ ...l, ...u, sellUnit, total: Math.round((l.qtyMilli * l.unitCostMinor) / 1000) });
+        // Selling prices set on this line, each for one of the item's own units.
+        const asked = new Map<string, number>((l.unitPrices ?? []).map((x) => [x.unitId, x.priceMinor]));
+        if (l.sellPriceMinor !== undefined) asked.set(l.sellUnitId ?? l.unitId, l.sellPriceMinor);
+        const own = (await tx.query(`SELECT id, name FROM product_units WHERE product_id = $1`, [u.product_id])).rows as { id: string; name: string }[];
+        const prices = [...asked].map(([id, price]) => {
+          const unit = own.find((x) => x.id === id);
+          if (!unit) throw new HttpError(400, "وحدة البيع مش من نفس الصنف");
+          return { ...unit, price };
+        });
+        // The line records the price of the unit bought when it was set, else the first one set.
+        const shown = prices.find((x) => x.id === l.unitId) ?? prices[0] ?? null;
+        units.push({ ...l, ...u, prices, shown, total: Math.round((l.qtyMilli * l.unitCostMinor) / 1000) });
       }
       const total = units.reduce((a, l) => a + l.total, 0);
       if (!b.supplierId && b.paymentMethod === "credit") throw new HttpError(400, "الآجل يحتاج مورد");
@@ -151,10 +158,10 @@ export async function purchasingRoutes(app: FastifyInstance) {
         await tx.query(
           `INSERT INTO purchase_lines (tenant_id, invoice_id, product_id, unit_id, name, unit_name, qty_milli, unit_cost_minor, total_minor, sell_price_minor, expiry_date, sell_unit_name)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-          [req.user.tid, inv, l.product_id, l.unitId, l.name, l.unit_name, l.qtyMilli, l.unitCostMinor, l.total, l.sellPriceMinor ?? null, l.expiryDate ?? null, l.sellPriceMinor === undefined ? null : l.sellUnit.name],
+          [req.user.tid, inv, l.product_id, l.unitId, l.name, l.unit_name, l.qtyMilli, l.unitCostMinor, l.total, l.shown?.price ?? null, l.expiryDate ?? null, l.shown?.name ?? null],
         );
-        if (l.sellPriceMinor !== undefined) {
-          await tx.query(`UPDATE product_units SET price_minor = $2 WHERE id = $1 AND price_minor <> $2`, [l.sellUnit.id, l.sellPriceMinor]);
+        if (l.prices.length) {
+          for (const x of l.prices) await tx.query(`UPDATE product_units SET price_minor = $2 WHERE id = $1 AND price_minor <> $2`, [x.id, x.price]);
           await tx.query(`UPDATE products SET updated_at = now() WHERE id = $1`, [l.product_id]); // tills pick up the new price
         }
         await tx.query(

@@ -1261,4 +1261,16 @@ describe("the item card", () => {
     const juice = (await call("GET", "/products", t)).body.find((p: { name: string }) => p.name === "عصير");
     expect((await call("POST", "/purchases", t, { storeId: store, lines: [{ ...line, expiryDate: "2027-06-01", sellUnitId: juice.units[0].id }] })).status).toBe(400);
   });
+
+  it("sets the piece's and the box's selling prices on one line", async () => {
+    const water = (await call("GET", "/products", t)).body.find((p: { name: string }) => p.name === "مياه 330 مل");
+    const piece = water.units.find((u: { isBase: boolean }) => u.isBase).id;
+    const box = water.units.find((u: { isBase: boolean }) => !u.isBase).id;
+    const r = await call("POST", "/purchases", t, { storeId: store, lines: [{ unitId: box, qtyMilli: 2000, unitCostMinor: 12000, expiryDate: "2027-07-01", unitPrices: [{ unitId: piece, priceMinor: 500 }, { unitId: box, priceMinor: 5000 }] }] });
+    expect(r.status).toBe(200);
+    const after = (await call("GET", "/products", t)).body.find((p: { name: string }) => p.name === "مياه 330 مل");
+    expect(after.units.map((u: { priceMinor: number }) => u.priceMinor)).toEqual([500, 5000]);
+    // The line keeps the price of the unit bought.
+    expect((await call("GET", `/purchases/${r.body.id}`, t)).body.lines[0]).toMatchObject({ sell_price_minor: 5000, sell_unit_name: "صندوق" });
+  });
 });
