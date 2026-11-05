@@ -68,7 +68,7 @@ const FORM_KINDS: PayrollKind[] = ["late", "absence", "paid_leave", "unpaid_leav
 function Sheet({ call, storeId, userId, month, onBack }: { call: Call; storeId: string; userId: string; month: string; onBack: () => void }) {
   const [s, setS] = useState<(SheetRow & { entries: PayEntry[] }) | null>(null);
   const [kind, setKind] = useState<PayrollKind>("late");
-  const [f, setF] = useState({ amount: "", days: "1", minutes: "15", date: "", note: "", fromCash: true });
+  const [f, setF] = useState({ amount: "", days: "1", minutes: "15", date: "", note: "", fromCash: true, method: "cash" });
   const [msg, setMsg] = useState<{ text: string; bad?: boolean } | null>(null);
   const load = () => call<SheetRow & { entries: PayEntry[] }>(`/payroll/${userId}?month=${month}`).then(setS);
   useEffect(() => void load(), [userId, month]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -92,6 +92,7 @@ function Sheet({ call, storeId, userId, month, onBack }: { call: Call; storeId: 
           onDate: f.date || undefined,
           note: f.note || undefined,
           storeId: (k === "advance" || k === "payment") && f.fromCash ? storeId : undefined,
+          method: k === "advance" || k === "payment" ? f.method : undefined,
         },
       });
       setF({ ...f, amount: "", note: "" });
@@ -151,7 +152,18 @@ function Sheet({ call, storeId, userId, month, onBack }: { call: Call; storeId: 
         </div>
         {suggested !== null && !f.amount && kind !== "paid_leave" && <small className="muted">محسوب من الراتب: {formatMoney(suggested)} (يوم = راتب ÷ 30، ويوم العمل {s.user.day_minutes / 60} ساعات). تقدر تكتب مبلغ ثاني.</small>}
         {kind === "paid_leave" && <small className="muted">الإجازة براتب تنحسب أيامها بدون أي خصم.</small>}
-        {cash && <label className="check"><input type="checkbox" checked={f.fromCash} onChange={(e) => setF({ ...f, fromCash: e.target.checked })} /> طلعت من خزينة الفرع، تتسجل في المصروفات</label>}
+        {cash && (
+          <div className="row wrap">
+            <label className="check"><input type="checkbox" checked={f.fromCash} onChange={(e) => setF({ ...f, fromCash: e.target.checked })} /> تتسجل في المصروفات والخزينة</label>
+            {f.fromCash && (
+              <select value={f.method} onChange={(e) => setF({ ...f, method: e.target.value })} style={{ width: "auto" }} aria-label="طريقة الصرف">
+                <option value="cash">💵 نقدي</option>
+                <option value="card">💳 بطاقة مصرفية</option>
+                <option value="transfer">🏦 تحويل مصرفي</option>
+              </select>
+            )}
+          </div>
+        )}
         {msg && <div className={msg.bad ? "error" : "notice"}>{msg.text}</div>}
       </div>
 

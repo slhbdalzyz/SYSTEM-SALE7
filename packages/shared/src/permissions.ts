@@ -7,6 +7,7 @@ export const PERMISSIONS = {
   customers: "العملاء والديون",
   offers: "العروض",
   expenses: "المصروفات",
+  money: "الخزينة وأرصدة النقدي والبنك",
   payroll: "الرواتب والخصومات",
   alerts: "التنبيهات",
   staff: "الموظفين وصلاحياتهم",
@@ -26,8 +27,8 @@ export const ROLE_NAMES = {
 /** What each job can do unless the owner ticks something else for that person. */
 export const ROLE_PERMISSIONS: Record<keyof typeof ROLE_NAMES, readonly Permission[]> = {
   owner: PERMISSION_KEYS,
-  manager: ["reports", "products", "purchasing", "branches", "customers", "offers", "expenses", "payroll", "alerts", "staff", "devices"],
-  accountant: ["reports", "purchasing", "customers", "expenses", "payroll", "alerts"],
+  manager: ["reports", "products", "purchasing", "branches", "customers", "offers", "expenses", "money", "payroll", "alerts", "staff", "devices"],
+  accountant: ["reports", "purchasing", "customers", "expenses", "money", "payroll", "alerts"],
   data_entry: ["products", "purchasing", "offers"],
   cashier: [],
 };

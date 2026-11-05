@@ -23,6 +23,7 @@ import { offerRoutes } from "./routes/offers";
 import { subscriptionRoutes } from "./routes/subscription";
 import { ownerRoutes } from "./routes/owner";
 import { payrollRoutes } from "./routes/payroll";
+import { moneyRoutes } from "./routes/money";
 import { restoreRoutes } from "./routes/restore";
 import { subscriptionGuard } from "./billing";
 import { setGateway, type Gateway } from "./payments/gateway";
@@ -88,5 +89,6 @@ export async function buildApp(opts: AppOptions) {
   await app.register(ownerRoutes);
   await app.register(restoreRoutes);
   await app.register(payrollRoutes);
+  await app.register(moneyRoutes);
   return app;
 }
