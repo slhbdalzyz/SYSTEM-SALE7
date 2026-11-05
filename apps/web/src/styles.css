@@ -364,3 +364,21 @@ label.check.dim { color: var(--muted); }
 .seg.wrap button.active { background: var(--brand); border-color: var(--brand); }
 .kpi.hero b.num { font-size: clamp(1.4rem, 2.2vw, 2rem); white-space: nowrap; }
 .kpi b.num { white-space: nowrap; }
+
+/* The treasury */
+.money-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.money-card { display: grid; gap: 8px; text-align: start; padding: 16px; border-radius: 16px; cursor: pointer; }
+.money-card .row { align-items: center; }
+.money-card small { display: block; font-weight: 400; }
+.money-card.active { border-color: var(--brand); box-shadow: 0 0 0 2px var(--brand) inset; }
+.money-icon { width: 44px; height: 44px; border-radius: 12px; background: var(--brand-soft); display: grid; place-items: center; font-size: 1.4rem; flex: none; }
+.money-balance { font-size: 1.9rem; white-space: nowrap; }
+.money-balance.bad { color: var(--danger); }
+.money-flow { display: flex; justify-content: space-between; gap: 8px; font-size: .88rem; }
+/* Wide tables scroll sideways on a phone instead of pushing the page wider. */
+@media (max-width: 760px) {
+  .main .card table { display: block; overflow-x: auto; max-width: 100%; }
+}
+.stack > *, .grid-main > *, .grid-2 > * { min-width: 0; }
+.panel > *, .card > * { min-width: 0; }
+.chart { min-width: 0; overflow: hidden; }

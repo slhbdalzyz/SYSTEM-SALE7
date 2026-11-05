@@ -34,6 +34,7 @@ export const BACKUP_TABLES: { name: string; key: "uuid" | "bigint"; omit?: strin
   { name: "expenses", key: "uuid" },
   { name: "payroll_months", key: "uuid" },
   { name: "payroll_entries", key: "uuid" },
+  { name: "money_movements", key: "uuid" },
   { name: "subscription_payments", key: "uuid" },
   { name: "alerts", key: "bigint" },
   { name: "audit_log", key: "bigint" },
@@ -242,7 +243,7 @@ export async function ownerRoutes(app: FastifyInstance) {
   app.get("/expenses", { preHandler: requirePerm("expenses") }, async (req) => {
     const q = z.object({ storeId: z.string().uuid().optional(), month: z.string().regex(/^\d{4}-\d{2}$/) }).parse(req.query);
     const r = await app.db.query(
-      `SELECT e.id, e.category, e.amount_minor, e.note, to_char(e.spent_on, 'YYYY-MM-DD') AS spent_on, st.name AS store_name, u.name AS user_name
+      `SELECT e.id, e.category, e.amount_minor, e.note, e.payment_method, to_char(e.spent_on, 'YYYY-MM-DD') AS spent_on, st.name AS store_name, u.name AS user_name
        FROM expenses e JOIN stores st ON st.id = e.store_id LEFT JOIN users u ON u.id = e.user_id
        WHERE e.tenant_id = $1 AND ($2::uuid IS NULL OR e.store_id = $2) AND to_char(e.spent_on, 'YYYY-MM') = $3
        ORDER BY e.spent_on DESC, e.created_at DESC`,
@@ -260,11 +261,12 @@ export async function ownerRoutes(app: FastifyInstance) {
       amountMinor: z.number().int().positive().max(1e12),
       note: z.string().max(200).optional(),
       spentOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      paymentMethod: z.enum(["cash", "card", "transfer"]).default("cash"),
     }).parse(req.body);
     await ownStore(req.user.tid, b.storeId);
     const r = await app.db.query(
-      `INSERT INTO expenses (tenant_id, store_id, category, amount_minor, note, spent_on, user_id) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
-      [req.user.tid, b.storeId, b.category, b.amountMinor, b.note || null, b.spentOn, req.user.sub],
+      `INSERT INTO expenses (tenant_id, store_id, category, amount_minor, note, spent_on, user_id, payment_method) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+      [req.user.tid, b.storeId, b.category, b.amountMinor, b.note || null, b.spentOn, req.user.sub, b.paymentMethod],
     );
     await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "expense.add", entity: "expense", entityId: r.rows[0].id, data: b });
     return { id: r.rows[0].id };

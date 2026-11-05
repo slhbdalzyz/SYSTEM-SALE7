@@ -151,6 +151,8 @@ export async function payrollRoutes(app: FastifyInstance) {
       onDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
       note: z.string().max(300).optional(),
       storeId: z.string().uuid().optional(),
+      /** How a payment or an advance was handed over. */
+      method: z.enum(["cash", "card", "transfer"]).default("cash"),
     }).parse(req.body);
     const tid = req.user.tid;
     const month = await monthStart(app.db, b.month);
@@ -184,9 +186,9 @@ export async function payrollRoutes(app: FastifyInstance) {
         const st = await tx.query(`SELECT 1 FROM stores WHERE id = $1 AND tenant_id = $2`, [b.storeId, tid]);
         if (!st.rowCount) throw new HttpError(404, "الفرع غير موجود");
         expenseId = (await tx.query(
-          `INSERT INTO expenses (tenant_id, store_id, category, amount_minor, note, spent_on, user_id)
-           VALUES ($1,$2,$3,$4,$5,COALESCE($6::date, (now() AT TIME ZONE '${TZ}')::date),$7) RETURNING id`,
-          [tid, b.storeId, category, amount, `${u.name} — ${month.slice(0, 7)}${b.note ? ` — ${b.note}` : ""}`, b.onDate ?? null, req.user.sub],
+          `INSERT INTO expenses (tenant_id, store_id, category, amount_minor, note, spent_on, user_id, payment_method)
+           VALUES ($1,$2,$3,$4,$5,COALESCE($6::date, (now() AT TIME ZONE '${TZ}')::date),$7,$8) RETURNING id`,
+          [tid, b.storeId, category, amount, `${u.name} — ${month.slice(0, 7)}${b.note ? ` — ${b.note}` : ""}`, b.onDate ?? null, req.user.sub, b.method],
         )).rows[0].id;
       }
       const r = await tx.query(

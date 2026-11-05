@@ -1142,3 +1142,71 @@ describe("jobs, permissions and salaries", () => {
     expect((await call("GET", "/me/payroll", accountant)).body.user.name).toBe("منى المحاسبة");
   });
 });
+
+describe("the treasury: cash, card and bank", () => {
+  let t: string;
+  let store: string;
+  let till: string;
+  let unit: { productId: string; unitId: string };
+  const day = new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Tripoli" }).format(new Date());
+
+  it("adds up every way money comes in and goes out, per account", async () => {
+    const reg = (await app.inject({ method: "POST", url: "/auth/register", remoteAddress: "10.0.0.91", payload: { businessName: "محل الخزينة", storeName: "الرئيسي", ownerName: "نوري", email: "money@test.ly", password: "password123" } })).json();
+    t = reg.token;
+    store = reg.storeId;
+    const p = await call("POST", "/products", t, { name: "سكر", costMinor: 2000, units: [{ name: "كيس", priceMinor: 5000, isBase: true }] });
+    unit = { productId: p.body.id, unitId: p.body.units[0].id };
+    const d = await call("POST", "/devices", t, { storeId: store, name: "كاشير" });
+    const u = await call("POST", "/users", t, { name: "سعيد", role: "cashier", pin: "4321" });
+    till = (await call("POST", "/auth/pin", undefined, { deviceToken: d.body.deviceToken, userId: u.body.id, pin: "4321" })).body.token;
+
+    expect((await call("POST", "/money/movements", t, { account: "cash", kind: "opening", amountMinor: 100000 })).status).toBe(200);
+    const line = (qty: number) => [{ productId: unit.productId, unitId: unit.unitId, name: "سكر", qtyMilli: qty * 1000, priceMinor: 5000 }];
+    const sales = [
+      { id: randomUUID(), number: "M-1", createdAt: new Date().toISOString(), lines: line(2), payments: [{ method: "cash", amountMinor: 20000 }], totalMinor: 10000 }, // 10.000 change
+      { id: randomUUID(), number: "M-2", createdAt: new Date().toISOString(), lines: line(1), payments: [{ method: "card", amountMinor: 5000 }], totalMinor: 5000 },
+    ];
+    const r = await call("POST", "/sales/batch", till, { sales });
+    expect(r.body.results.map((x: { status: string }) => x.status)).toEqual(["accepted", "accepted"]);
+    const c = await call("POST", "/customers", till, { name: "زبون آجل" });
+    await call("POST", `/customers/${c.body.id}/payments`, till, { id: randomUUID(), method: "card", amountMinor: 3000 });
+    await call("POST", "/expenses", t, { storeId: store, category: "كهرباء", amountMinor: 2000, spentOn: day });
+    await call("POST", "/expenses", t, { storeId: store, category: "إيجار", amountMinor: 1500, spentOn: day, paymentMethod: "transfer" });
+    await call("POST", "/purchases", t, { storeId: store, lines: [{ unitId: unit.unitId, qtyMilli: 3000, unitCostMinor: 2000 }], paymentMethod: "cash" }); // −6.000 cash
+    const sup = await call("POST", "/suppliers", t, { name: "مورد السكر" });
+    await call("POST", `/suppliers/${sup.body.id}/payments`, t, { amountMinor: 4000, method: "transfer" });
+
+    const s = (await call("GET", "/money/summary", t)).body;
+    expect(s.accounts.cash.balanceMinor).toBe(100000 + 10000 - 2000 - 6000);
+    expect(s.accounts.card.balanceMinor).toBe(5000 + 3000);
+    expect(s.accounts.transfer.balanceMinor).toBe(-1500 - 4000);
+    expect(s.totalMinor).toBe(102000 + 8000 - 5500);
+    expect(s.series).toHaveLength(30);
+    expect(s.series.at(-1)).toMatchObject({ day, cash: 102000, card: 8000, transfer: -5500 });
+    expect(s.accounts.cash.todayInMinor).toBe(110000);
+  });
+
+  it("moves money between accounts, keeps a running balance, and undoes a hand entry", async () => {
+    const tr = await call("POST", "/money/transfers", t, { from: "cash", to: "transfer", amountMinor: 50000, note: "إيداع في المصرف" });
+    expect(tr.status).toBe(200);
+    expect((await call("POST", "/money/transfers", t, { from: "cash", to: "cash", amountMinor: 1 })).status).toBe(400);
+    let s = (await call("GET", "/money/summary", t)).body;
+    expect(s.accounts.cash.balanceMinor).toBe(52000);
+    expect(s.accounts.transfer.balanceMinor).toBe(44500);
+    expect(s.totalMinor).toBe(52000 + 8000 + 44500);
+
+    const l = (await call("GET", `/money/ledger?account=cash&from=${day}&to=${day}`, t)).body;
+    expect(l.rows[0].balance).toBe(52000);
+    expect(l.closingMinor).toBe(52000);
+    expect(l.rows.map((x: { source: string }) => x.source).sort()).toEqual(["expense", "opening", "purchase", "sale", "transfer"]);
+    const moved = l.rows.find((x: { source: string }) => x.source === "transfer");
+    expect((await call("POST", `/money/movements/${moved.movement_id}/delete`, t)).status).toBe(200);
+    s = (await call("GET", "/money/summary", t)).body;
+    expect(s.accounts.cash.balanceMinor).toBe(102000);
+    expect(s.accounts.transfer.balanceMinor).toBe(-5500);
+
+    expect((await call("POST", "/money/movements", t, { account: "cash", kind: "adjust", amountMinor: -500, note: "عجز بعد الجرد" })).status).toBe(200);
+    expect((await call("GET", "/money/summary", t)).body.accounts.cash.balanceMinor).toBe(101500);
+    expect((await call("GET", "/money/summary", till)).status).toBe(403);
+  });
+});

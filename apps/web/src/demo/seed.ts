@@ -134,7 +134,7 @@ async function addOwnerDemo(db: Q) {
     [JSON.stringify(sales), tid, sid, did, uid],
   );
   await db.query(
-    `INSERT INTO payments (tenant_id, sale_id, method, amount_minor) SELECT $2, x.id, 'cash', x.total FROM jsonb_to_recordset($1::jsonb) AS x(id uuid, total bigint)`,
+    `INSERT INTO payments (tenant_id, sale_id, method, amount_minor) SELECT $2, x.id, CASE WHEN get_byte(decode(md5(x.id::text), 'hex'), 0) % 3 = 0 THEN 'card' ELSE 'cash' END, x.total FROM jsonb_to_recordset($1::jsonb) AS x(id uuid, total bigint)`,
     [JSON.stringify(sales), tid],
   );
   await db.query(
@@ -160,6 +160,15 @@ async function addOwnerDemo(db: Q) {
     );
   }
   await seedPayroll(db, tid, sid, owner);
+  // Where the money stood when the shop started using the system, and the cash banked since.
+  await db.query(
+    `INSERT INTO money_movements (tenant_id, account, kind, amount_minor, note, on_date, created_by, transfer_id) VALUES
+       ($1,'cash','opening',2500000,'الخزنة أول ما بدينا',(now() AT TIME ZONE 'Africa/Tripoli')::date - 30,$2,NULL),
+       ($1,'transfer','opening',18000000,'رصيد المصرف',(now() AT TIME ZONE 'Africa/Tripoli')::date - 30,$2,NULL),
+       ($1,'cash','transfer',-1500000,'إيداع في المصرف',(now() AT TIME ZONE 'Africa/Tripoli')::date - 2,$2,'00000000-0000-4000-8000-000000000001'),
+       ($1,'transfer','transfer',1500000,'إيداع في المصرف',(now() AT TIME ZONE 'Africa/Tripoli')::date - 2,$2,'00000000-0000-4000-8000-000000000001')`,
+    [tid, owner],
+  );
   for (const [kind, title, body, ago, read] of [
     ["cash_diff", "الدرج ناقص 12.500 د.ل", "أحمد الكاشير قفل الوردية على كاشير 1", "26 hours", true],
     ["big_discount", "خصم 25.000 د.ل", "أحمد الكاشير عطى خصم على الفاتورة P1-000231", "5 hours", false],
