@@ -10,6 +10,9 @@ export default defineConfig({
   // The demo is served from any folder (a file host or a shared link), so its asset paths are relative.
   base: demo ? "./" : "/",
   build: demo ? { outDir: "dist-demo", chunkSizeWarningLimit: 4000 } : undefined,
+  // Always a fixed string, so the demo's code (and its 10 MB database) is dropped from a real
+  // build even when VITE_DEMO isn't set at all, as on the Windows app's build machine.
+  define: { "import.meta.env.VITE_DEMO": JSON.stringify(demo ? "1" : "") },
   // The demo runs the API's route code in the page; these two Node modules get browser stand-ins.
   resolve: { alias: { "node:crypto": shims, pg: shims } },
   optimizeDeps: { exclude: ["@electric-sql/pglite"] },
