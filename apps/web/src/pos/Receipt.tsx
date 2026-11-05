@@ -16,6 +16,8 @@ export interface ReceiptData {
   sale?: SaleInput;
   changeMinor?: number;
   customerName?: string | null;
+  /** Not printed: where the till offers to send the invoice on WhatsApp. */
+  customerPhone?: string | null;
   employeeName?: string | null;
   ret?: ReturnDone;
   payment?: { customerName: string; amountMinor: number; method: "cash" | "card"; balanceMinor: number; at: string };

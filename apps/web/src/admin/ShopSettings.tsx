@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { readShopSettings, type SaleInput, type ShopSettings as Settings } from "@pos/shared";
+import { fillTemplate, formatMoney, readShopSettings, type SaleInput, type ShopSettings as Settings } from "@pos/shared";
 import type { Call } from "./Admin";
 import { Receipt, type ReceiptData } from "../pos/Receipt";
 import { PrinterDialog } from "../hardware/PrinterDialog";
@@ -77,6 +77,7 @@ export function ShopSettings({ call, storeName, onSaved, openAlerts }: { call: C
   const bank = (patch: Partial<Settings["bank"]>) => up({ bank: { ...s.bank, ...patch } });
   const rc = (patch: Partial<Settings["receipt"]>) => up({ receipt: { ...s.receipt, ...patch } });
   const till = (patch: Partial<Settings["till"]>) => up({ till: { ...s.till, ...patch } });
+  const wa = (patch: Partial<Settings["whatsapp"]>) => up({ whatsapp: { ...s.whatsapp, ...patch } });
   const field = (label: string, value: string, set: (v: string) => void, extra: { max?: number; ph?: string; wide?: boolean; num?: boolean } = {}) => (
     <label style={extra.wide ? { gridColumn: "1 / -1" } : undefined}>
       {label}
@@ -196,6 +197,22 @@ export function ShopSettings({ call, storeName, onSaved, openAlerts }: { call: C
           %
           <span className="muted">{s.till.cashierMaxDiscountPct === 0 ? "ما يقدرش يعطي خصم" : ""}</span>
         </label>
+      </section>
+
+      <section className="card stack">
+        <b>📲 رسائل الواتساب</b>
+        <div className="muted">الكاشير يبعت الفاتورة للزبون، وانت تذكّر العملاء بديونهم من صفحة العملاء. الكلمات بين القوسين تتعبى تلقائياً: {"{shop}"} اسم المحل، {"{number}"} رقم الفاتورة، {"{total}"} المبلغ، {"{link}"} رابط الفاتورة، {"{name}"} اسم العميل، {"{balance}"} الدين.</div>
+        <div className="wa-grid">
+          <label>رسالة الفاتورة
+            <textarea rows={4} value={s.whatsapp.invoiceMessage} maxLength={600} onChange={(e) => wa({ invoiceMessage: e.target.value })} />
+            <span className="wa-bubble">{fillTemplate(s.whatsapp.invoiceMessage, { shop: name, number: "A-000123", total: formatMoney(9500), link: `${location.origin}/?r=…` })}</span>
+          </label>
+          <label>رسالة تذكير الدين
+            <textarea rows={4} value={s.whatsapp.debtMessage} maxLength={600} onChange={(e) => wa({ debtMessage: e.target.value })} />
+            <span className="wa-bubble">{fillTemplate(s.whatsapp.debtMessage, { shop: name, name: "محمد", balance: formatMoney(45000) })}</span>
+          </label>
+        </div>
+        <Check on={s.whatsapp.offerAfterSale} set={(v) => wa({ offerAfterSale: v })}>بعد كل بيعة يطلع للكاشير زر «أرسل الفاتورة على الواتساب»</Check>
       </section>
 
       <section className="card stack">

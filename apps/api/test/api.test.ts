@@ -1323,3 +1323,35 @@ describe("the shop's settings and the invoices page", () => {
     expect((await call("GET", `/invoices?from=${today}&to=2020-01-01`, owner)).status).toBe(400);
   });
 });
+
+describe("WhatsApp invoice link and a new shop's first steps", () => {
+  it("shows an invoice to anyone with its link, with the shop's receipt details and nothing private", async () => {
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Tripoli" }).format(new Date());
+    const sale = (await call("GET", `/invoices?from=${today}&to=${today}&kind=sale`, owner)).body.rows[0];
+    const r = await call("GET", `/public/receipts/${sale.id}`);
+    expect(r.body.error ?? r.status).toBe(200);
+    expect(r.body).toMatchObject({ number: sale.number, kind: "sale", shop: { name: expect.any(String) } });
+    expect(r.body.lines.length).toBeGreaterThan(0);
+    expect(r.body.shop.settings.till).toBeUndefined();
+    expect(r.body.shop.settings.whatsapp).toBeUndefined();
+    expect(r.body.lines[0].product_id).toBe("");
+    expect((await call("GET", `/public/receipts/${randomUUID()}`)).status).toBe(404);
+    expect((await call("GET", `/public/receipts/not-an-id`)).status).toBe(400);
+  });
+
+  it("signs up a shop with its type, city and phone, then ticks off its first steps", async () => {
+    const reg = (await app.inject({
+      method: "POST", url: "/auth/register", remoteAddress: "10.0.0.93",
+      payload: { businessName: "محل الأمل", storeName: "الرئيسي", ownerName: "سارة", email: "amal@test.ly", password: "password123", businessType: "other", city: "مصراتة", phone: "0925555555" },
+    })).json();
+    expect(reg.token).toBeTruthy();
+    const s = (await call("GET", "/settings", reg.token)).body.settings;
+    expect(s).toMatchObject({ phone: "0925555555", city: "مصراتة", whatsapp: { offerAfterSale: true } });
+    expect(s.whatsapp.invoiceMessage).toContain("{link}");
+    const first = (await call("GET", "/onboarding", reg.token)).body;
+    expect(first).toEqual({ businessType: "other", steps: { settings: false, products: false, purchases: false, devices: false, staff: false, sales: false } });
+    await call("POST", "/products", reg.token, { name: "دفتر", autoCode: true, units: [{ name: "حبة", priceMinor: 0, isBase: true }] });
+    expect((await call("GET", "/onboarding", reg.token)).body.steps.products).toBe(true);
+    expect((await app.inject({ method: "POST", url: "/auth/register", remoteAddress: "10.0.0.93", payload: { businessName: "x محل", storeName: "فرع", ownerName: "سس", email: "bad@test.ly", password: "password123", businessType: "spaceship" } })).statusCode).toBe(400);
+  });
+});
