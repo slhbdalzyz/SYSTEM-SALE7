@@ -13,6 +13,7 @@ import m009 from "../../../api/migrations/009_owner.sql?raw";
 import m010 from "../../../api/migrations/010_restore.sql?raw";
 import m011 from "../../../api/migrations/011_loyalty.sql?raw";
 import m012 from "../../../api/migrations/012_departments_purchases.sql?raw";
+import m013 from "../../../api/migrations/013_loyalty_cleanup.sql?raw";
 import { setGateway } from "../../../api/src/payments/gateway";
 import { fakeGateway } from "../../../api/src/payments/fake";
 import { authRoutes } from "../../../api/src/routes/auth";
@@ -128,7 +129,7 @@ async function boot(): Promise<MiniApp> {
   }
   await pg.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY)`);
   const done = new Set((await pg.query<{ name: string }>(`SELECT name FROM schema_migrations`)).rows.map((r) => r.name));
-  for (const [name, sql] of [["001_init.sql", m001], ["002_customers_returns.sql", m002], ["003_device_kinds.sql", m003], ["004_saas.sql", m004], ["005_purchasing.sql", m005], ["006_branches.sql", m006], ["007_offers.sql", m007], ["008_online_payments.sql", m008], ["009_owner.sql", m009], ["010_restore.sql", m010], ["011_loyalty.sql", m011], ["012_departments_purchases.sql", m012]] as const) {
+  for (const [name, sql] of [["001_init.sql", m001], ["002_customers_returns.sql", m002], ["003_device_kinds.sql", m003], ["004_saas.sql", m004], ["005_purchasing.sql", m005], ["006_branches.sql", m006], ["007_offers.sql", m007], ["008_online_payments.sql", m008], ["009_owner.sql", m009], ["010_restore.sql", m010], ["011_loyalty.sql", m011], ["012_departments_purchases.sql", m012], ["013_loyalty_cleanup.sql", m013]] as const) {
     if (done.has(name)) continue;
     await pg.exec(sql);
     await pg.query(`INSERT INTO schema_migrations (name) VALUES ($1)`, [name]);
