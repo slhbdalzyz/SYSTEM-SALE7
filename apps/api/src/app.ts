@@ -23,7 +23,6 @@ import { offerRoutes } from "./routes/offers";
 import { subscriptionRoutes } from "./routes/subscription";
 import { ownerRoutes } from "./routes/owner";
 import { restoreRoutes } from "./routes/restore";
-import { loyaltyRoutes } from "./routes/loyalty";
 import { subscriptionGuard } from "./billing";
 import { setGateway, type Gateway } from "./payments/gateway";
 import { plutuFromEnv } from "./payments/plutu";
@@ -87,6 +86,5 @@ export async function buildApp(opts: AppOptions) {
   await app.register(subscriptionRoutes);
   await app.register(ownerRoutes);
   await app.register(restoreRoutes);
-  await app.register(loyaltyRoutes);
   return app;
 }

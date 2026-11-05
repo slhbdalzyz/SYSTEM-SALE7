@@ -5,17 +5,30 @@ import type { Call } from "./Admin";
 import type { LabelDraft } from "./Labels";
 
 interface Supplier { id: string; name: string; phone: string | null; note: string | null; active: boolean; balance_minor: number; last_purchase_at: string | null }
-interface Invoice { id: string; supplier_ref: string | null; invoice_date: string; total_minor: number; paid_minor: number; supplier_name: string | null; store_name: string; lines: number; created_at: string }
+interface Invoice { id: string; supplier_ref: string | null; invoice_date: string; total_minor: number; paid_minor: number; payment_method: keyof typeof INVOICE_METHOD; supplier_name: string | null; store_name: string; lines: number; created_at: string }
 interface Reorder {
   id: string; name: string; is_weighted: boolean; min_stock_milli: number; stock_milli: number; suggest_milli: number; cost_minor: number;
   base_unit_id: string; base_unit_name: string; last_unit_id: string | null; last_unit_name: string | null; last_factor_milli: number | null;
   last_cost_minor: number | null; supplier_id: string | null; supplier_name: string | null;
 }
-interface Line { key: string; productId: string; name: string; unitId: string; units: CatalogProduct["units"]; qty: string; cost: string }
+interface Line { key: string; productId: string; name: string; unitId: string; units: CatalogProduct["units"]; qty: string; cost: string; price: string; expiry: string }
 
-const METHOD = { cash: "كاش", bank: "تحويل مصرفي", cheque: "صك", other: "أخرى" } as const;
+/** Paying a supplier. */
+const METHOD = { cash: "نقدي", card: "بطاقة مصرفية", transfer: "تحويل مصرفي", cheque: "صك", other: "أخرى" } as const;
+/** Settling a supply invoice. */
+export const INVOICE_METHOD = { credit: "آجل", cash: "نقدي", card: "بطاقة مصرفية", transfer: "تحويل مصرفي", cheque: "صك" } as const;
 const date = (d: string) => new Date(d).toLocaleDateString("en-GB");
-const TABS = { invoice: "فاتورة شراء جديدة", invoices: "الفواتير", suppliers: "الموردين", reorder: "النواقص" } as const;
+const dinars = (minor: number) => String(minor / 1000);
+const TABS = { invoice: "فاتورة توريد جديدة", invoices: "فواتير التوريد", suppliers: "الموردين", reorder: "النواقص" } as const;
+
+/** A new line for a product, in the given unit, priced from what the product has now. */
+function lineFor(p: CatalogProduct, unitId: string, qty = "1", cost?: string): Line {
+  const u = p.units.find((x) => x.id === unitId) ?? p.units[0];
+  return {
+    key: crypto.randomUUID(), productId: p.id, name: p.name, unitId: u.id, units: p.units, qty,
+    cost: cost ?? dinars(Math.round((p.costMinor * u.factorMilli) / 1000)), price: dinars(u.priceMinor), expiry: "",
+  };
+}
 
 export function Purchasing({ call, storeId, onLabels }: { call: Call; storeId: string; onLabels: (d: LabelDraft[]) => void }) {
   const [tab, setTab] = useState<keyof typeof TABS>("invoice");
@@ -49,7 +62,8 @@ function NewInvoice({ call, storeId, suppliers, reloadSuppliers, draft, clearDra
   const [lines, setLines] = useState<Line[]>([]);
   const [find, setFind] = useState("");
   const [paid, setPaid] = useState<string | null>(null);
-  const [method, setMethod] = useState<keyof typeof METHOD>("cash");
+  const [method, setMethod] = useState<keyof typeof INVOICE_METHOD>("credit");
+  const [quick, setQuick] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ text: string; bad?: boolean } | null>(null);
   const [received, setReceived] = useState<LabelDraft[] | null>(null);
 
@@ -69,15 +83,25 @@ function NewInvoice({ call, storeId, suppliers, reloadSuppliers, draft, clearDra
 
   const lineTotal = (l: Line) => Math.round(toMinor(Number(l.qty) || 0) * toMinor(Number(l.cost) || 0) / 1000);
   const total = lines.reduce((a, l) => a + lineTotal(l), 0);
-  const paidMinor = paid === null ? total : toMinor(Number(paid) || 0);
+  const paidMinor = method === "credit" ? 0 : paid === null ? total : toMinor(Number(paid) || 0);
 
   function add(p: CatalogProduct) {
     // Bought in the biggest unit usually; cost starts from the current cost.
     const unit = [...p.units].sort((a, b) => b.factorMilli - a.factorMilli)[0];
-    setLines((ls) => [...ls, { key: crypto.randomUUID(), productId: p.id, name: p.name, unitId: unit.id, units: p.units, qty: "1", cost: String((p.costMinor * unit.factorMilli) / 1e6) }]);
+    setLines((ls) => [...ls, lineFor(p, unit.id)]);
     setFind("");
   }
   const edit = (key: string, patch: Partial<Line>) => setLines((ls) => ls.map((l) => (l.key === key ? { ...l, ...patch } : l)));
+  /** Another unit: its cost and price are the product's for that unit. */
+  const changeUnit = (l: Line, unitId: string) => {
+    const p = products.find((x) => x.id === l.productId);
+    if (p) edit(l.key, { ...lineFor(p, unitId, l.qty), key: l.key, expiry: l.expiry });
+  };
+  const margin = (l: Line) => {
+    const c = Number(l.cost) || 0;
+    const pr = Number(l.price) || 0;
+    return c > 0 && pr > 0 ? Math.round(((pr - c) / c) * 100) : null;
+  };
 
   async function newSupplier() {
     const name = prompt("اسم المورد");
@@ -93,9 +117,12 @@ function NewInvoice({ call, storeId, suppliers, reloadSuppliers, draft, clearDra
     try {
       const r = await call<{ totalMinor: number; paidMinor: number }>("/purchases", {
         body: {
-          storeId, supplierId: supplierId || null, supplierRef: ref || undefined, invoiceDate: day, paymentMethod: method,
-          paidMinor: supplierId ? paidMinor : undefined,
-          lines: lines.map((l) => ({ unitId: l.unitId, qtyMilli: toMinor(Number(l.qty) || 0), unitCostMinor: toMinor(Number(l.cost) || 0) })),
+          storeId, supplierId, supplierRef: ref || undefined, invoiceDate: day, paymentMethod: method,
+          paidMinor: method === "credit" ? undefined : paidMinor,
+          lines: lines.map((l) => ({
+            unitId: l.unitId, qtyMilli: toMinor(Number(l.qty) || 0), unitCostMinor: toMinor(Number(l.cost) || 0),
+            sellPriceMinor: l.price === "" ? undefined : toMinor(Number(l.price) || 0), expiryDate: l.expiry || undefined,
+          })),
         },
       });
       // One label per piece that came in, for counted items (weighed ones get theirs from the scale).
@@ -106,7 +133,7 @@ function NewInvoice({ call, storeId, suppliers, reloadSuppliers, draft, clearDra
         if (!p || !u || !base || p.isWeighted) return [];
         return [{ productId: p.id, unitId: base.id, copies: Math.min(500, Math.round(((Number(l.qty) || 0) * u.factorMilli) / 1000)) }];
       }));
-      setMsg({ text: `تم الاستلام: ${formatMoney(r.totalMinor)}${r.totalMinor > r.paidMinor ? ` · باقي للمورد ${formatMoney(r.totalMinor - r.paidMinor)}` : ""}` });
+      setMsg({ text: `تم حفظ فاتورة التوريد ودخلت البضاعة للمخزون: ${formatMoney(r.totalMinor)}${r.totalMinor > r.paidMinor ? ` · دين للمورد ${formatMoney(r.totalMinor - r.paidMinor)}` : ""}` });
       setLines([]);
       setRef("");
       setPaid(null);
@@ -123,7 +150,7 @@ function NewInvoice({ call, storeId, suppliers, reloadSuppliers, draft, clearDra
         <label style={{ minWidth: 220 }}>المورد
           <div className="row" style={{ flexWrap: "nowrap" }}>
             <select value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
-              <option value="">بدون مورد (مدفوعة)</option>
+              <option value="">— اختار المورد —</option>
               {suppliers.filter((s) => s.active).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
             <button type="button" onClick={newSupplier}>+</button>
@@ -135,27 +162,39 @@ function NewInvoice({ call, storeId, suppliers, reloadSuppliers, draft, clearDra
       <div style={{ position: "relative" }}>
         <input placeholder="امسح باركود أو اكتب اسم الصنف لإضافته" value={find} onChange={(e) => setFind(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && matches[0]) add(matches[0]); }} />
-        {matches.length > 0 && (
+        {find.trim().length >= 2 && (
           <div className="results">
             {matches.map((p) => <button key={p.id} onClick={() => add(p)}><span>{p.name}</span><span className="muted num">{formatMoney(p.costMinor)}</span></button>)}
+            <button onClick={() => setQuick(find.trim())}><span>+ بطاقة صنف جديدة «{find.trim()}»</span><span /></button>
           </div>
         )}
       </div>
+      {quick !== null && (
+        <QuickProduct call={call} initial={quick} onClose={() => setQuick(null)} onCreated={(p) => {
+          setProducts((ps) => [...ps, p]);
+          setLines((ls) => [...ls, { ...lineFor(p, p.units[0].id), cost: "", price: "" }]);
+          setQuick(null);
+          setFind("");
+        }} />
+      )}
       {lines.length > 0 && (
         <div style={{ overflowX: "auto" }}>
           <table>
-            <thead><tr><th>الصنف</th><th>الوحدة</th><th>الكمية</th><th>تكلفة الوحدة</th><th>الإجمالي</th><th /></tr></thead>
+            <thead><tr><th>الصنف</th><th>الوحدة</th><th>الكمية</th><th>سعر الشراء</th><th>سعر البيع</th><th>الربح</th><th>تاريخ الصلاحية</th><th>الإجمالي</th><th /></tr></thead>
             <tbody>
               {lines.map((l) => (
                 <tr key={l.key}>
                   <td>{l.name}</td>
                   <td>
-                    <select value={l.unitId} onChange={(e) => edit(l.key, { unitId: e.target.value })} style={{ width: "auto" }}>
+                    <select value={l.unitId} onChange={(e) => changeUnit(l, e.target.value)} style={{ width: "auto" }}>
                       {l.units.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
                     </select>
                   </td>
                   <td><input className="num" value={l.qty} onChange={(e) => edit(l.key, { qty: e.target.value })} style={{ width: 80 }} /></td>
-                  <td><input className="num" value={l.cost} onChange={(e) => edit(l.key, { cost: e.target.value })} style={{ width: 100 }} /></td>
+                  <td><input className="num" value={l.cost} onChange={(e) => edit(l.key, { cost: e.target.value })} style={{ width: 90 }} aria-label="سعر الشراء" /></td>
+                  <td><input className="num" value={l.price} onChange={(e) => edit(l.key, { price: e.target.value })} style={{ width: 90 }} aria-label="سعر البيع" /></td>
+                  <td className="num">{(() => { const m = margin(l); return m === null ? "—" : <span className={m < 0 ? "badge bad" : "muted"}>{m}%</span>; })()}</td>
+                  <td><input type="date" value={l.expiry} onChange={(e) => edit(l.key, { expiry: e.target.value })} style={{ width: 150 }} aria-label="تاريخ الصلاحية" /></td>
                   <td className="num">{formatMoney(lineTotal(l))}</td>
                   <td><button className="danger" onClick={() => setLines((ls) => ls.filter((x) => x.key !== l.key))}>✕</button></td>
                 </tr>
@@ -166,19 +205,19 @@ function NewInvoice({ call, storeId, suppliers, reloadSuppliers, draft, clearDra
       )}
       <div className="row" style={{ alignItems: "end" }}>
         <div className="kpi"><span className="muted">الإجمالي</span><b className="num">{formatMoney(total)}</b></div>
-        {supplierId && (
-          <>
-            <label>المدفوع الآن<input className="num" value={paid ?? String(total / 1000)} onChange={(e) => setPaid(e.target.value)} style={{ width: 120 }} /></label>
-            <label>الطريقة
-              <select value={method} onChange={(e) => setMethod(e.target.value as keyof typeof METHOD)} style={{ width: "auto" }}>
-                {Object.entries(METHOD).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-              </select>
-            </label>
-            {total - paidMinor > 0 && <span className="badge off">يتسجل دين للمورد {formatMoney(total - paidMinor)}</span>}
-          </>
+        <label>طريقة الدفع
+          <div className="seg">
+            {(Object.keys(INVOICE_METHOD) as (keyof typeof INVOICE_METHOD)[]).map((k) => (
+              <button key={k} type="button" className={method === k ? "active" : ""} onClick={() => setMethod(k)}>{INVOICE_METHOD[k]}</button>
+            ))}
+          </div>
+        </label>
+        {method !== "credit" && (
+          <label>المدفوع الآن<input className="num" value={paid ?? String(total / 1000)} onChange={(e) => setPaid(e.target.value)} style={{ width: 120 }} /></label>
         )}
+        {total - paidMinor > 0 && <span className="badge off">يتسجل دين للمورد {formatMoney(total - paidMinor)}</span>}
         <span className="spacer" />
-        <button className="primary big" disabled={!lines.length || lines.some((l) => !(Number(l.qty) > 0))} onClick={save}>استلام البضاعة</button>
+        <button className="primary big" disabled={!supplierId || !lines.length || lines.some((l) => !(Number(l.qty) > 0) || l.cost === "")} onClick={save}>حفظ الفاتورة وإدخال البضاعة</button>
       </div>
       {msg && (
         <div className="row">
@@ -192,12 +231,12 @@ function NewInvoice({ call, storeId, suppliers, reloadSuppliers, draft, clearDra
 
 function Invoices({ call }: { call: Call }) {
   const [list, setList] = useState<Invoice[]>([]);
-  const [open, setOpen] = useState<(Invoice & { lines: { name: string; unit_name: string; qty_milli: number; unit_cost_minor: number; total_minor: number }[] }) | null>(null);
+  const [open, setOpen] = useState<(Invoice & { lines: { name: string; unit_name: string; qty_milli: number; unit_cost_minor: number; total_minor: number; sell_price_minor: number | null; expiry_date: string | null }[] }) | null>(null);
   useEffect(() => void call<Invoice[]>("/purchases").then(setList), [call]);
   return (
     <div className="card" style={{ padding: 0, overflow: "auto" }}>
       <table>
-        <thead><tr><th>التاريخ</th><th>المورد</th><th>رقم فاتورته</th><th>أصناف</th><th>الإجمالي</th><th>المدفوع</th></tr></thead>
+        <thead><tr><th>التاريخ</th><th>المورد</th><th>رقم فاتورته</th><th>أصناف</th><th>الإجمالي</th><th>الدفع</th><th>المدفوع</th></tr></thead>
         <tbody>
           {list.map((i) => (
             <tr key={i.id} onClick={async () => setOpen(await call(`/purchases/${i.id}`))} style={{ cursor: "pointer" }}>
@@ -206,6 +245,7 @@ function Invoices({ call }: { call: Call }) {
               <td className="num">{i.supplier_ref ?? "—"}</td>
               <td className="num">{i.lines}</td>
               <td className="num">{formatMoney(i.total_minor)}</td>
+              <td>{INVOICE_METHOD[i.payment_method] ?? "—"}</td>
               <td>{i.paid_minor >= i.total_minor ? <span className="badge ok">مدفوعة</span> : <span className="badge off num">{formatMoney(i.paid_minor)}</span>}</td>
             </tr>
           ))}
@@ -215,14 +255,19 @@ function Invoices({ call }: { call: Call }) {
       {open && (
         <Modal title={`فاتورة ${open.supplier_name ?? ""} ${open.supplier_ref ?? ""}`} onClose={() => setOpen(null)}>
           <table>
-            <thead><tr><th>الصنف</th><th>الكمية</th><th>التكلفة</th><th>الإجمالي</th></tr></thead>
+            <thead><tr><th>الصنف</th><th>الكمية</th><th>سعر الشراء</th><th>سعر البيع</th><th>الصلاحية</th><th>الإجمالي</th></tr></thead>
             <tbody>
               {open.lines.map((l, k) => (
-                <tr key={k}><td>{l.name}</td><td className="num">{formatQty(l.qty_milli, false)} {l.unit_name}</td><td className="num">{formatMoney(l.unit_cost_minor)}</td><td className="num">{formatMoney(l.total_minor)}</td></tr>
+                <tr key={k}>
+                  <td>{l.name}</td><td className="num">{formatQty(l.qty_milli, false)} {l.unit_name}</td><td className="num">{formatMoney(l.unit_cost_minor)}</td>
+                  <td className="num">{l.sell_price_minor === null ? "—" : formatMoney(l.sell_price_minor)}</td>
+                  <td className="num">{l.expiry_date ? date(l.expiry_date) : "—"}</td>
+                  <td className="num">{formatMoney(l.total_minor)}</td>
+                </tr>
               ))}
             </tbody>
           </table>
-          <div className="row"><b>الإجمالي</b><span className="spacer" /><b className="num">{formatMoney(open.total_minor)}</b></div>
+          <div className="row"><span className="muted">الدفع: {INVOICE_METHOD[open.payment_method] ?? "—"}</span><span className="spacer" /><b>الإجمالي</b><b className="num">{formatMoney(open.total_minor)}</b></div>
         </Modal>
       )}
     </div>
@@ -314,7 +359,7 @@ function Suppliers({ call, list, reload }: { call: Call; list: Supplier[]; reloa
               {statement.entries.map((e, i) => (
                 <tr key={i}>
                   <td className="num">{date(e.at)}</td>
-                  <td>{e.type === "invoice" ? "فاتورة شراء" : "تسديد"} <span className="muted num">{e.type === "payment" ? METHOD[e.ref as keyof typeof METHOD] ?? e.ref : e.ref}</span></td>
+                  <td>{e.type === "invoice" ? "فاتورة شراء" : "تسديد"} <span className="muted num">{e.type === "payment" ? METHOD[e.ref as keyof typeof METHOD] ?? (e.ref === "bank" ? "تحويل مصرفي" : e.ref) : e.ref}</span></td>
                   <td className="num">{formatMoney(e.amount_minor)}</td>
                   <td className="num">{formatMoney(e.balance_minor)}</td>
                 </tr>
@@ -352,11 +397,8 @@ function ReorderList({ call, storeId, order }: { call: Call; storeId: string; or
         // Order in the unit bought last time, rounded up to whole units.
         const factor = r.last_factor_milli ?? 1000;
         const qty = Math.max(1, Math.ceil(r.suggest_milli / factor));
-        return {
-          key: crypto.randomUUID(), productId: r.id, name: r.name, unitId: r.last_unit_id ?? r.base_unit_id,
-          units: products.find((p) => p.id === r.id)?.units ?? [],
-          qty: String(qty), cost: String((r.last_cost_minor ?? (r.cost_minor * factor) / 1000) / 1000),
-        };
+        const p = products.find((x) => x.id === r.id)!;
+        return lineFor(p, r.last_unit_id ?? r.base_unit_id, String(qty), dinars(r.last_cost_minor ?? Math.round((r.cost_minor * factor) / 1000)));
       }),
     });
   }
@@ -384,5 +426,54 @@ function ReorderList({ call, storeId, order }: { call: Call; storeId: string; or
         </div>
       ))}
     </div>
+  );
+}
+
+/**
+ * A product card made from the supply invoice when an item isn't in the list yet: just its name,
+ * department and barcode. No quantity: stock only ever comes in on an invoice.
+ */
+function QuickProduct({ call, initial, onClose, onCreated }: { call: Call; initial: string; onClose: () => void; onCreated: (p: CatalogProduct) => void }) {
+  const isCode = /^\d{6,}$/.test(initial);
+  const [f, setF] = useState({ name: isCode ? "" : initial, barcode: isCode ? initial : "", categoryId: "", unit: "حبة", weighted: false });
+  const [cats, setCats] = useState<{ id: string; name: string; icon: string | null }[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => void call<typeof cats>("/categories").then(setCats), [call]);
+  async function save() {
+    setError(null);
+    try {
+      const r = await call<CatalogProduct>("/products", {
+        body: {
+          name: f.name, categoryId: f.categoryId || null, isWeighted: f.weighted,
+          units: [{ name: f.weighted ? "كيلو" : f.unit, factorMilli: 1000, priceMinor: 0, isBase: true, barcodes: f.barcode && !f.weighted ? [f.barcode] : [] }],
+        },
+      });
+      onCreated(r);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+  return (
+    <Modal title="بطاقة صنف جديدة" onClose={onClose}>
+      <label>اسم الصنف<input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} autoFocus /></label>
+      <label>القسم
+        <select value={f.categoryId} onChange={(e) => setF({ ...f, categoryId: e.target.value })}>
+          <option value="">—</option>
+          {cats.map((c) => <option key={c.id} value={c.id}>{c.icon ? `${c.icon} ` : ""}{c.name}</option>)}
+        </select>
+      </label>
+      <label className="row" style={{ color: "var(--ink)" }}>
+        <input type="checkbox" style={{ width: "auto" }} checked={f.weighted} onChange={(e) => setF({ ...f, weighted: e.target.checked })} /> يباع بالوزن (كيلو)
+      </label>
+      {!f.weighted && (
+        <div className="row">
+          <label style={{ flex: 1 }}>وحدة البيع<input value={f.unit} onChange={(e) => setF({ ...f, unit: e.target.value })} /></label>
+          <label style={{ flex: 2 }}>الباركود<input className="num" value={f.barcode} onChange={(e) => setF({ ...f, barcode: e.target.value.trim() })} /></label>
+        </div>
+      )}
+      <p className="muted" style={{ margin: 0 }}>سعر الشراء والبيع والكمية تدخلهم في الفاتورة. وحدات أكبر (كرتونة…) تضيفها من صفحة الأصناف.</p>
+      {error && <div className="error">{error}</div>}
+      <div className="row"><span className="spacer" /><button onClick={onClose}>إلغاء</button><button className="primary" disabled={f.name.trim().length < 2} onClick={save}>إضافة للفاتورة</button></div>
+    </Modal>
   );
 }

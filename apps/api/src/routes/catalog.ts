@@ -111,14 +111,53 @@ function pgConflict(e: unknown): never {
 export async function catalogRoutes(app: FastifyInstance) {
   const managers = { preHandler: requireRole("owner", "manager") };
 
+  /** Departments (meat, vegetables, dairy…), in the shop's own order, with how many items each holds. */
   app.get("/categories", { preHandler: authenticate }, async (req) => {
-    return (await app.db.query(`SELECT id, name FROM categories WHERE tenant_id = $1 ORDER BY name`, [req.user.tid])).rows;
+    return (await app.db.query(
+      `SELECT c.id, c.name, c.icon, c.sort, (SELECT count(*)::int FROM products p WHERE p.category_id = c.id AND p.active) AS products
+       FROM categories c WHERE c.tenant_id = $1 ORDER BY c.sort, c.name`,
+      [req.user.tid],
+    )).rows;
   });
 
+  const categorySchema = z.object({ name: z.string().trim().min(1).max(80), icon: z.string().max(8).nullable().optional(), sort: z.number().int().min(0).max(9999).optional() });
+  const nameTaken = (e: unknown) => {
+    if ((e as { code?: string }).code === "23505") throw new HttpError(409, "فيه قسم بنفس الاسم");
+    throw e;
+  };
+
   app.post("/categories", managers, async (req) => {
-    const b = z.object({ name: z.string().min(1).max(80) }).parse(req.body);
-    const r = await app.db.query(`INSERT INTO categories (tenant_id, name) VALUES ($1,$2) RETURNING id`, [req.user.tid, b.name]);
+    const b = categorySchema.parse(req.body);
+    const r = await app.db.query(
+      `INSERT INTO categories (tenant_id, name, icon, sort)
+       VALUES ($1,$2,$3, COALESCE($4, (SELECT COALESCE(max(sort), 0) + 1 FROM categories WHERE tenant_id = $1))) RETURNING id`,
+      [req.user.tid, b.name, b.icon ?? null, b.sort ?? null],
+    ).catch(nameTaken);
     return { id: r.rows[0].id };
+  });
+
+  app.patch("/categories/:id", managers, async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const b = categorySchema.partial().parse(req.body);
+    const r = await app.db.query(
+      `UPDATE categories SET name = COALESCE($3, name), icon = CASE WHEN $4::boolean THEN $5 ELSE icon END, sort = COALESCE($6, sort), updated_at = now()
+       WHERE id = $1 AND tenant_id = $2`,
+      [id, req.user.tid, b.name ?? null, b.icon !== undefined, b.icon ?? null, b.sort ?? null],
+    ).catch(nameTaken);
+    if (!r.rowCount) throw new HttpError(404, "القسم غير موجود");
+    return { ok: true };
+  });
+
+  /** Removing a department keeps its items; they just have no department until moved. */
+  app.post("/categories/:id/delete", managers, async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const r = await inTx(app.db, async (tx) => {
+      await tx.query(`UPDATE products SET category_id = NULL, updated_at = now() WHERE category_id = $1 AND tenant_id = $2`, [id, req.user.tid]);
+      return tx.query(`DELETE FROM categories WHERE id = $1 AND tenant_id = $2 RETURNING name`, [id, req.user.tid]);
+    });
+    if (!r.rowCount) throw new HttpError(404, "القسم غير موجود");
+    await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "category.delete", entity: "category", entityId: id, data: { name: r.rows[0].name } });
+    return { ok: true };
   });
 
   app.get("/products", { preHandler: authenticate }, async (req) => {

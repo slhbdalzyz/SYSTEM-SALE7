@@ -15,15 +15,14 @@ export async function customerRoutes(app: FastifyInstance) {
 
   async function list(tenantId: string, q?: string, id?: string): Promise<CatalogCustomer[]> {
     const r = await app.db.query(
-      `SELECT c.id, c.name, c.phone, c.credit_limit_minor, c.active, b.balance_minor,
-         COALESCE((SELECT sum(e.points) FROM loyalty_entries e WHERE e.customer_id = c.id), 0)::bigint AS points
+      `SELECT c.id, c.name, c.phone, c.credit_limit_minor, c.active, b.balance_minor
        FROM customers c JOIN customer_balances b ON b.customer_id = c.id
        WHERE c.tenant_id = $1 AND ($2::text IS NULL OR c.name ILIKE '%' || $2 || '%' OR c.phone LIKE '%' || $2 || '%')
          AND ($3::uuid IS NULL OR c.id = $3)
        ORDER BY c.name LIMIT 1000`,
       [tenantId, q ?? null, id ?? null],
     );
-    return r.rows.map((c) => ({ id: c.id, name: c.name, phone: c.phone, creditLimitMinor: c.credit_limit_minor, balanceMinor: c.balance_minor, points: Number(c.points), active: c.active }));
+    return r.rows.map((c) => ({ id: c.id, name: c.name, phone: c.phone, creditLimitMinor: c.credit_limit_minor, balanceMinor: c.balance_minor, active: c.active }));
   }
 
   /** Devices keep this list for picking a customer and checking credit while offline. */
