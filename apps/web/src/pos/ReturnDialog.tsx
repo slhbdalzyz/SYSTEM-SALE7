@@ -29,6 +29,11 @@ export interface ReturnDone {
   customerName: string | null;
   method: RefundMethod;
   totalMinor: number;
+  /** What goes back by the refund method; the rest of the total goes back as points. */
+  refundMinor: number;
+  pointsMinor: number;
+  pointsBack: number;
+  pointsTaken: number;
   reason: string;
   lines: { name: string; qtyMilli: number; totalMinor: number }[];
 }
@@ -83,7 +88,7 @@ export function ReturnDialog({ shiftId, newNumber, onDone, onClose }: {
     setBusy(true);
     try {
       const returnNumber = await newNumber();
-      const r = await api<{ status: string; totalMinor: number; lines: { name: string; qtyMilli: number; totalMinor: number }[] }>("/returns", {
+      const r = await api<{ status: string; totalMinor: number; refundMinor?: number; pointsMinor?: number; pointsBack?: number; pointsTaken?: number; lines: { name: string; qtyMilli: number; totalMinor: number }[] }>("/returns", {
         token: session.staffToken,
         body: {
           id: crypto.randomUUID(),
@@ -96,7 +101,8 @@ export function ReturnDialog({ shiftId, newNumber, onDone, onClose }: {
           approval: isCashier ? { userId: approver, pin } : undefined,
         },
       });
-      onDone({ number: returnNumber, originalNumber: sale.number, customerName: sale.customer_name, method, totalMinor: r.totalMinor, reason, lines: r.lines });
+      onDone({ number: returnNumber, originalNumber: sale.number, customerName: sale.customer_name, method, totalMinor: r.totalMinor, refundMinor: r.refundMinor ?? r.totalMinor,
+        pointsMinor: r.pointsMinor ?? 0, pointsBack: r.pointsBack ?? 0, pointsTaken: r.pointsTaken ?? 0, reason, lines: r.lines });
     } catch (e) {
       setError((e as { status?: number }).status === 0 ? "المرتجع يحتاج اتصال بالسيرفر" : (e as Error).message);
     } finally {

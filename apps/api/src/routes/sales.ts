@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { applyOffers, computeLine, computeTotals, saleInputSchema, type SaleInput } from "@pos/shared";
+import { applyOffers, computeLine, computeTotals, pointsEarned, pointsFor, saleInputSchema, type SaleInput } from "@pos/shared";
+import { addPoints, customerPoints, loyaltySettings } from "../loyalty";
 import { currentOffers } from "./offers";
 import { alertBigDiscount, alertOverCreditLimit, checkLowStock, flushPushes } from "../alerts";
 import { audit, inTx } from "../db";
@@ -68,6 +69,9 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
     if (!customer) throw new Reject("العميل غير موجود");
   }
   if (credit > 0 && !customer) throw new Reject("البيع الآجل يحتاج عميل");
+  const pointsPaid = s.payments.filter((p) => p.method === "points").reduce((a, p) => a + p.amountMinor, 0);
+  if (pointsPaid > 0 && !customer) throw new Reject("الدفع بالنقاط يحتاج عميل");
+  if (pointsPaid > totals.total) throw new Reject("النقاط أكبر من الإجمالي");
   const paid = s.payments.reduce((a, p) => a + p.amountMinor, 0);
   const cash = s.payments.filter((p) => p.method === "cash").reduce((a, p) => a + p.amountMinor, 0);
   if (paid < totals.total) throw new Reject("المدفوع أقل من الإجمالي");
@@ -162,6 +166,22 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
         await alertBigDiscount(tx, { tenantId: tid, storeId: who.sid!, discountMinor: manual, number: s.number, cashier });
       }
       await checkLowStock(tx, tid, who.sid!, taken);
+
+      // Loyalty: spend what was paid in points, then earn on the rest. A till that was offline may
+      // have spent points the customer no longer had; the sale stands and gets flagged.
+      if (customer && s.customerId) {
+        const rules = await loyaltySettings(tx, tid);
+        if (pointsPaid > 0) {
+          await tx.query(`SELECT 1 FROM customers WHERE id = $1 FOR UPDATE`, [s.customerId]);
+          const have = await customerPoints(tx, s.customerId);
+          const spent = pointsFor(rules, pointsPaid);
+          await addPoints(tx, { tenantId: tid, customerId: s.customerId, points: -spent, kind: "redeem", saleId: s.id, userId: who.sub });
+          if (spent > have) {
+            await audit(tx, { tenantId: tid, userId: who.sub, deviceId: who.did, action: "loyalty.overdrawn", entity: "customer", entityId: s.customerId, data: { sale: s.number, had: have, spent } });
+          }
+        }
+        await addPoints(tx, { tenantId: tid, customerId: s.customerId, points: pointsEarned(rules, totals.total, pointsPaid), kind: "earn", saleId: s.id, userId: who.sub });
+      }
     });
   } catch (e) {
     const err = e as { code?: string; constraint?: string };
