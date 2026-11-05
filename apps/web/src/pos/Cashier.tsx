@@ -8,7 +8,8 @@ import { loadOffers, onSync, refreshCounts, startSyncLoop, syncNow, type SyncSta
 import { autoBackupIfDue } from "../owner/backup";
 import type { Screen } from "../App";
 import { addLine, cartTotals, lineFor, lineTotal, priceCart, toSaleInput, type CartLine } from "./cart";
-import { AmountDialog, Modal, PayDialog } from "./dialogs";
+import { AmountDialog, Modal, PayDialog, type Employee } from "./dialogs";
+import { MyPay } from "../admin/MyPay";
 import { Receipt, type ReceiptData } from "./Receipt";
 import { CustomerDialog } from "./CustomerDialog";
 import { ReturnDialog, type ReturnDone } from "./ReturnDialog";
@@ -28,6 +29,7 @@ type Dialog =
   | { kind: "customer" }
   | { kind: "return" }
   | { kind: "printer" }
+  | { kind: "mypay" }
   | null;
 
 export function Cashier({ go }: { go: (s: Screen) => void }) {
@@ -45,6 +47,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   const [receipt, setReceipt] = useState<ReceiptData | null>(null);
   const [catalogSize, setCatalogSize] = useState(0);
   const [customer, setCustomer] = useState<CatalogCustomer | null>(null);
+  const [employees, setEmployees] = useState<Employee[]>([]);
   const scanRef = useRef<HTMLInputElement>(null);
   const device = session.device;
   const role = tokenClaims(session.staffToken)?.role;
@@ -80,6 +83,14 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
         await setMeta("store", { footer: me.stores.find((s) => s.id === me.storeId)?.receipt_footer });
       } catch {
         /* offline: keep the footer saved last time */
+      }
+      // Who a bill can be put on; kept on the device so it works offline too.
+      try {
+        const staff = await api<Employee[]>("/payroll/employees", { token: session.staffToken });
+        await setMeta("employees", staff);
+        setEmployees(staff);
+      } catch {
+        setEmployees((await getMeta<Employee[]>("employees")) ?? []);
       }
     })();
     return () => void off();
@@ -224,11 +235,11 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     setCustomer(null);
   }
 
-  async function pay(payments: { method: PaymentMethod; amountMinor: number }[]) {
+  async function pay(payments: { method: PaymentMethod; amountMinor: number }[], employeeId: string | null = null) {
     if (!device) return;
     const id = crypto.randomUUID();
     const number = await nextInvoiceNumber(device.prefix);
-    const sale = toSaleInput({ id, number, shiftId: shift?.id ?? null, lines, offers, invoiceDiscountMinor: invoiceDiscount, payments, customerId: customer?.id });
+    const sale = toSaleInput({ id, number, shiftId: shift?.id ?? null, lines, offers, invoiceDiscountMinor: invoiceDiscount, payments, customerId: customer?.id, employeeId });
     const credit = payments.filter((p) => p.method === "credit").reduce((a, p) => a + p.amountMinor, 0);
     const paid = payments.reduce((a, p) => a + p.amountMinor, 0);
     const change = paid - sale.totalMinor;
@@ -241,7 +252,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     // Until the next sync, count the new debt locally so the credit limit still holds offline.
     if (customer && credit > 0) await db.customers.update(customer.id, { balanceMinor: customer.balanceMinor + credit });
     const store = await getMeta<{ footer?: string }>("store");
-    setReceipt({ storeName: device.storeName, footer: store?.footer, deviceName: device.name, cashierName, sale, changeMinor: change, customerName: customer?.name });
+    setReceipt({ storeName: device.storeName, footer: store?.footer, deviceName: device.name, cashierName, sale, changeMinor: change, customerName: customer?.name, employeeName: employees.find((e) => e.id === employeeId)?.name });
     clearCart();
     setDialog(null);
     flash(change > 0 ? `الباقي ${formatMoney(change)}` : "تم البيع");
@@ -367,6 +378,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
         <button onClick={() => void openCustomerDisplay()} title="افتحها على الشاشة الثانية">شاشة الزبون</button>
         <button onClick={() => setDialog({ kind: "printer" })}>الطابعة والميزان</button>
         <button onClick={() => void syncNow()}>مزامنة</button>
+        <button onClick={() => setDialog({ kind: "mypay" })}>💼 راتبي</button>
         <button onClick={askCloseShift} disabled={!shift}>قفل الوردية</button>
         <button onClick={logout}>خروج</button>
       </header>
@@ -501,7 +513,13 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
       <Receipt data={receipt} />
 
       {dialog?.kind === "printer" && <PrinterDialog onClose={() => { setDialog(null); focusScan(); }} />}
-      {dialog?.kind === "pay" && <PayDialog totalMinor={totals.total} customer={customer} onPay={pay} onClose={() => { setDialog(null); focusScan(); }} />}
+      {dialog?.kind === "mypay" && (
+        <Modal title="راتبي" onClose={() => { setDialog(null); focusScan(); }}>
+          <div className="mypay-modal"><MyPay token={session.staffToken} /></div>
+          <div className="row"><span className="spacer" /><button onClick={() => { setDialog(null); focusScan(); }}>إغلاق</button></div>
+        </Modal>
+      )}
+      {dialog?.kind === "pay" && <PayDialog totalMinor={totals.total} customer={customer} employees={employees} onPay={pay} onClose={() => { setDialog(null); focusScan(); }} />}
       {dialog?.kind === "weight" && (
         <AmountDialog
           title={dialog.product.name}

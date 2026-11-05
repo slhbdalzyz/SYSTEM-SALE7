@@ -19,6 +19,7 @@ interface Lookup {
   created_at: string;
   total_minor: number;
   customer_id: string | null;
+  employee_id: string | null;
   customer_name: string | null;
   cashier: string;
   lines: LookupLine[];
@@ -33,7 +34,7 @@ export interface ReturnDone {
   lines: { name: string; qtyMilli: number; totalMinor: number }[];
 }
 
-const METHODS: Record<RefundMethod, string> = { cash: "كاش من الدرج", card: "على البطاقة", credit: "يخصم من حساب العميل" };
+const METHODS: Record<RefundMethod, string> = { cash: "كاش من الدرج", card: "على البطاقة", credit: "يخصم من حساب العميل", payroll: "يرجع لراتب الموظف" };
 
 export function ReturnDialog({ shiftId, newNumber, onDone, onClose }: {
   shiftId: string | null;
@@ -64,7 +65,7 @@ export function ReturnDialog({ shiftId, newNumber, onDone, onClose }: {
       const s = await api<Lookup>(`/sales/lookup?number=${encodeURIComponent(number.trim())}`, { token: session.staffToken });
       setSale(s);
       setQty({});
-      setMethod(s.customer_id ? "credit" : "cash");
+      setMethod(s.employee_id ? "payroll" : s.customer_id ? "credit" : "cash");
     } catch (e) {
       setError((e as { status?: number }).status === 0 ? "المرتجع يحتاج اتصال بالسيرفر" : (e as Error).message);
     } finally {
@@ -138,7 +139,7 @@ export function ReturnDialog({ shiftId, newNumber, onDone, onClose }: {
           </table>
           <label>طريقة الإرجاع
             <select value={method} onChange={(e) => setMethod(e.target.value as RefundMethod)}>
-              {(Object.keys(METHODS) as RefundMethod[]).filter((m) => m !== "credit" || sale.customer_id).map((m) => <option key={m} value={m}>{METHODS[m]}</option>)}
+              {(Object.keys(METHODS) as RefundMethod[]).filter((m) => (m !== "credit" || sale.customer_id) && (m !== "payroll" || sale.employee_id)).map((m) => <option key={m} value={m}>{METHODS[m]}</option>)}
             </select>
           </label>
           <label>السبب<input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="منتهي، مكسور، غلط في الصنف…" /></label>

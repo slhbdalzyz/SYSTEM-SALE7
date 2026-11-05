@@ -5,6 +5,7 @@ import { currentOffers } from "./offers";
 import { alertBigDiscount, alertOverCreditLimit, checkLowStock, flushPushes } from "../alerts";
 import { audit, inTx } from "../db";
 import { requireDevice } from "../auth";
+import { payrollPurchase } from "./payroll";
 import type { TokenPayload } from "../auth";
 
 type Result = { id: string; status: "accepted" | "duplicate" } | { id: string; status: "rejected"; error: string };
@@ -74,6 +75,14 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
   const change = paid - totals.total;
   if (change > cash) throw new Reject("الباقي ما يكونش أكبر من المدفوع كاش");
   if (credit > totals.total) throw new Reject("الآجل أكبر من الإجمالي");
+  const onSalary = s.payments.filter((p) => p.method === "payroll").reduce((a, p) => a + p.amountMinor, 0);
+  let employee: { name: string } | undefined;
+  if (s.employeeId) {
+    employee = (await app.db.query(`SELECT name FROM users WHERE id = $1 AND tenant_id = $2`, [s.employeeId, tid])).rows[0];
+    if (!employee) throw new Reject("الموظف غير موجود");
+  }
+  if (onSalary > 0 && !employee) throw new Reject("الخصم من الراتب يحتاج موظف");
+  if (onSalary + credit > totals.total) throw new Reject("الآجل والخصم من الراتب أكبر من الإجمالي");
 
   const unitIds = [...new Set(s.lines.map((l) => l.unitId))];
   const units = await app.db.query(
@@ -113,9 +122,9 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
   try {
     await inTx(app.db, async (tx) => {
       await tx.query(
-        `INSERT INTO sales (id, tenant_id, store_id, device_id, shift_id, user_id, number, subtotal_minor, discount_minor, tax_minor, total_minor, paid_minor, change_minor, created_at, customer_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
-        [s.id, tid, who.sid, who.did, s.shiftId ?? null, who.sub, s.number, totals.subtotal, totals.discount, totals.tax, totals.total, paid, change, s.createdAt, s.customerId ?? null],
+        `INSERT INTO sales (id, tenant_id, store_id, device_id, shift_id, user_id, number, subtotal_minor, discount_minor, tax_minor, total_minor, paid_minor, change_minor, created_at, customer_id, employee_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+        [s.id, tid, who.sid, who.did, s.shiftId ?? null, who.sub, s.number, totals.subtotal, totals.discount, totals.tax, totals.total, paid, change, s.createdAt, s.customerId ?? null, onSalary > 0 ? s.employeeId : null],
       );
       const overrides: { name: string; catalog: number; sold: number }[] = [];
       const taken = new Map<string, number>();
@@ -139,6 +148,9 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
       }
       for (const p of s.payments) {
         await tx.query(`INSERT INTO payments (tenant_id, sale_id, method, amount_minor) VALUES ($1,$2,$3,$4)`, [tid, s.id, p.method, p.amountMinor]);
+      }
+      if (onSalary > 0) {
+        await payrollPurchase(tx, { tid, storeId: who.sid!, employeeId: s.employeeId!, employeeName: employee!.name, saleId: s.id, number: s.number, amountMinor: onSalary, createdAt: s.createdAt, by: who.sub });
       }
       // A price different from the catalog is either an offline device with old prices or a manual override; both are worth a look.
       if (overrides.length) {

@@ -4,11 +4,12 @@ import { refundFor, returnInputSchema } from "@pos/shared";
 import { audit, inTx } from "../db";
 import { HttpError, authenticate, requireDevice, verifyApproval } from "../auth";
 import { alertBigReturn, flushPushes } from "../alerts";
+import { payrollReturn } from "./payroll";
 
 export async function returnRoutes(app: FastifyInstance) {
   async function loadSale(tenantId: string, where: { id?: string; number?: string }) {
     const s = (await app.db.query(
-      `SELECT s.id, s.number, s.kind, s.created_at, s.total_minor, s.discount_minor, s.customer_id, c.name AS customer_name, u.name AS cashier
+      `SELECT s.id, s.number, s.kind, s.created_at, s.total_minor, s.discount_minor, s.customer_id, s.employee_id, c.name AS customer_name, u.name AS cashier
        FROM sales s JOIN users u ON u.id = s.user_id LEFT JOIN customers c ON c.id = s.customer_id
        WHERE s.tenant_id = $1 AND ($2::uuid IS NULL OR s.id = $2) AND ($3::text IS NULL OR s.number = $3)`,
       [tenantId, where.id ?? null, where.number ?? null],
@@ -41,10 +42,11 @@ export async function returnRoutes(app: FastifyInstance) {
     const done = await app.db.query(`SELECT 1 FROM sales WHERE id = $1 AND tenant_id = $2`, [b.id, who.tid]);
     if (done.rowCount) return { id: b.id, status: "duplicate" };
 
-    const approvedBy = who.role === "cashier" ? await verifyApproval(app.db, who.tid, b.approval) : who.sub;
+    const approvedBy = !["owner", "manager"].includes(who.role) ? await verifyApproval(app.db, who.tid, b.approval) : who.sub;
     const orig = await loadSale(who.tid, { id: b.originalSaleId });
     if (!orig || orig.kind !== "sale") throw new HttpError(404, "الفاتورة الأصلية غير موجودة");
     if (b.refundMethod === "credit" && !orig.customer_id) throw new HttpError(400, "الإرجاع على الحساب يحتاج فاتورة عليها عميل");
+    if (b.refundMethod === "payroll" && !orig.employee_id) throw new HttpError(400, "الإرجاع على الراتب يحتاج فاتورة مخصومة من راتب موظف");
     if (b.shiftId) {
       const sh = await app.db.query(`SELECT 1 FROM shifts WHERE id = $1 AND tenant_id = $2 AND device_id = $3 AND closed_at IS NULL`, [b.shiftId, who.tid, who.did]);
       if (!sh.rowCount) throw new HttpError(400, "الوردية غير مفتوحة على هذا الجهاز");
@@ -84,6 +86,9 @@ export async function returnRoutes(app: FastifyInstance) {
           );
         }
         await tx.query(`INSERT INTO payments (tenant_id, sale_id, method, amount_minor) VALUES ($1,$2,$3,$4)`, [who.tid, b.id, b.refundMethod, -total]);
+        if (b.refundMethod === "payroll") {
+          await payrollReturn(tx, { tid: who.tid, employeeId: orig.employee_id, originalSaleId: orig.id, returnId: b.id, number: b.number, amountMinor: total, by: who.sub });
+        }
         await audit(tx, {
           tenantId: who.tid, userId: who.sub, deviceId: who.did, action: "sale.return", entity: "sale", entityId: orig.id,
           data: { returnNumber: b.number, original: orig.number, total, method: b.refundMethod, approvedBy, reason: b.reason },

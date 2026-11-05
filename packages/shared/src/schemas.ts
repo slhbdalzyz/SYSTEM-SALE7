@@ -1,9 +1,9 @@
 import { z } from "zod";
 
-export const ROLES = ["owner", "manager", "cashier"] as const;
+export const ROLES = ["owner", "manager", "accountant", "data_entry", "cashier"] as const;
 export type Role = (typeof ROLES)[number];
 
-export const PAYMENT_METHODS = ["cash", "card", "credit"] as const;
+export const PAYMENT_METHODS = ["cash", "card", "credit", "payroll"] as const;
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
 
 const minor = z.number().int();
@@ -39,6 +39,8 @@ export const saleInputSchema = z.object({
   payments: z.array(paymentSchema).min(1).max(5),
   totalMinor: minor,
   customerId: z.string().uuid().nullable().optional(),
+  /** The employee whose salary pays the "payroll" part. */
+  employeeId: z.string().uuid().nullable().optional(),
 });
 export type SaleInput = z.infer<typeof saleInputSchema>;
 export type SaleLineInput = z.infer<typeof saleLineSchema>;
@@ -117,7 +119,7 @@ export const approvalSchema = z.object({
   pin: z.string().regex(/^\d{4,8}$/),
 });
 
-export const REFUND_METHODS = ["cash", "card", "credit"] as const;
+export const REFUND_METHODS = ["cash", "card", "credit", "payroll"] as const;
 export type RefundMethod = (typeof REFUND_METHODS)[number];
 
 /** Returns are priced by the server from the original sale; the device only says what comes back. */

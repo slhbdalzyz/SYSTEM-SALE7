@@ -1,7 +1,7 @@
 import bcrypt from "bcryptjs";
 import { createHash, randomBytes } from "node:crypto";
 import type { FastifyReply, FastifyRequest } from "fastify";
-import type { Role } from "@pos/shared";
+import { effectivePermissions, type Permission, type Role } from "@pos/shared";
 
 export interface TokenPayload {
   sub: string; // user id
@@ -54,6 +54,22 @@ export function requireRole(...roles: Role[]) {
   return async (req: FastifyRequest, _reply: FastifyReply) => {
     await authenticate(req);
     if (!roles.includes(req.user.role as Role)) throw new HttpError(403, "ليس لديك صلاحية");
+  };
+}
+
+/**
+ * Lets the owner through, and anyone else whose permissions include one of these.
+ * Permissions are read from the database on every call, so a change or a suspended account
+ * takes effect at once, without waiting for the person's login to expire.
+ */
+export function requirePerm(...perms: Permission[]) {
+  return async (req: FastifyRequest, _reply: FastifyReply) => {
+    await authenticate(req);
+    if (req.user.role === "owner") return;
+    const u = (await req.server.db.query(`SELECT role, permissions FROM users WHERE id = $1 AND tenant_id = $2 AND active`, [req.user.sub, req.user.tid])).rows[0];
+    if (!u) throw new HttpError(401, "الحساب موقوف");
+    const mine = effectivePermissions(u.role, u.permissions);
+    if (!perms.some((p) => mine.includes(p))) throw new HttpError(403, "ليس لديك صلاحية");
   };
 }
 

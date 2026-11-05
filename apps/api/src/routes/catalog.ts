@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { ean13CheckDigit, productInputSchema, type CatalogProduct } from "@pos/shared";
 import { audit, inTx, type Db, type Tx } from "../db";
-import { HttpError, authenticate, requireRole } from "../auth";
+import { HttpError, authenticate, requirePerm } from "../auth";
 
 export async function loadProducts(q: Db | Tx, tenantId: string, opts: { since?: Date; ids?: string[] } = {}): Promise<CatalogProduct[]> {
   const where = ["p.tenant_id = $1"];
@@ -109,7 +109,7 @@ function pgConflict(e: unknown): never {
 }
 
 export async function catalogRoutes(app: FastifyInstance) {
-  const managers = { preHandler: requireRole("owner", "manager") };
+  const managers = { preHandler: requirePerm("products") };
 
   /** Departments (meat, vegetables, dairy…), in the shop's own order, with how many items each holds. */
   app.get("/categories", { preHandler: authenticate }, async (req) => {

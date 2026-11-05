@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { audit, inTx } from "../db";
-import { HttpError, requireRole } from "../auth";
+import { HttpError, requireRole, requirePerm } from "../auth";
 import { assertWithinPlan } from "../billing";
 
 const storeSchema = z.object({
@@ -21,7 +21,7 @@ const transferSchema = z.object({
 const stockSql = `SELECT COALESCE(sum(qty_milli), 0)::bigint AS s FROM stock_movements WHERE tenant_id = $1 AND store_id = $2 AND product_id = $3`;
 
 export async function branchRoutes(app: FastifyInstance) {
-  const managers = { preHandler: requireRole("owner", "manager") };
+  const managers = { preHandler: requirePerm("branches") };
   const owners = { preHandler: requireRole("owner") };
 
   app.get("/stores", managers, async (req) => {
@@ -65,7 +65,7 @@ export async function branchRoutes(app: FastifyInstance) {
   });
 
   /** Sales side by side for every branch over a date range (store-local days). */
-  app.get("/reports/branches", managers, async (req) => {
+  app.get("/reports/branches", { preHandler: requirePerm("branches", "reports") }, async (req) => {
     const q = z.object({ from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), tz: z.string().default("Africa/Tripoli") }).parse(req.query);
     const r = await app.db.query(
       `SELECT st.id, st.name,

@@ -1,10 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { HttpError, requireRole } from "../auth";
+import { HttpError, requirePerm } from "../auth";
 
 export async function reportRoutes(app: FastifyInstance) {
   /** Day summary for one store, using the store's local day (Libya by default). */
-  app.get("/reports/daily", { preHandler: requireRole("owner", "manager") }, async (req) => {
+  app.get("/reports/daily", { preHandler: requirePerm("reports") }, async (req) => {
     const q = z
       .object({ storeId: z.string().uuid(), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), tz: z.string().default("Africa/Tripoli") })
       .parse(req.query);
@@ -53,7 +53,7 @@ export async function reportRoutes(app: FastifyInstance) {
     return { ...summary.rows[0], byMethod: methods, customerPayments, byCashier: byCashier.rows, topProducts: top.rows, byHour: byHour.rows };
   });
 
-  const managers = { preHandler: requireRole("owner", "manager") };
+  const managers = { preHandler: requirePerm("reports") };
   const tz = z.string().max(64).regex(/^[A-Za-z_]+(\/[A-Za-z_+-]+)*$/).default("Africa/Tripoli");
   const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
   async function ownStore(tid: string, storeId: string | undefined) {

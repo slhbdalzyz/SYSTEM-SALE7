@@ -17,9 +17,13 @@ import { Expenses } from "./Expenses";
 import { Alerts } from "../owner/Alerts";
 import { AlertSettings, BackupCard, RestoreCard } from "../owner/Settings";
 import { setPreferredView } from "../owner/Owner";
+import { Payroll } from "./Payroll";
+import { Money } from "./Money";
+import { MyPay } from "./MyPay";
+import { ROLE_NAMES, type Permission } from "@pos/shared";
 
 export interface Me {
-  user: { id: string; name: string; role: string };
+  user: { id: string; name: string; role: string; job_title?: string | null; permissions: Permission[] };
   tenant: { id: string; name: string; currency: string };
   stores: { id: string; name: string; address: string | null; receipt_footer: string | null; active: boolean }[];
 }
@@ -30,12 +34,21 @@ export type Call = <T>(path: string, opts?: { method?: string; body?: unknown })
 const NAV = [
   { group: "", items: { home: ["🏠", "لوحة التحكم"], reports: ["📊", "التقارير"], alerts: ["🔔", "التنبيهات"] } },
   { group: "المخزون", items: { products: ["📦", "الأصناف والأقسام"], purchasing: ["🚚", "المشتريات والموردين"], branches: ["🏬", "الفروع والتحويلات"], labels: ["🏷️", "ملصقات الباركود"] } },
-  { group: "المبيعات", items: { customers: ["👥", "العملاء والديون"], offers: ["🎁", "العروض"], expenses: ["💸", "المصروفات"] } },
-  { group: "الإدارة", items: { staff: ["🧑‍💼", "الموظفين"], devices: ["🖥️", "الأجهزة"], backup: ["💾", "النسخ الاحتياطي"], subscription: ["⭐", "الاشتراك"] } },
+  { group: "المبيعات", items: { customers: ["👥", "العملاء والديون"], offers: ["🎁", "العروض"] } },
+  { group: "المال", items: { money: ["🏦", "الخزينة والأرصدة"], expenses: ["💸", "المصروفات"] } },
+  { group: "الموظفين", items: { staff: ["🧑‍💼", "الموظفين والصلاحيات"], payroll: ["💰", "الرواتب"], mypay: ["💼", "راتبي"] } },
+  { group: "الإدارة", items: { devices: ["🖥️", "الأجهزة"], backup: ["💾", "النسخ الاحتياطي"], subscription: ["⭐", "الاشتراك"] } },
 ] as const;
 type ItemKeys<T> = T extends { items: infer I } ? keyof I : never;
 type Tab = ItemKeys<(typeof NAV)[number]>;
 const TABS = Object.assign({}, ...NAV.map((g) => g.items)) as Record<Tab, readonly [string, string]>;
+
+/** What opens each screen. "owner" = the shop owner only; null = everyone (their own pay). */
+const NEEDS: Record<Tab, Permission | "owner" | null> = {
+  home: "reports", reports: "reports", alerts: "alerts", products: "products", purchasing: "purchasing", branches: "branches", labels: "products",
+  customers: "customers", offers: "offers", expenses: "expenses", money: "money", staff: "staff", payroll: "payroll", mypay: null, devices: "devices",
+  backup: "owner", subscription: "owner",
+};
 
 export function Admin({ go }: { go: (s: Screen) => void }) {
   const [me, setMe] = useState<Me | null>(null);
@@ -100,6 +113,12 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
   const store = open.find((s) => s.id === storeId) ?? open[0] ?? me.stores[0];
 
   const isOwner = me.user.role === "owner";
+  const can = (t: Tab) => {
+    const n = NEEDS[t];
+    return n === null || isOwner || (n !== "owner" && me.user.permissions.includes(n));
+  };
+  // Someone who can't see the dashboard starts on the first screen they can open.
+  const shown: Tab = can(tab) ? tab : ((Object.keys(TABS) as Tab[]).find(can) ?? "mypay");
   return (
     <div className={`shell ${menu ? "menu-open" : ""}`}>
       <aside className="side">
@@ -115,11 +134,11 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
           </div>
         </div>
         <nav>
-          {NAV.map((g) => (
+          {NAV.map((g) => ({ g, keys: (Object.keys(g.items) as Tab[]).filter(can) })).filter((x) => x.keys.length).map(({ g, keys }) => (
             <div key={g.group} className="side-group">
               {g.group && <small>{g.group}</small>}
-              {(Object.keys(g.items) as Tab[]).map((k) => (
-                <button key={k} className={tab === k ? "active" : ""} onClick={() => setTab(k)}>
+              {keys.map((k) => (
+                <button key={k} className={shown === k ? "active" : ""} onClick={() => setTab(k)}>
                   <span className="side-icon">{TABS[k][0]}</span>{TABS[k][1]}
                 </button>
               ))}
@@ -128,7 +147,7 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
         </nav>
         <div className="side-foot">
           <div className="avatar">{me.user.name.trim().slice(0, 1)}</div>
-          <div style={{ minWidth: 0, flex: 1 }}><b className="ellipsis">{me.user.name}</b><small>{isOwner ? "صاحب المحل" : "مدير"}</small></div>
+          <div style={{ minWidth: 0, flex: 1 }}><b className="ellipsis">{me.user.name}</b><small>{me.user.job_title || ROLE_NAMES[me.user.role as keyof typeof ROLE_NAMES]}</small></div>
           <button className="ghost" onClick={logout}>خروج</button>
         </div>
       </aside>
@@ -136,31 +155,34 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
       <main className="main">
         <header className="topbar">
           <button className="ghost burger" onClick={() => setMenu(true)} aria-label="القائمة">☰</button>
-          <h1>{TABS[tab][0]} {TABS[tab][1]}</h1>
+          <h1>{TABS[shown][0]} {TABS[shown][1]}</h1>
           <span className="spacer" />
-          <button onClick={() => { setPreferredView("owner"); go("owner"); }}>📱 عرض التلفون</button>
+          {can("reports") && <button onClick={() => { setPreferredView("owner"); go("owner"); }}>📱 عرض التلفون</button>}
           {session.deviceToken && <button className="primary" onClick={() => go("pin")}>🛒 شاشة الكاشير</button>}
         </header>
-        {notice && tab !== "subscription" && (
+        {notice && isOwner && shown !== "subscription" && (
           <div className={notice.bad ? "error" : "notice"} onClick={() => setTab("subscription")} style={{ cursor: "pointer" }}>
             {notice.text} <u>التفاصيل</u>
           </div>
         )}
         <div className="stack" key={store.id}>
-          {tab === "home" && <Home call={call} storeId={store.id} userName={me.user.name} open={setTab} />}
-          {tab === "reports" && <Reports call={call} storeId={store.id} stores={open} />}
-          {tab === "products" && <Products call={call} storeId={store.id} />}
-          {tab === "purchasing" && <Purchasing call={call} storeId={store.id} onLabels={(d) => { setLabelDraft(d); setTab("labels"); }} />}
-          {tab === "labels" && <Labels call={call} storeId={store.id} storeName={me.tenant.name} draft={labelDraft} clearDraft={() => setLabelDraft(null)} />}
-          {tab === "branches" && <Branches call={call} storeId={store.id} isOwner={isOwner} onStoresChanged={loadMe} />}
-          {tab === "offers" && <Offers call={call} storeId={store.id} stores={me.stores} />}
-          {tab === "customers" && <Customers call={call} />}
-          {tab === "alerts" && <><Alerts call={call} /><AlertSettings call={call} isOwner={isOwner} /></>}
-          {tab === "expenses" && <Expenses call={call} storeId={store.id} stores={open} />}
-          {tab === "backup" && (isOwner ? <><BackupCard /><RestoreCard /></> : <div className="notice">النسخة الاحتياطية لصاحب المحل فقط</div>)}
-          {tab === "staff" && <Staff call={call} isOwner={isOwner} />}
-          {tab === "subscription" && <Subscription call={call} />}
-          {tab === "devices" && <Devices call={call} storeId={store.id} storeName={store.name} go={go} isOwner={isOwner} />}
+          {shown === "home" && <Home call={call} storeId={store.id} userName={me.user.name} open={setTab} />}
+          {shown === "reports" && <Reports call={call} storeId={store.id} stores={open} />}
+          {shown === "products" && <Products call={call} storeId={store.id} />}
+          {shown === "purchasing" && <Purchasing call={call} storeId={store.id} onLabels={(d) => { setLabelDraft(d); setTab("labels"); }} />}
+          {shown === "labels" && <Labels call={call} storeId={store.id} storeName={me.tenant.name} draft={labelDraft} clearDraft={() => setLabelDraft(null)} />}
+          {shown === "branches" && <Branches call={call} storeId={store.id} isOwner={isOwner} onStoresChanged={loadMe} />}
+          {shown === "offers" && <Offers call={call} storeId={store.id} stores={me.stores} />}
+          {shown === "customers" && <Customers call={call} />}
+          {shown === "alerts" && <><Alerts call={call} /><AlertSettings call={call} isOwner={isOwner} /></>}
+          {shown === "expenses" && <Expenses call={call} storeId={store.id} stores={open} />}
+          {shown === "backup" && (isOwner ? <><BackupCard /><RestoreCard /></> : <div className="notice">النسخة الاحتياطية لصاحب المحل فقط</div>)}
+          {shown === "staff" && <Staff call={call} isOwner={isOwner} mine={me.user.permissions} />}
+          {shown === "payroll" && <Payroll call={call} storeId={store.id} />}
+          {shown === "money" && <Money call={call} />}
+          {shown === "mypay" && <MyPay token={session.adminToken} />}
+          {shown === "subscription" && <Subscription call={call} />}
+          {shown === "devices" && <Devices call={call} storeId={store.id} storeName={store.name} go={go} isOwner={isOwner} />}
         </div>
       </main>
     </div>

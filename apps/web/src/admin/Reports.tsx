@@ -61,7 +61,7 @@ const PRESETS: Record<string, () => [string, string]> = {
   },
 };
 const DAYS = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
-const PAY: Record<string, string> = { cash: "نقدي", card: "بطاقة", credit: "آجل" };
+const PAY: Record<string, string> = { cash: "نقدي", card: "بطاقة", credit: "آجل", payroll: "على راتب الموظفين" };
 const dm = (d: string) => `${d.slice(8)}/${d.slice(5, 7)}`;
 const money = (n: number) => formatMoney(n);
 const pct = (a: number, b: number) => (b ? `${Math.round((a / b) * 100)}%` : "—");

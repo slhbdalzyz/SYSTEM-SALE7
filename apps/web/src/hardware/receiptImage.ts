@@ -10,7 +10,7 @@ type Row =
   | { kind: "rule" }
   | { kind: "space"; h: number };
 
-const METHOD = { cash: "كاش", card: "بطاقة", credit: "آجل" } as const;
+const METHOD = { cash: "كاش", card: "بطاقة", credit: "آجل", payroll: "على الراتب" } as const;
 const when = (iso: string) => new Date(iso).toLocaleString("en-GB", { dateStyle: "short", timeStyle: "short" });
 
 export function receiptRows(d: ReceiptData): Row[] {
@@ -50,6 +50,7 @@ export function receiptRows(d: ReceiptData): Row[] {
   return [
     ...head(`فاتورة ${s.number}`, s.createdAt),
     ...(d.customerName ? [{ kind: "pair", right: "العميل", left: d.customerName } as Row, { kind: "rule" } as Row] : []),
+    ...(d.employeeName ? [{ kind: "pair", right: "على راتب", left: d.employeeName } as Row, { kind: "rule" } as Row] : []),
     ...s.lines.map((l): Row => ({
       kind: "item",
       name: l.name,

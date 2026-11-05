@@ -70,7 +70,11 @@ export function Owner({ go }: { go: (s: Screen) => void }) {
     },
     [logout],
   );
-  useEffect(() => void call<Me>("/me").then(setMe).catch((e) => setError((e as Error).message)), [call]);
+  useEffect(() => void call<Me>("/me").then((m) => {
+    // The phone view is the owner's numbers; staff without the reports go to their own screens.
+    if (m.user.role !== "owner" && !m.user.permissions?.includes("reports")) return go("admin");
+    setMe(m);
+  }).catch((e) => setError((e as Error).message)), [call, go]);
 
   if (error) return <div className="center"><div className="error">{error}</div></div>;
   if (!me) return <div className="center muted">جاري التحميل…</div>;
