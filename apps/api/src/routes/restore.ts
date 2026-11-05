@@ -29,7 +29,7 @@ const MERGE = ["stores", "users", "devices"];
 /** Never restored from a file. */
 const SKIP = ["tenants", "subscription_payments", "audit_log"];
 /** The only shop settings a file may change. */
-const TENANT_COLS = ["name", "currency", "business_type", "phone", "alert_settings"];
+const TENANT_COLS = ["name", "currency", "business_type", "phone", "alert_settings", "settings"];
 
 const REPLACE = BACKUP_TABLES.filter((t) => !MERGE.includes(t.name) && !SKIP.includes(t.name));
 const RESTORED = BACKUP_TABLES.filter((t) => !SKIP.includes(t.name) || t.name === "tenants");

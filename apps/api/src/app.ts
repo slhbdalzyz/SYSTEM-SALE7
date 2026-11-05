@@ -24,6 +24,8 @@ import { subscriptionRoutes } from "./routes/subscription";
 import { ownerRoutes } from "./routes/owner";
 import { payrollRoutes } from "./routes/payroll";
 import { moneyRoutes } from "./routes/money";
+import { settingsRoutes } from "./routes/settings";
+import { invoiceRoutes } from "./routes/invoices";
 import { restoreRoutes } from "./routes/restore";
 import { subscriptionGuard } from "./billing";
 import { setGateway, type Gateway } from "./payments/gateway";
@@ -90,5 +92,7 @@ export async function buildApp(opts: AppOptions) {
   await app.register(restoreRoutes);
   await app.register(payrollRoutes);
   await app.register(moneyRoutes);
+  await app.register(settingsRoutes);
+  await app.register(invoiceRoutes);
   return app;
 }

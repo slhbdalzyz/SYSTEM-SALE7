@@ -399,3 +399,45 @@ input.need { border-color: var(--danger); background: var(--danger-soft); }
 .unit-pick { display: flex; width: fit-content; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
 .unit-pick button { padding: 2px 10px; font-size: .82rem; border-radius: 999px; min-height: 0; }
 .unit-pick button.active { background: var(--brand); color: var(--brand-ink); border-color: var(--brand); }
+
+/* Keyboard hints on the till's buttons, and the F1 list */
+kbd { font: 600 .7rem/1.4 ui-monospace, Consolas, monospace; background: rgba(100,116,139,.12); border: 1px solid rgba(100,116,139,.3); border-bottom-width: 2px; border-radius: 5px; padding: 0 5px; margin-inline-start: 4px; white-space: nowrap; }
+button.primary kbd { background: rgba(255,255,255,.2); border-color: rgba(255,255,255,.4); color: inherit; }
+.keys-help { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 6px 18px; min-width: min(560px, 100%); }
+.keys-help > div { display: flex; align-items: center; gap: 10px; padding: 4px 0; border-bottom: 1px dashed var(--line); }
+.keys-help kbd { min-width: 64px; text-align: center; margin: 0; font-size: .8rem; }
+
+/* Settings */
+.hint { font-size: .88rem; color: var(--muted); background: var(--brand-soft); border-radius: var(--radius); padding: 6px 10px; }
+.check { display: inline-flex; flex-direction: row; align-items: center; gap: 8px; color: var(--ink); cursor: pointer; }
+.check input { width: auto; margin: 0; }
+.checks { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px 14px; }
+.checks.col { grid-template-columns: 1fr; }
+label.button { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--panel); padding: 8px 14px; border-radius: var(--radius); cursor: pointer; font-weight: 600; color: var(--ink); }
+label.button:hover { border-color: var(--brand); }
+.logo-row { align-items: center; }
+.logo-box { width: 120px; height: 64px; border: 1px dashed var(--line); border-radius: var(--radius); display: grid; place-items: center; background: #fff; overflow: hidden; }
+.logo-box img { max-width: 100%; max-height: 100%; }
+.settings-receipt { display: grid; grid-template-columns: 1fr 300px; gap: 20px; align-items: start; }
+.receipt-preview { background: var(--bg); border-radius: var(--radius); padding: 10px; display: grid; gap: 6px; justify-items: center; position: sticky; top: 12px; }
+.receipt-paper { background: #fff; color: #000; width: 270px; padding: 12px 10px; font-size: 12px; box-shadow: 0 2px 10px rgba(15,23,42,.12); border-radius: 2px; }
+.receipt-paper hr { border: 0; border-top: 1px dashed #000; margin: 4px 0; }
+.save-bar { position: sticky; bottom: 0; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 10px 14px; box-shadow: 0 -4px 14px rgba(15,23,42,.08); z-index: 5; }
+@media (max-width: 860px) { .settings-receipt { grid-template-columns: 1fr; } .receipt-preview { position: static; } }
+
+/* Sales and invoices */
+.filters { display: grid; grid-template-columns: 2fr repeat(4, 1fr); gap: 8px; }
+@media (max-width: 860px) { .filters { grid-template-columns: 1fr 1fr; } .filters > input { grid-column: 1 / -1; } }
+.badge.warn { background: var(--warn-soft); color: var(--warn); }
+td .badge { margin-inline-start: 6px; }
+tr.clickable { cursor: pointer; }
+tr.clickable:hover td, tr.clickable:focus td { background: var(--brand-soft); }
+tr.is-return td { color: var(--danger); }
+.table-wrap { overflow-x: auto; max-width: 100%; }
+table.invoices td { white-space: nowrap; }
+.invoice-detail { min-width: min(640px, 100%); }
+.meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px 14px; }
+.meta-grid small { display: block; color: var(--muted); }
+.totals-box { display: grid; gap: 4px; margin-inline-start: auto; width: min(320px, 100%); }
+.totals-box .line { display: flex; justify-content: space-between; }
+.totals-box .line.big { font-size: 1.2rem; font-weight: 700; border-top: 1px solid var(--line); padding-top: 4px; }

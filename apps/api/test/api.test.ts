@@ -1274,3 +1274,52 @@ describe("the item card", () => {
     expect((await call("GET", `/purchases/${r.body.id}`, t)).body.lines[0]).toMatchObject({ sell_price_minor: 5000, sell_unit_name: "صندوق" });
   });
 });
+
+describe("the shop's settings and the invoices page", () => {
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Tripoli" }).format(new Date());
+
+  it("keeps the shop's details, bank account and receipt options, with defaults for the rest", async () => {
+    const first = await call("GET", "/settings", owner);
+    expect(first.status).toBe(200);
+    expect(first.body.settings).toMatchObject({ till: { autoPrint: true, cashierMaxDiscountPct: 10 }, receipt: { copies: 1, showLogo: true } });
+    const put = await call("PUT", "/settings", owner, {
+      name: "سوبرماركت الاختبار",
+      settings: { phone: "0912345678", address: "شارع عمر المختار", bank: { name: "مصرف الجمهورية", accountNumber: "123456789" }, receipt: { showBank: true, copies: 2 }, till: { cashierMaxDiscountPct: 5 } },
+    });
+    expect(put.body.error ?? put.status).toBe(200);
+    const again = (await call("GET", "/settings", owner)).body;
+    expect(again.name).toBe("سوبرماركت الاختبار");
+    expect(again.settings).toMatchObject({ phone: "0912345678", bank: { accountNumber: "123456789", iban: "" }, receipt: { showBank: true, copies: 2, showCashier: true }, till: { cashierMaxDiscountPct: 5, autoPrint: true } });
+    // The till reads them with its own sign-in, through /me as well.
+    expect((await call("GET", "/me", cashierToken)).body.tenant.settings.till.cashierMaxDiscountPct).toBe(5);
+    // A bad logo or a cashier changing them is refused.
+    expect((await call("PUT", "/settings", owner, { name: "x y", settings: { logo: "javascript:alert(1)" } })).status).toBe(400);
+    expect((await call("PUT", "/settings", cashierToken, { name: "محل", settings: {} })).status).toBe(403);
+  });
+
+  it("lists the invoices with their shift and time, opens one in full, and lists the shifts", async () => {
+    const list = await call("GET", `/invoices?from=${today}&to=${today}`, owner);
+    expect(list.body.error ?? list.status).toBe(200);
+    expect(list.body.rows.length).toBeGreaterThan(0);
+    const sale = list.body.rows.find((r: { kind: string; shift_id: string | null }) => r.kind === "sale" && r.shift_id);
+    expect(sale).toMatchObject({ cashier: expect.any(String), device_name: expect.any(String), shift_opened_at: expect.any(String) });
+    expect(list.body.summary.netMinor).toBe(list.body.summary.salesMinor - list.body.summary.returnsMinor);
+    const one = (await call("GET", `/invoices/${sale.id}`, owner)).body;
+    expect(one).toMatchObject({ number: sale.number, shift_id: sale.shift_id });
+    expect(one.lines.length).toBe(sale.lines);
+    expect(one.lines.reduce((a: number, l: { total_minor: number }) => a + l.total_minor, 0)).toBeGreaterThanOrEqual(one.total_minor);
+    // Filters: by shift, by number, by kind.
+    const byShift = (await call("GET", `/invoices?from=${today}&to=${today}&shiftId=${sale.shift_id}`, owner)).body.rows;
+    expect(byShift.every((r: { shift_id: string }) => r.shift_id === sale.shift_id)).toBe(true);
+    expect((await call("GET", `/invoices?from=${today}&to=${today}&q=${encodeURIComponent(sale.number)}`, owner)).body.rows[0].id).toBe(sale.id);
+    expect((await call("GET", `/invoices?from=${today}&to=${today}&kind=return`, owner)).body.rows.every((r: { kind: string }) => r.kind === "return")).toBe(true);
+    const shifts = (await call("GET", `/shifts?from=${today}&to=${today}`, owner)).body;
+    const s = shifts.find((x: { id: string }) => x.id === sale.shift_id);
+    expect(s).toMatchObject({ cashier: expect.any(String), user_id: expect.any(String) });
+    expect(s.sales).toBe(byShift.filter((r: { kind: string }) => r.kind === "sale").length);
+    // Someone else's invoice, a cashier, and a backwards period are refused.
+    expect((await call("GET", `/invoices/${randomUUID()}`, owner)).status).toBe(404);
+    expect((await call("GET", `/invoices?from=${today}&to=${today}`, cashierToken)).status).toBe(403);
+    expect((await call("GET", `/invoices?from=${today}&to=2020-01-01`, owner)).status).toBe(400);
+  });
+});

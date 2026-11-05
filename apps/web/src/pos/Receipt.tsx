@@ -1,12 +1,18 @@
-import { formatMoney, formatQty, computeLine, computeTotals, type SaleInput } from "@pos/shared";
-
+import type { SaleInput, ShopSettings } from "@pos/shared";
+import { receiptRows } from "../hardware/receiptImage";
 import type { ReturnDone } from "./ReturnDialog";
 
 export interface ReceiptData {
+  /** The branch's name (the shop's own name comes from `shop` when known). */
   storeName: string;
+  /** The branch's own thank-you line, over the shop's. */
   footer?: string | null;
   deviceName: string;
   cashierName: string;
+  /** The shop's name and settings: logo, address, phone, bank account, what to show. */
+  shop?: { name: string; settings: ShopSettings } | null;
+  /** Printed again later: marked as a copy. */
+  copy?: boolean;
   sale?: SaleInput;
   changeMinor?: number;
   customerName?: string | null;
@@ -15,80 +21,35 @@ export interface ReceiptData {
   payment?: { customerName: string; amountMinor: number; method: "cash" | "card"; balanceMinor: number; at: string };
 }
 
-const METHOD = { cash: "كاش", card: "بطاقة", credit: "آجل", payroll: "على الراتب" } as const;
-
-function Head({ data, title, number, at }: { data: ReceiptData; title: string; number?: string; at: string }) {
+/**
+ * The receipt as the browser prints it. Drawn from the same rows as the thermal printer's
+ * picture, so both papers always say the same thing.
+ */
+export function Receipt({ data, preview }: { data: ReceiptData | null; preview?: boolean }) {
+  // The preview is a picture of the paper on screen; only the plain one goes to the printer.
+  const cls = preview ? "receipt-paper" : "receipt";
+  if (!data) return <div className={cls} />;
   return (
-    <div style={{ textAlign: "center" }}>
-      <b style={{ fontSize: 14 }}>{data.storeName}</b>
-      <div>{title}{number && <> رقم <span className="num">{number}</span></>}</div>
-      <div className="num">{new Date(at).toLocaleString("en-GB")}</div>
-      <div>{data.deviceName} · {data.cashierName}</div>
-    </div>
-  );
-}
-
-export function Receipt({ data }: { data: ReceiptData | null }) {
-  if (!data) return <div className="receipt" />;
-  if (data.ret) {
-    const r = data.ret;
-    return (
-      <div className="receipt">
-        <Head data={data} title="مرتجع" number={r.number} at={new Date().toISOString()} />
-        <div>عن الفاتورة <span className="num">{r.originalNumber}</span>{r.customerName && <> · {r.customerName}</>}</div>
-        <hr />
-        <table><tbody>{r.lines.map((l, i) => (
-          <tr key={i}><td>{l.name} <span className="num">× {formatQty(l.qtyMilli, l.qtyMilli % 1000 !== 0)}</span></td><td className="num" style={{ textAlign: "left" }}>{formatMoney(l.totalMinor, "")}</td></tr>
-        ))}</tbody></table>
-        <hr />
-        <div style={{ fontSize: 14 }}><b>المبلغ المرجع: <span className="num">{formatMoney(r.totalMinor)}</span></b></div>
-        <div>{METHOD[r.method]} · السبب: {r.reason}</div>
-      </div>
-    );
-  }
-  if (data.payment) {
-    const p = data.payment;
-    return (
-      <div className="receipt">
-        <Head data={data} title="إيصال تسديد" at={p.at} />
-        <hr />
-        <div>العميل: {p.customerName}</div>
-        <div style={{ fontSize: 14 }}><b>المبلغ: <span className="num">{formatMoney(p.amountMinor)}</span></b> ({METHOD[p.method]})</div>
-        <div>الرصيد المتبقي: <span className="num">{formatMoney(p.balanceMinor)}</span></div>
-      </div>
-    );
-  }
-  const sale = data.sale!;
-  const t = computeTotals(sale.lines, sale.invoiceDiscountMinor);
-  return (
-    <div className="receipt">
-      <Head data={data} title="فاتورة" number={sale.number} at={sale.createdAt} />
-      {data.customerName && <div>العميل: {data.customerName}</div>}
-      {data.employeeName && <div>على راتب الموظف: {data.employeeName}</div>}
-      <hr />
-      <table>
-        <tbody>
-          {sale.lines.map((l, i) => (
-            <tr key={i}>
-              <td>
-                {l.name}
-                <div className="num">{formatQty(l.qtyMilli, l.qtyMilli % 1000 !== 0)} × {formatMoney(l.priceMinor, "")}</div>
-                {l.promoMinor > 0 && <div>{l.offerName ?? "عرض"} −<span className="num">{formatMoney(l.promoMinor, "")}</span></div>}
-              </td>
-              <td className="num" style={{ textAlign: "left", verticalAlign: "top" }}>{formatMoney(computeLine(l).total, "")}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <hr />
-      {t.discount > 0 && <div>الخصم: <span className="num">{formatMoney(t.discount)}</span></div>}
-      <div style={{ fontSize: 14 }}><b>الإجمالي: <span className="num">{formatMoney(t.total)}</span></b></div>
-      {sale.payments.map((p, i) => (
-        <div key={i}>{METHOD[p.method]}: <span className="num">{formatMoney(p.amountMinor)}</span></div>
-      ))}
-      {(data.changeMinor ?? 0) > 0 && <div>الباقي: <span className="num">{formatMoney(data.changeMinor ?? 0)}</span></div>}
-      <hr />
-      <div style={{ textAlign: "center" }}>{data.footer ?? "شكراً لزيارتكم"}</div>
+    <div className={cls}>
+      {receiptRows(data).map((r, i) => {
+        if (r.kind === "image") return <div key={i} style={{ textAlign: "center" }}><img src={r.src} alt="" style={{ maxWidth: "50%", maxHeight: 60 }} /></div>;
+        if (r.kind === "rule") return <hr key={i} />;
+        if (r.kind === "space") return <div key={i} style={{ height: r.h / 3 }} />;
+        if (r.kind === "center") return <div key={i} style={{ textAlign: "center", fontWeight: r.bold ? 700 : 400, fontSize: r.size ? `${Math.round(r.size / 2)}px` : undefined }}>{r.text}</div>;
+        if (r.kind === "pair") {
+          return (
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontWeight: r.bold ? 700 : 400, fontSize: r.size ? `${Math.round(r.size / 2)}px` : undefined }}>
+              <span>{r.right}</span><span className="num">{r.left}</span>
+            </div>
+          );
+        }
+        return (
+          <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+            <div><div>{r.name}</div><div className="num">{r.detail}</div></div>
+            <span className="num" style={{ alignSelf: "end" }}>{r.amount}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }
