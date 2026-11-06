@@ -128,6 +128,13 @@ export async function saveProduct(tx: Tx, tenantId: string, id: string | null, i
     if (used.rowCount) throw new HttpError(400, "ما تقدرش تحذف وحدة عليها مبيعات، وقّف الصنف بدلها");
     await tx.query(`DELETE FROM product_units WHERE id = $1`, [old]);
   }
+  // The item card's "quick key" tick: adds a plain key, or takes the product's keys away.
+  const hasKey = (await tx.query(`SELECT 1 FROM quick_keys WHERE product_id = $1 LIMIT 1`, [pid])).rowCount;
+  if (b.quick && !hasKey) {
+    await tx.query(`INSERT INTO quick_keys (tenant_id, product_id, sort) VALUES ($1,$2,(SELECT COALESCE(max(sort), 0) + 1 FROM quick_keys WHERE tenant_id = $1))`, [tenantId, pid]);
+  } else if (!b.quick && hasKey) {
+    await tx.query(`DELETE FROM quick_keys WHERE product_id = $1`, [pid]);
+  }
   return pid;
 }
 

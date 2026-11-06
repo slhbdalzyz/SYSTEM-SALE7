@@ -3,6 +3,7 @@ import { z } from "zod";
 import { applyOffers, computeLine, computeTotals, pointsEarned, pointsFor, saleInputSchema, type SaleInput } from "@pos/shared";
 import { addPoints, customerPoints, loyaltySettings } from "../loyalty";
 import { currentOffers } from "./offers";
+import { openPriceProducts } from "./quick";
 import { alertBigDiscount, alertOverCreditLimit, checkLowStock, checkZakatDue, flushPushes } from "../alerts";
 import { audit, inTx } from "../db";
 import { requireDevice } from "../auth";
@@ -135,6 +136,8 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
       );
       const overrides: { name: string; catalog: number; sold: number }[] = [];
       const taken = new Map<string, number>();
+      // Keys set to "open price" sell at whatever the cashier types: not an override.
+      const openPrice = await openPriceProducts(tx, tid);
       for (const l of s.lines) {
         const u = byUnit.get(l.unitId)!;
         const t = computeLine(l);
@@ -153,7 +156,7 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
           [tid, who.sid, l.productId, -baseQty, s.id, who.sub, s.createdAt],
         );
         taken.set(l.productId, (taken.get(l.productId) ?? 0) + baseQty);
-        if (l.priceMinor !== u.price_minor) overrides.push({ name: l.name, catalog: u.price_minor, sold: l.priceMinor });
+        if (l.priceMinor !== u.price_minor && !openPrice.has(l.productId)) overrides.push({ name: l.name, catalog: u.price_minor, sold: l.priceMinor });
       }
       for (const p of s.payments) {
         await tx.query(`INSERT INTO payments (tenant_id, sale_id, method, amount_minor) VALUES ($1,$2,$3,$4)`, [tid, s.id, p.method, p.amountMinor]);

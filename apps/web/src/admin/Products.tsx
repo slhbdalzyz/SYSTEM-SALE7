@@ -140,7 +140,7 @@ export function Products({ call, storeId }: { call: Call; storeId: string }) {
           </label>
           <label className="row" style={{ color: "var(--ink)" }} title="يطلع زر في شاشة الكاشير، للأصناف اللي ما عندهاش باركود">
             <input type="checkbox" style={{ width: "auto" }} checked={form.quick} onChange={(e) => setForm({ ...form, quick: e.target.checked })} />
-            ⭐ زر سريع في الكاشير
+            ⭐ زر سريع في الكاشير <span className="muted">(ترتيبه ومجموعاته من «🔘 أزرار الكاشير»)</span>
           </label>
         </div>
         <b>وحدات البيع</b>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { creditRoom, formatMoney, formatQty, pointsEarned, pointsFor, readShopSettings, type CatalogCustomer, type CatalogProduct, type LoyaltySettings, type Offer, type PaymentMethod, type ShopSettings } from "@pos/shared";
+import { creditRoom, formatMoney, formatQty, pointsEarned, pointsFor, readShopSettings, type CatalogCustomer, type CatalogProduct, type LoyaltySettings, type Offer, type PaymentMethod, type QuickGroup, type QuickKey, type ShopSettings } from "@pos/shared";
 import { api } from "../api";
 import { db, getMeta, nextInvoiceNumber, setMeta, type HeldCart, type LocalShift } from "../localdb";
 import { findByCode, searchProducts } from "../lookup";
@@ -20,12 +20,13 @@ import { displaySender } from "../display/channel";
 import { sendInvoice } from "../whatsapp";
 import { shiftReport } from "./shiftReport";
 import { CameraScanner, hasCamera } from "../hardware/CameraScanner";
+import { QuickPad, visibleKeys } from "./quickpad";
 
 type Dialog =
   | { kind: "pay" }
   | { kind: "weight"; product: CatalogProduct }
   | { kind: "qty"; key: string }
-  | { kind: "price"; key: string; required?: boolean }
+  | { kind: "price"; key: string; required?: boolean; open?: boolean }
   | { kind: "discount" }
   | { kind: "openShift" }
   | { kind: "closeShift"; expected: number }
@@ -57,7 +58,7 @@ const KEYS: [string, string][] = [
   ["F9", "الفواتير المعلقة"], ["F10", "مرتجع"], ["F11", "فتح الدرج"], ["F12 / Ctrl+Enter", "الدفع"],
   ["↑ ↓", "التنقل بين أصناف الفاتورة"], ["+ / −", "زيادة أو نقص كمية الصنف المختار"], ["Delete", "حذف الصنف المختار"],
   ["Ctrl+Delete", "إلغاء الفاتورة كلها"], ["3*باركود", "يبيع 3 من نفس الصنف"], ["Esc", "يقفل النافذة أو يمسح البحث"],
-  ["Alt+N", "زبون جديد في تبويب ثاني"], ["Alt+1 … Alt+9", "التنقل بين الزبائن المفتوحين"], ["Alt+D", "إيداع أو سحب من الدرج"],
+  ["Alt+N", "زبون جديد في تبويب ثاني"], ["Alt+1 … Alt+9", "التنقل بين الزبائن المفتوحين"], ["Alt+D", "إيداع أو سحب من الدرج"], ["Ctrl+1 … Ctrl+9", "الأزرار السريعة اللي على الشاشة"],
 ];
 
 export function Cashier({ go }: { go: (s: Screen) => void }) {
@@ -164,11 +165,44 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     if (sync?.lastSync) void db.products.count().then(setCatalogSize);
   }, [sync?.lastSync]);
 
-  // Quick keys: bread, vegetables, a bag… items without a barcode, one tap away.
-  const [quick, setQuick] = useState<CatalogProduct[]>([]);
+  // Quick keys: bread, vegetables, a bag… one tap away, set up in the admin's «أزرار الكاشير».
+  // Kept on the device so they work offline; before the first fetch, the products ticked as quick.
+  const [quick, setQuick] = useState<{ groups: QuickGroup[]; keys: QuickKey[] }>({ groups: [], keys: [] });
+  const [quickProducts, setQuickProducts] = useState<Map<string, CatalogProduct>>(new Map());
+  const [qGroup, setQGroup] = useState<string | null>(null);
   useEffect(() => {
-    void db.products.filter((p) => !!p.quick && p.active).toArray().then((ps) => setQuick(ps.sort((a, b) => a.name.localeCompare(b.name, "ar"))));
+    void (async () => {
+      let q = await getMeta<{ groups: QuickGroup[]; keys: QuickKey[] }>("quickKeys");
+      try {
+        q = await api<{ groups: QuickGroup[]; keys: QuickKey[] }>("/quick-keys/till", { token: session.staffToken });
+        await setMeta("quickKeys", q);
+      } catch {
+        if (!q) {
+          const ps = (await db.products.filter((p) => !!p.quick).toArray()).sort((a, b) => a.name.localeCompare(b.name, "ar"));
+          q = { groups: [], keys: ps.map((p, i) => ({ id: p.id, groupId: null, productId: p.id, unitId: null, qtyMilli: 1000, openPrice: false, label: null, color: null, image: null, storeId: null, userId: null, sort: i })) };
+        }
+      }
+      const ps = await db.products.bulkGet([...new Set(q.keys.map((k) => k.productId))]);
+      setQuickProducts(new Map(ps.filter((p): p is CatalogProduct => !!p).map((p) => [p.id, p])));
+      setQuick(q);
+      setQGroup((g) => (g && q.groups.some((x) => x.id === g) ? g : null));
+    })();
   }, [sync?.lastSync, catalogSize]);
+
+  /** A key: the set unit and quantity, or the scale, or the price typed now (open price). */
+  function pressKey(k: QuickKey, p: CatalogProduct) {
+    const unit = p.units.find((u) => u.id === k.unitId) ?? p.units.find((u) => u.isBase) ?? p.units[0];
+    if (k.openPrice) {
+      const line = { ...lineFor(p, unit, k.qtyMilli), priceMinor: 0 };
+      setLines((ls) => [...ls, line]);
+      setSelected(line.key);
+      setDialog({ kind: "price", key: line.key, required: true, open: true });
+      return;
+    }
+    if (p.isWeighted && k.qtyMilli === 1000) return setDialog({ kind: "weight", product: p });
+    put(lineFor(p, unit, k.qtyMilli));
+    focusScan();
+  }
 
   // Windows app: once a day, when online and the owner allowed it, a full copy goes to this PC's disk.
   // It checks every 10 minutes; the backup itself decides whether a day has passed.
@@ -550,7 +584,12 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
         F11: () => void drawer(),
         F12: () => lines.length && shift && setDialog({ kind: "pay" }),
       };
-      if (e.altKey && /^Digit[1-9]$/.test(e.code)) {
+      if (e.ctrlKey && !e.altKey && /^(Digit|Numpad)[1-9]$/.test(e.code)) {
+        // Ctrl+1 … Ctrl+9: the quick keys on screen, in order.
+        e.preventDefault();
+        const hit = visibleKeys(quick.keys, quickProducts, qGroup)[Number(e.code.slice(-1)) - 1];
+        if (hit && !dialog) pressKey(hit.k, hit.p);
+      } else if (e.altKey && /^Digit[1-9]$/.test(e.code)) {
         e.preventDefault();
         const t = tabs[Number(e.code.slice(5)) - 1];
         if (t) switchTab(t.id);
@@ -666,15 +705,8 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
             )}
           </div>
 
-          {quick.length > 0 && (
-            <div className="quick-keys" aria-label="أزرار سريعة">
-              {quick.map((p) => (
-                <button key={p.id} onClick={() => pick(p)} title={p.name}>
-                  <span className="ellipsis">{p.name}</span>
-                  <small className="num">{p.isWeighted ? "⚖️" : formatMoney((p.units.find((u) => u.isBase) ?? p.units[0]).priceMinor, "")}</small>
-                </button>
-              ))}
-            </div>
+          {quick.keys.length > 0 && prefs.quickPlace !== "bottom" && (
+            <QuickPad groups={quick.groups} keys={quick.keys} products={quickProducts} group={qGroup} setGroup={setQGroup} size={prefs.quickSize} onPress={pressKey} />
           )}
 
           <div className="till-tabs" role="tablist" aria-label="الزبائن المفتوحين">
@@ -751,6 +783,9 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
               </table>
             )}
           </div>
+          {quick.keys.length > 0 && prefs.quickPlace === "bottom" && (
+            <QuickPad groups={quick.groups} keys={quick.keys} products={quickProducts} group={qGroup} setGroup={setQGroup} size={prefs.quickSize} onPress={pressKey} />
+          )}
         </section>
 
         <aside className="pos-right">
@@ -837,7 +872,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
       )}
       {dialog?.kind === "price" && (
         <AmountDialog
-          title={dialog.required ? `«${lines.find((l) => l.key === dialog.key)?.name ?? ""}» ما عندهش سعر` : "تعديل السعر"}
+          title={dialog.open ? `«${lines.find((l) => l.key === dialog.key)?.name ?? ""}» بكم؟` : dialog.required ? `«${lines.find((l) => l.key === dialog.key)?.name ?? ""}» ما عندهش سعر` : "تعديل السعر"}
           label="سعر البيع (د.ل)"
           initial={dialog.required ? "" : String((lines.find((l) => l.key === dialog.key)?.priceMinor ?? 0) / 1000)}
           onClose={() => {
@@ -928,6 +963,17 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
             <div className="seg">
               <button className={prefs.sound ? "active" : ""} onClick={() => { const p = { ...prefs, sound: true }; setPrefs(p); savePrefs(p); sound("ok"); }}>🔊 بيب مع كل مسحة</button>
               <button className={!prefs.sound ? "active" : ""} onClick={() => { const p = { ...prefs, sound: false }; setPrefs(p); savePrefs(p); }}>🔇 بدون صوت</button>
+            </div>
+          </label>
+          <label>الأزرار السريعة
+            <div className="seg">
+              {([["sm", "صغيرة"], ["md", "عادية"], ["lg", "كبيرة (لمس)"]] as const).map(([k, t]) => (
+                <button key={k} className={prefs.quickSize === k ? "active" : ""} onClick={() => { const p = { ...prefs, quickSize: k }; setPrefs(p); savePrefs(p); }}>{t}</button>
+              ))}
+            </div>
+            <div className="seg">
+              <button className={prefs.quickPlace !== "bottom" ? "active" : ""} onClick={() => { const p = { ...prefs, quickPlace: "top" as const }; setPrefs(p); savePrefs(p); }}>⬆️ فوق السلة</button>
+              <button className={prefs.quickPlace === "bottom" ? "active" : ""} onClick={() => { const p = { ...prefs, quickPlace: "bottom" as const }; setPrefs(p); savePrefs(p); }}>⬇️ تحت السلة</button>
             </div>
           </label>
           <div className="row"><button onClick={() => sound("bad")}>جرّب صوت الخطأ</button><span className="spacer" /><button className="primary" onClick={() => { setDialog(null); focusScan(); }}>تمام</button></div>

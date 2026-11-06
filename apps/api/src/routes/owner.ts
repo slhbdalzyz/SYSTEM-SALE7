@@ -17,6 +17,8 @@ export const BACKUP_TABLES: { name: string; key: "uuid" | "bigint"; omit?: strin
   { name: "products", key: "uuid" },
   { name: "product_units", key: "uuid" },
   { name: "barcodes", key: "uuid" },
+  { name: "quick_groups", key: "uuid" },
+  { name: "quick_keys", key: "uuid" },
   { name: "customers", key: "uuid" },
   { name: "suppliers", key: "uuid" },
   { name: "offers", key: "uuid" },
