@@ -585,3 +585,9 @@ button.big, a.button.big { padding: 12px 22px; font-size: 1.05rem; }
   body.print-a4 .printable .print-only { display: block; }
   body.print-a4 .printable .card { box-shadow: none; border: 1px solid #999; }
 }
+.hand-grid { overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); max-height: 60vh; }
+.hand-grid table { border-collapse: collapse; width: 100%; }
+.hand-grid th { position: sticky; top: 0; background: var(--bg); font-size: .82rem; z-index: 1; white-space: nowrap; }
+.hand-grid td, .hand-grid th { padding: 3px 4px; border-bottom: 1px solid var(--line); }
+.hand-grid td input:not([type=checkbox]) { width: 100%; padding: 6px 8px; border-radius: 6px; }
+.hand-grid td input[type=checkbox] { width: 20px; height: 20px; margin: 0 auto; display: block; }
