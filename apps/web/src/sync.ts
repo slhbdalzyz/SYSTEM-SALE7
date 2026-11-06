@@ -90,6 +90,15 @@ export async function flushOutbox(token: string) {
       else await db.outbox.delete(item.seq!);
     }
   }
+  for (const item of items.filter((i) => i.kind === "drawer")) {
+    try {
+      await api("/shifts/drawer", { token, body: item.payload });
+      await db.outbox.delete(item.seq!);
+    } catch (e) {
+      if (e instanceof ApiError && e.status > 0) await db.outbox.update(item.seq!, { error: e.message });
+      else throw e;
+    }
+  }
   for (const item of items.filter((i) => i.kind === "shift_close")) {
     const { shiftId, closingCashMinor } = item.payload as { shiftId: string; closingCashMinor: number };
     try {

@@ -1,7 +1,7 @@
 import Dexie, { type Table } from "dexie";
 import type { CatalogCustomer, CatalogProduct, SaleInput } from "@pos/shared";
 
-export type OutboxKind = "shift_open" | "sale" | "shift_close";
+export type OutboxKind = "shift_open" | "sale" | "shift_close" | "drawer";
 
 export interface OutboxItem {
   seq?: number;
@@ -24,7 +24,9 @@ export interface LocalSale {
   cashierName: string;
   /** For returns there is no SaleInput; the receipt data is kept instead. */
   input: SaleInput | null;
-  kind?: "sale" | "return" | "payment";
+  kind?: "sale" | "return" | "payment" | "drawer";
+  /** A drawer move: why the money went in or out. */
+  reason?: string;
 }
 
 export interface LocalShift {

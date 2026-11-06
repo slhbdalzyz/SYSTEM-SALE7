@@ -122,7 +122,8 @@ export async function ownerRoutes(app: FastifyInstance) {
            sh.opening_cash_minor
              + COALESCE((SELECT sum(p.amount_minor) FROM payments p JOIN sales s ON s.id = p.sale_id WHERE s.shift_id = sh.id AND p.method = 'cash'), 0)
              - COALESCE((SELECT sum(s.change_minor) FROM sales s WHERE s.shift_id = sh.id), 0)
-             + COALESCE((SELECT sum(cp.amount_minor) FROM customer_payments cp WHERE cp.shift_id = sh.id AND cp.method = 'cash'), 0) AS expected_cash_minor
+             + COALESCE((SELECT sum(cp.amount_minor) FROM customer_payments cp WHERE cp.shift_id = sh.id AND cp.method = 'cash'), 0)
+             + COALESCE((SELECT sum(CASE dm.kind WHEN 'in' THEN dm.amount_minor ELSE -dm.amount_minor END) FROM drawer_moves dm WHERE dm.shift_id = sh.id), 0) AS expected_cash_minor
          FROM shifts sh JOIN users u ON u.id = sh.user_id JOIN devices d ON d.id = sh.device_id JOIN stores st ON st.id = sh.store_id
          WHERE ${inStore("sh")} AND sh.closed_at IS NULL ORDER BY sh.opened_at`,
         [tid, store],

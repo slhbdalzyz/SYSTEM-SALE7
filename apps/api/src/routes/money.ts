@@ -18,12 +18,12 @@ const dateRe = /^\d{4}-\d{2}-\d{2}$/;
 /** Every movement of money, one row each: + in, − out. $1 = tenant. */
 export const FLOWS = `
   SELECT s.created_at AS at, (s.created_at AT TIME ZONE '${TZ}')::date AS day,
-         CASE p.method WHEN 'cash' THEN 'cash' ELSE 'card' END AS account,
+         CASE WHEN p.method = 'cash' THEN 'cash' WHEN p.method IN ('transfer', 'cheque') THEN 'transfer' ELSE 'card' END AS account,
          CASE WHEN s.kind = 'return' THEN 'refund' ELSE 'sale' END AS source,
          p.amount_minor - CASE WHEN p.method = 'cash' AND s.kind = 'sale' THEN s.change_minor ELSE 0 END AS amount,
          s.number AS ref, st.name AS detail, NULL::uuid AS movement_id
     FROM payments p JOIN sales s ON s.id = p.sale_id JOIN stores st ON st.id = s.store_id
-   WHERE p.tenant_id = $1 AND p.method IN ('cash', 'card')
+   WHERE p.tenant_id = $1 AND p.method NOT IN ('credit', 'payroll')
   UNION ALL
   SELECT cp.created_at, (cp.created_at AT TIME ZONE '${TZ}')::date, cp.method, 'customer', cp.amount_minor, c.name, cp.note, NULL
     FROM customer_payments cp JOIN customers c ON c.id = cp.customer_id WHERE cp.tenant_id = $1
@@ -40,6 +40,10 @@ export const FLOWS = `
   UNION ALL
   SELECT e.created_at, e.spent_on, e.payment_method, 'expense', -e.amount_minor, e.category, e.note, NULL
     FROM expenses e WHERE e.tenant_id = $1
+  UNION ALL
+  SELECT dm.created_at, (dm.created_at AT TIME ZONE '${TZ}')::date, 'cash', CASE dm.kind WHEN 'in' THEN 'drawer_in' ELSE 'drawer_out' END,
+         CASE dm.kind WHEN 'in' THEN dm.amount_minor ELSE -dm.amount_minor END, d.name, dm.reason, NULL
+    FROM drawer_moves dm LEFT JOIN devices d ON d.id = dm.device_id WHERE dm.tenant_id = $1
   UNION ALL
   SELECT m.created_at, m.on_date, m.account, m.kind, m.amount_minor, NULL, m.note, m.id
     FROM money_movements m WHERE m.tenant_id = $1`;

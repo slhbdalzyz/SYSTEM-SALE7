@@ -19,6 +19,7 @@ const ACCOUNTS = Object.keys(ACCOUNT) as Account[];
 const SOURCE: Record<string, string> = {
   sale: "مبيعات", refund: "مرتجعات", customer: "تحصيل من العملاء", supplier: "دفع للموردين", purchase: "مشتريات نقدية",
   expense: "مصروفات", opening: "رصيد افتتاحي", deposit: "إيداع", withdrawal: "سحب", transfer: "تحويل بين الحسابات", adjust: "تسوية بعد الجرد",
+  drawer_in: "إيداع في درج الكاشير", drawer_out: "سحب من درج الكاشير",
 };
 
 const today = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Tripoli" }).format(new Date());
