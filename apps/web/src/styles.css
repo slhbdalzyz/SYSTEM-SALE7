@@ -547,3 +547,9 @@ button.big, a.button.big { padding: 12px 22px; font-size: 1.05rem; }
 .file-pick .primary-like { background: var(--brand); color: var(--brand-ink); padding: 8px 14px; border-radius: var(--radius); font-weight: 600; }
 .file-pick:focus-within .primary-like { outline: 2px solid var(--brand); outline-offset: 2px; }
 .paper-cta { text-align: start; background: var(--warn-soft); border-color: #fcd34d; color: var(--ink); padding: 10px 14px; }
+.hand-grid { overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); max-height: 60vh; }
+.hand-grid table { border-collapse: collapse; width: 100%; }
+.hand-grid th { position: sticky; top: 0; background: var(--bg); font-size: .82rem; z-index: 1; white-space: nowrap; }
+.hand-grid td, .hand-grid th { padding: 3px 4px; border-bottom: 1px solid var(--line); }
+.hand-grid td input:not([type=checkbox]) { width: 100%; padding: 6px 8px; border-radius: 6px; }
+.hand-grid td input[type=checkbox] { width: 20px; height: 20px; margin: 0 auto; display: block; }
