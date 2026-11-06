@@ -10,7 +10,8 @@ export async function shiftRoutes(app: FastifyInstance) {
       `SELECT sh.opening_cash_minor
          + COALESCE((SELECT sum(p.amount_minor) FROM payments p JOIN sales s ON s.id = p.sale_id WHERE s.shift_id = sh.id AND p.method = 'cash'), 0)
          - COALESCE((SELECT sum(s.change_minor) FROM sales s WHERE s.shift_id = sh.id), 0)
-         + COALESCE((SELECT sum(cp.amount_minor) FROM customer_payments cp WHERE cp.shift_id = sh.id AND cp.method = 'cash'), 0) AS expected,
+         + COALESCE((SELECT sum(cp.amount_minor) FROM customer_payments cp WHERE cp.shift_id = sh.id AND cp.method = 'cash'), 0)
+         + COALESCE((SELECT sum(CASE dm.kind WHEN 'in' THEN dm.amount_minor ELSE -dm.amount_minor END) FROM drawer_moves dm WHERE dm.shift_id = sh.id), 0) AS expected,
          (SELECT count(*)::int FROM sales s WHERE s.shift_id = sh.id AND s.kind = 'sale') AS sales_count,
          COALESCE((SELECT sum(s.total_minor) FROM sales s WHERE s.shift_id = sh.id), 0) AS sales_total
        FROM shifts sh WHERE sh.id = $1`,
@@ -18,6 +19,26 @@ export async function shiftRoutes(app: FastifyInstance) {
     );
     return r.rows[0] as { expected: number; sales_count: number; sales_total: number };
   }
+
+  /** Money put into or taken out of the drawer during a shift, with its reason. Sent once even if retried. */
+  app.post("/shifts/drawer", { preHandler: requireDevice }, async (req) => {
+    const b = z.object({
+      id: z.string().uuid(), shiftId: z.string().uuid().nullish(), kind: z.enum(["in", "out"]),
+      amountMinor: z.number().int().positive(), reason: z.string().trim().min(1).max(200), at: z.string().datetime().optional(),
+    }).parse(req.body);
+    if (b.shiftId && !(await app.db.query(`SELECT 1 FROM shifts WHERE id = $1 AND tenant_id = $2 AND device_id = $3`, [b.shiftId, req.user.tid, req.user.did])).rowCount) {
+      throw new HttpError(404, "الوردية غير موجودة");
+    }
+    const r = await app.db.query(
+      `INSERT INTO drawer_moves (id, tenant_id, store_id, device_id, shift_id, user_id, kind, amount_minor, reason, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,LEAST(COALESCE($10::timestamptz, now()), now())) ON CONFLICT (id) DO NOTHING`,
+      [b.id, req.user.tid, req.user.sid, req.user.did, b.shiftId ?? null, req.user.sub, b.kind, b.amountMinor, b.reason, b.at ?? null],
+    );
+    if (r.rowCount) {
+      await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, deviceId: req.user.did, action: b.kind === "in" ? "drawer.in" : "drawer.out", entity: "shift", entityId: b.shiftId ?? undefined, data: { amount: b.amountMinor, reason: b.reason } });
+    }
+    return { id: b.id };
+  });
 
   app.get("/shifts/current", { preHandler: requireDevice }, async (req) => {
     const r = await app.db.query(

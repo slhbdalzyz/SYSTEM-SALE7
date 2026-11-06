@@ -15,6 +15,8 @@ export interface ShiftReport {
   returns: number;
   returnsMinor: number;
   debtPaidCashMinor: number;
+  /** Money put into or taken out of the drawer during the shift. */
+  drawerMoves?: { kind: "in" | "out"; amountMinor: number; reason: string }[];
   expectedCashMinor: number;
   countedCashMinor: number;
   items: { name: string; qtyMilli: number; totalMinor: number }[];
@@ -23,12 +25,17 @@ export interface ShiftReport {
 export function shiftReport(shift: { openedAt: string; openingCashMinor: number }, list: LocalSale[], countedCashMinor: number, closedAt = new Date().toISOString()): ShiftReport {
   const byMethod: Partial<Record<PaymentMethod, number>> = {};
   const items = new Map<string, { name: string; qtyMilli: number; totalMinor: number }>();
+  const drawerMoves: NonNullable<ShiftReport["drawerMoves"]> = [];
   let sales = 0, salesMinor = 0, discountMinor = 0, promoMinor = 0, returns = 0, returnsMinor = 0, debtPaidCashMinor = 0, cash = 0;
   for (const s of list) {
     cash += s.cashInMinor - s.changeMinor;
     if (s.kind === "return") {
       returns++;
       returnsMinor += -s.totalMinor;
+      continue;
+    }
+    if (s.kind === "drawer") {
+      drawerMoves.push({ kind: s.cashInMinor >= 0 ? "in" : "out", amountMinor: Math.abs(s.cashInMinor), reason: s.reason ?? "" });
       continue;
     }
     if (s.kind === "payment") {
@@ -53,7 +60,7 @@ export function shiftReport(shift: { openedAt: string; openingCashMinor: number 
   }
   return {
     openedAt: shift.openedAt, closedAt, openingCashMinor: shift.openingCashMinor, sales, salesMinor, byMethod, discountMinor, promoMinor,
-    returns, returnsMinor, debtPaidCashMinor, expectedCashMinor: shift.openingCashMinor + cash, countedCashMinor,
+    returns, returnsMinor, debtPaidCashMinor, drawerMoves, expectedCashMinor: shift.openingCashMinor + cash, countedCashMinor,
     items: [...items.values()].sort((a, b) => b.totalMinor - a.totalMinor).slice(0, 10),
   };
 }
