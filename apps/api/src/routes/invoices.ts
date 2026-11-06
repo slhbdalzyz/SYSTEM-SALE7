@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { readShopSettings } from "@pos/shared";
+import { PAYMENT_METHODS, readShopSettings } from "@pos/shared";
 import { HttpError, requirePerm } from "../auth";
 
 const TZ = "Africa/Tripoli";
@@ -21,7 +21,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
       shiftId: z.string().uuid().optional(),
       userId: z.string().uuid().optional(),
       kind: z.enum(["sale", "return"]).optional(),
-      method: z.enum(["cash", "card", "credit", "payroll"]).optional(),
+      method: z.enum(PAYMENT_METHODS).optional(),
       q: z.string().trim().max(60).optional(),
       limit: z.coerce.number().int().min(1).max(500).default(200),
       offset: z.coerce.number().int().min(0).default(0),

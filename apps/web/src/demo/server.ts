@@ -21,6 +21,7 @@ import m017 from "../../../api/migrations/017_settings.sql?raw";
 import m018 from "../../../api/migrations/018_pro.sql?raw";
 import m019 from "../../../api/migrations/019_opening.sql?raw";
 import m020 from "../../../api/migrations/020_zakat.sql?raw";
+import m021 from "../../../api/migrations/021_till.sql?raw";
 import { setGateway } from "../../../api/src/payments/gateway";
 import { fakeGateway } from "../../../api/src/payments/fake";
 import { authRoutes } from "../../../api/src/routes/auth";
@@ -144,7 +145,7 @@ async function boot(): Promise<MiniApp> {
   }
   await pg.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY)`);
   const done = new Set((await pg.query<{ name: string }>(`SELECT name FROM schema_migrations`)).rows.map((r) => r.name));
-  for (const [name, sql] of [["001_init.sql", m001], ["002_customers_returns.sql", m002], ["003_device_kinds.sql", m003], ["004_saas.sql", m004], ["005_purchasing.sql", m005], ["006_branches.sql", m006], ["007_offers.sql", m007], ["008_online_payments.sql", m008], ["009_owner.sql", m009], ["010_restore.sql", m010], ["011_loyalty.sql", m011], ["012_departments_purchases.sql", m012], ["013_loyalty_cleanup.sql", m013], ["014_payroll_permissions.sql", m014], ["015_money.sql", m015], ["016_item_card.sql", m016], ["017_settings.sql", m017], ["018_pro.sql", m018], ["019_opening.sql", m019], ["020_zakat.sql", m020]] as const) {
+  for (const [name, sql] of [["001_init.sql", m001], ["002_customers_returns.sql", m002], ["003_device_kinds.sql", m003], ["004_saas.sql", m004], ["005_purchasing.sql", m005], ["006_branches.sql", m006], ["007_offers.sql", m007], ["008_online_payments.sql", m008], ["009_owner.sql", m009], ["010_restore.sql", m010], ["011_loyalty.sql", m011], ["012_departments_purchases.sql", m012], ["013_loyalty_cleanup.sql", m013], ["014_payroll_permissions.sql", m014], ["015_money.sql", m015], ["016_item_card.sql", m016], ["017_settings.sql", m017], ["018_pro.sql", m018], ["019_opening.sql", m019], ["020_zakat.sql", m020], ["021_till.sql", m021]] as const) {
     if (done.has(name)) continue;
     await pg.exec(sql);
     await pg.query(`INSERT INTO schema_migrations (name) VALUES ($1)`, [name]);

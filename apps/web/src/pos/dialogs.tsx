@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { creditRoom, formatMoney, toMinor, type CatalogCustomer, type PaymentMethod } from "@pos/shared";
+import { METHOD_LABELS, OTHER_METHODS, creditRoom, formatMoney, toMinor, type CatalogCustomer, type PaymentMethod } from "@pos/shared";
 import { readScaleWeight, scaleSupported } from "../scale";
 
 export function Modal({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
@@ -58,44 +58,66 @@ export function AmountDialog({ title, label, initial = "", onDone, onClose, scal
 
 export interface Employee { id: string; name: string }
 
+type Other = (typeof OTHER_METHODS)[number] | "credit";
+
+/**
+ * Paying: cash with ready banknote buttons (each tap adds that note), any of the Libyan ways of
+ * paying for all or part of the bill, or on the customer's account. The change shows big.
+ */
 export function PayDialog({ totalMinor, customer, employees, onPay, onClose }: {
   totalMinor: number; customer: CatalogCustomer | null; employees: Employee[];
   onPay: (p: { method: PaymentMethod; amountMinor: number }[], employeeId: string | null) => void; onClose: () => void;
 }) {
   const [cash, setCash] = useState(String(totalMinor / 1000));
-  const [card, setCard] = useState("0");
-  const [credit, setCredit] = useState("0");
+  /** Until the cashier types or taps a note, the cash box holds the exact amount. */
+  const [fresh, setFresh] = useState(true);
+  const [others, setOthers] = useState<Partial<Record<Other, string>>>({});
   const [staff, setStaff] = useState(false);
   const [employeeId, setEmployeeId] = useState("");
-  const num = (v: string) => toMinor(Number(v.replace(",", ".")) || 0);
+  const cashRef = useRef<HTMLInputElement>(null);
+  const num = (v: string | undefined) => toMinor(Number((v ?? "").replace(",", ".")) || 0);
   const cashM = num(cash);
-  const cardM = num(card);
-  const creditM = customer ? num(credit) : 0;
+  const otherM = (Object.keys(others) as Other[]).reduce((a, k) => a + (k === "credit" && !customer ? 0 : num(others[k])), 0);
+  const creditM = customer ? num(others.credit) : 0;
   const room = customer ? creditRoom(customer) : 0;
-  // A member of staff buying for themselves: the whole bill comes off their salary.
   const salaryM = staff && employeeId ? totalMinor : 0;
-  const paid = staff ? salaryM : cashM + cardM + creditM;
+  const paid = staff ? salaryM : cashM + otherM;
   const change = paid - totalMinor;
   const overLimit = !staff && creditM > 0 && room !== null && creditM > room;
-  const valid = staff ? !!employeeId : paid >= totalMinor && change <= cashM && cardM + creditM <= totalMinor && !overLimit;
-  const quick = [totalMinor, ...[5000, 10000, 20000, 50000].filter((n) => n > totalMinor).slice(0, 3)];
+  const valid = staff ? !!employeeId : paid >= totalMinor && change <= cashM && otherM <= totalMinor && !overLimit;
+  const notes = [5000, 10000, 20000, 50000];
+  const choices: Other[] = [...OTHER_METHODS, ...(customer && room !== 0 ? (["credit"] as const) : [])];
+
+  function addNote(n: number) {
+    setCash(String(((fresh ? 0 : cashM) + n) / 1000));
+    setFresh(false);
+    cashRef.current?.focus();
+  }
+
+  function useMethod(m: Other) {
+    if (others[m] !== undefined) return;
+    const rest = Math.max(0, totalMinor - otherM - (fresh ? 0 : cashM));
+    if (fresh) setCash("0");
+    setFresh(false);
+    setOthers({ ...others, [m]: String((m === "credit" && room !== null ? Math.min(rest, room) : rest) / 1000) });
+  }
 
   function pay() {
     if (!valid) return;
     if (staff) return onPay([{ method: "payroll", amountMinor: totalMinor }], employeeId);
     const p: { method: PaymentMethod; amountMinor: number }[] = [];
     if (cashM > 0) p.push({ method: "cash", amountMinor: cashM });
-    if (cardM > 0) p.push({ method: "card", amountMinor: cardM });
-    if (creditM > 0) p.push({ method: "credit", amountMinor: creditM });
+    for (const k of Object.keys(others) as Other[]) {
+      const v = k === "credit" && !customer ? 0 : num(others[k]);
+      if (v > 0) p.push({ method: k, amountMinor: v });
+    }
     if (!p.length) p.push({ method: "cash", amountMinor: 0 });
     onPay(p, null);
   }
 
   return (
     <Modal title="الدفع" onClose={onClose}>
-      <div className="totals" style={{ border: 0, padding: 0 }}>
-        <div className="grand num">{formatMoney(totalMinor)}</div>
-      </div>
+      <div className="pay-total"><span>المطلوب</span><b className="num">{formatMoney(totalMinor)}</b></div>
       {employees.length > 0 && (
         <div className="seg" role="tablist">
           <button className={!staff ? "active" : ""} onClick={() => setStaff(false)}>زبون</button>
@@ -114,40 +136,71 @@ export function PayDialog({ totalMinor, customer, employees, onPay, onClose }: {
           <div className="notice">الفاتورة كاملة <b className="num">{formatMoney(totalMinor)}</b> تنخصم من راتب الموظف تلقائيا، ويشوفها في صفحة «راتبي».</div>
         </>
       ) : <>
-      <label>
-        كاش
-        <input className="num" inputMode="decimal" value={cash} onChange={(e) => setCash(e.target.value)} onKeyDown={(e) => e.key === "Enter" && pay()} autoFocus onFocus={(e) => e.target.select()} />
-      </label>
-      <div className="row">
-        {quick.map((q) => (
-          <button key={q} onClick={() => setCash(String(q / 1000))} className="num">{formatMoney(q)}</button>
-        ))}
-      </div>
-      <label>
-        بطاقة
-        <input className="num" inputMode="decimal" value={card} onChange={(e) => setCard(e.target.value)} onFocus={(e) => e.target.select()} />
-      </label>
-      {customer && (
         <label>
-          آجل على {customer.name}
-          <span className="muted"> (متاح {room === null ? "بدون حد" : formatMoney(room)})</span>
-          <input className="num" inputMode="decimal" value={credit} onChange={(e) => setCredit(e.target.value)} onFocus={(e) => e.target.select()} />
+          كاش من الزبون
+          <input ref={cashRef} className="num pay-cash" inputMode="decimal" value={cash} autoFocus onFocus={(e) => e.target.select()}
+            onChange={(e) => { setCash(e.target.value); setFresh(false); }} onKeyDown={(e) => e.key === "Enter" && pay()} />
         </label>
-      )}
-      <div className="row">
-        <button onClick={() => { setCard(String(totalMinor / 1000)); setCash("0"); setCredit("0"); }}>الكل بطاقة</button>
-        {customer && room !== 0 && <button onClick={() => { setCredit(String(totalMinor / 1000)); setCash("0"); setCard("0"); }}>الكل آجل</button>}
-        <span className="spacer" />
-        <span>الباقي:</span>
-        <b className="num" style={{ fontSize: "1.4rem", color: change >= 0 ? "var(--ok)" : "var(--danger)" }}>{formatMoney(Math.max(change, 0))}</b>
-      </div>
+        <div className="pay-notes">
+          <button className={fresh ? "active" : ""} onClick={() => { setCash(String(Math.max(0, totalMinor - otherM) / 1000)); setFresh(true); }}>بالضبط</button>
+          {notes.map((n) => <button key={n} className="num" onClick={() => addNote(n)}>+{n / 1000}</button>)}
+          <button className="ghost" onClick={() => { setCash("0"); setFresh(false); cashRef.current?.focus(); }}>مسح</button>
+        </div>
+        <div className="pay-methods">
+          {choices.map((m) => (
+            <button key={m} className={others[m] !== undefined ? "active" : ""} onClick={() => useMethod(m)}>{m === "credit" ? `آجل على ${customer?.name}` : METHOD_LABELS[m]}</button>
+          ))}
+        </div>
+        {(Object.keys(others) as Other[]).map((m) => (
+          <div className="pay-row" key={m}>
+            <span>{m === "credit" ? `آجل${room !== null ? ` (متاح ${formatMoney(room)})` : ""}` : METHOD_LABELS[m]}</span>
+            <input className="num" inputMode="decimal" value={others[m]} onFocus={(e) => e.target.select()} autoFocus
+              onChange={(e) => setOthers({ ...others, [m]: e.target.value })} onKeyDown={(e) => e.key === "Enter" && pay()} />
+            <button className="ghost" aria-label="شيل" onClick={() => { const n = { ...others }; delete n[m]; setOthers(n); }}>✕</button>
+          </div>
+        ))}
+        <div className={`pay-change ${change >= 0 ? "ok" : "short"}`}>
+          <span>{change >= 0 ? "الباقي للزبون" : "ناقص"}</span>
+          <b className="num">{formatMoney(Math.abs(change))}</b>
+        </div>
       </>}
-      {!valid && !staff && <div className="error">{overLimit ? "الآجل أكبر من المتاح للعميل" : paid < totalMinor ? "المبلغ ناقص" : "الباقي يكون من الكاش بس"}</div>}
+      {!valid && !staff && paid >= totalMinor && <div className="error">{overLimit ? "الآجل أكبر من المتاح للعميل" : "الباقي يكون من الكاش بس"}</div>}
       <div className="row">
         <span className="spacer" />
         <button onClick={onClose}>رجوع</button>
         <button className="primary big" disabled={!valid} onClick={pay}>تأكيد وطباعة</button>
       </div>
+    </Modal>
+  );
+}
+
+/** Money put into or taken out of the drawer during the shift, always with a reason. */
+export function DrawerDialog({ onDone, onClose }: { onDone: (kind: "in" | "out", amountMinor: number, reason: string) => void; onClose: () => void }) {
+  const [kind, setKind] = useState<"in" | "out">("out");
+  const [amount, setAmount] = useState("");
+  const [reason, setReason] = useState("");
+  const reasons = kind === "out"
+    ? ["دفع لمورد", "مصروف للمحل", "سحب لصاحب المحل", "إيداع في المصرف", "سلفة لموظف"]
+    : ["فكة للدرج", "صاحب المحل زاد كاش", "رجوع سلفة"];
+  const m = toMinor(Number(amount.replace(",", ".")) || 0);
+  const ok = m > 0 && reason.trim().length > 0;
+  return (
+    <Modal title="💵 إيداع أو سحب من الدرج" onClose={onClose}>
+      <div className="seg">
+        <button className={kind === "out" ? "active" : ""} onClick={() => { setKind("out"); setReason(""); }}>➖ سحب من الدرج</button>
+        <button className={kind === "in" ? "active" : ""} onClick={() => { setKind("in"); setReason(""); }}>➕ إيداع في الدرج</button>
+      </div>
+      <label>المبلغ (د.ل)
+        <input className="num" inputMode="decimal" value={amount} autoFocus onChange={(e) => setAmount(e.target.value)} onKeyDown={(e) => e.key === "Enter" && ok && onDone(kind, m, reason.trim())} />
+      </label>
+      <div className="pay-methods">
+        {reasons.map((r) => <button key={r} className={reason === r ? "active" : ""} onClick={() => setReason(r)}>{r}</button>)}
+      </div>
+      <label>السبب
+        <input value={reason} placeholder="اكتب السبب" onChange={(e) => setReason(e.target.value)} onKeyDown={(e) => e.key === "Enter" && ok && onDone(kind, m, reason.trim())} />
+      </label>
+      <div className="muted">يتسجل باسمك في الوردية، ويطلع في تقرير قفل الوردية وعند صاحب المحل.</div>
+      <div className="row"><span className="spacer" /><button onClick={onClose}>إلغاء</button><button className="primary" disabled={!ok} onClick={() => onDone(kind, m, reason.trim())}>تسجيل وفتح الدرج</button></div>
     </Modal>
   );
 }

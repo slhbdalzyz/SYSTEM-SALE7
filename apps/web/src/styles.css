@@ -585,3 +585,63 @@ button.big, a.button.big { padding: 12px 22px; font-size: 1.05rem; }
   body.print-a4 .printable .print-only { display: block; }
   body.print-a4 .printable .card { box-shadow: none; border: 1px solid #999; }
 }
+
+/* Till: status bar, customer tabs, paying, change, customer box. */
+.pos { grid-template-rows: auto auto 1fr; }
+.pos-status { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; padding: 5px 16px; background: var(--panel); border-bottom: 1px solid var(--line); font-size: .85rem; }
+.pos-status .st { display: inline-flex; align-items: center; gap: 6px; }
+.pos-status .st i { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); display: inline-block; }
+.pos-status .st.ok i { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent); }
+.pos-status .st.off i { background: var(--danger); }
+.pos-status .st.off { color: var(--danger); font-weight: 700; }
+.pos-status .st.warn { color: var(--warn); font-weight: 700; }
+.pos-status .st.bad { color: var(--danger); font-weight: 700; }
+.pos-left { display: flex; flex-direction: column; }
+.pos-left > .cart { flex: 1; min-height: 0; }
+.till-tabs { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
+.till-tabs button { display: grid; gap: 0; text-align: start; padding: 6px 12px; white-space: nowrap; border-radius: 10px 10px 4px 4px; }
+.till-tabs button.active { background: var(--brand); color: var(--brand-ink); border-color: var(--brand); }
+.till-tabs button small { font-weight: 400; opacity: .85; font-size: .75rem; }
+.pay-total { display: flex; justify-content: space-between; align-items: center; background: var(--brand-soft); border-radius: 12px; padding: 10px 16px; }
+.pay-total b { font-size: 2.2rem; color: var(--brand); }
+.pay-cash { font-size: 1.6rem; font-weight: 800; padding: 10px 12px; }
+.pay-notes { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+.pay-notes button { padding: 12px 4px; font-size: 1.05rem; }
+.pay-notes button.active, .pay-methods button.active { background: var(--brand); color: var(--brand-ink); border-color: var(--brand); }
+.pay-methods { display: flex; flex-wrap: wrap; gap: 6px; }
+.pay-methods button { padding: 8px 12px; }
+.pay-row { display: grid; grid-template-columns: 1fr 160px auto; gap: 8px; align-items: center; }
+.pay-change { display: flex; justify-content: space-between; align-items: center; border-radius: 12px; padding: 12px 16px; font-weight: 700; }
+.pay-change b { font-size: 2.4rem; }
+.pay-change.ok { background: color-mix(in srgb, var(--ok) 14%, var(--panel)); color: var(--ok); }
+.pay-change.short { background: var(--danger-soft); color: var(--danger); }
+.change-big { display: grid; justify-items: center; gap: 2px; padding: 14px; border-radius: 14px; background: color-mix(in srgb, var(--ok) 14%, var(--panel)); color: var(--ok); font-weight: 700; }
+.change-big b { font-size: 3rem; line-height: 1.1; }
+.change-big.done { padding: 8px; }
+.cust-box { display: grid; gap: 4px; padding: 10px 12px; border-radius: 10px; background: var(--brand-soft); }
+.cust-box .line { display: flex; justify-content: space-between; }
+.cust-box.near { background: var(--warn-soft); color: var(--warn); }
+.cust-box.over { background: var(--danger-soft); color: var(--danger); }
+.cust-bar { height: 6px; border-radius: 3px; background: color-mix(in srgb, var(--ink) 12%, transparent); overflow: hidden; }
+.cust-bar i { display: block; height: 100%; background: currentColor; }
+.cust-box:not(.near):not(.over) .cust-bar i { background: var(--brand); }
+
+/* Each cashier's own: bigger text, a dark screen. */
+html.till-lg { font-size: 112.5%; }
+html.till-xl { font-size: 125%; }
+html.till-dark {
+  --bg: #0b1220; --panel: #121b2e; --ink: #e6edf7; --muted: #93a3b8; --line: #24324d;
+  --brand: #2dd4bf; --brand-ink: #042f2a; --brand-soft: #0f3b38;
+  --danger: #f87171; --danger-soft: #3a1518; --warn: #fbbf24; --warn-soft: #3a2b0b; --ok: #4ade80;
+  color-scheme: dark;
+}
+html.till-dark .pos-top { background: #020617; }
+html.till-dark .pos-top button { border-color: #1e293b; }
+@media (max-width: 900px) {
+  .pay-notes { grid-template-columns: repeat(3, 1fr); }
+  .pay-row { grid-template-columns: 1fr 120px auto; }
+}
+.cust-head { display: flex; align-items: center; gap: 8px; }
+.cust-head button { margin-inline-start: auto; padding: 0 6px; }
+.change-big { cursor: pointer; }
+.modal:has(.pay-total) { max-height: 94vh; overflow: auto; }
