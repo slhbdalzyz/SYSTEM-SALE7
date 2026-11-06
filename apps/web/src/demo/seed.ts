@@ -35,6 +35,12 @@ export async function seedDemo(db: Q) {
   await addPriceChecker(db);
   await addPlatform(db);
   await db.query(`INSERT INTO customers (tenant_id, name, phone, credit_limit_minor) VALUES ($1,'محمد الطرابلسي','0912345678',200000), ($1,'مطعم الواحة','0923456789',NULL)`, [tid]);
+  // Points are on, and a regular customer already has some to spend.
+  await db.query(`UPDATE tenants SET loyalty = '{"enabled": true, "earnMinorPerPoint": 1000, "pointValueMinor": 10, "minRedeemPoints": 100}' WHERE id = $1`, [tid]);
+  await db.query(
+    `INSERT INTO loyalty_entries (tenant_id, customer_id, points, kind, note) SELECT $1, id, 350, 'adjust', 'رصيد افتتاحي' FROM customers WHERE tenant_id = $1 AND phone = '0912345678'`,
+    [tid],
+  );
 
   // The same departments a new shop gets at sign-up.
   await db.query(`SELECT pos_default_departments($1)`, [tid]);

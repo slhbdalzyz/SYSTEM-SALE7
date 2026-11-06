@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { creditRoom, formatMoney, formatQty, readShopSettings, type CatalogCustomer, type CatalogProduct, type Offer, type PaymentMethod, type ShopSettings } from "@pos/shared";
+import { creditRoom, formatMoney, formatQty, pointsEarned, pointsFor, readShopSettings, type CatalogCustomer, type CatalogProduct, type LoyaltySettings, type Offer, type PaymentMethod, type ShopSettings } from "@pos/shared";
 import { api } from "../api";
 import { db, getMeta, nextInvoiceNumber, setMeta, type HeldCart, type LocalShift } from "../localdb";
 import { findByCode, searchProducts } from "../lookup";
@@ -75,6 +75,8 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   const [receipt, setReceipt] = useState<ReceiptData | null>(null);
   const [catalogSize, setCatalogSize] = useState(0);
   const [customer, setCustomer] = useState<CatalogCustomer | null>(null);
+  /** The shop's points rules, kept on the device so points work offline too. */
+  const [rules, setRules] = useState<LoyaltySettings | null>(null);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [shop, setShop] = useState<Shop | null>(null);
   const till = (shop?.settings ?? readShopSettings({})).till;
@@ -122,6 +124,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
       if (!open) setDialog({ kind: "openShift" });
       setCatalogSize(await db.products.count());
       setShop((await getMeta<Shop>("shop")) ?? null);
+      setRules((await getMeta<LoyaltySettings>("loyalty")) ?? null);
       // Customers left open when the till was closed or the power went: still there.
       const saved = await getMeta<{ active: string; tabs: Tab[] }>("tabs");
       if (saved?.tabs?.length && saved.tabs.some((t) => t.lines.length)) {
@@ -132,12 +135,16 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
       }
       void countMine();
       try {
-        const me = await api<{ tenant: { name: string; settings: unknown }; stores: { id: string; receipt_footer: string | null }[]; storeId: string }>("/me", { token: session.staffToken });
+        const me = await api<{ tenant: { name: string; settings: unknown; loyalty?: LoyaltySettings }; stores: { id: string; receipt_footer: string | null }[]; storeId: string }>("/me", { token: session.staffToken });
         await setMeta("store", { footer: me.stores.find((s) => s.id === me.storeId)?.receipt_footer });
         // The shop's name and settings: what the receipt shows and what a cashier may do.
         const next = { name: me.tenant.name, settings: readShopSettings(me.tenant.settings) };
         await setMeta("shop", next);
         setShop(next);
+        if (me.tenant.loyalty) {
+          await setMeta("loyalty", me.tenant.loyalty);
+          setRules(me.tenant.loyalty);
+        }
       } catch {
         /* offline: keep the footer and settings saved last time */
       }
@@ -413,8 +420,20 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     });
     // Until the next sync, count the new debt locally so the credit limit still holds offline.
     if (customer && credit > 0) await db.customers.update(customer.id, { balanceMinor: customer.balanceMinor + credit });
+    // Points too: worked out here the same way the server will, so the receipt can show them.
+    let points: ReceiptData["points"];
+    if (customer && rules?.enabled) {
+      const pointsPaid = payments.filter((p) => p.method === "points").reduce((a, p) => a + p.amountMinor, 0);
+      const spent = pointsPaid > 0 ? pointsFor(rules, pointsPaid) : 0;
+      const earned = pointsEarned(rules, sale.totalMinor, pointsPaid);
+      const balance = (customer.points ?? 0) - spent + earned;
+      if (spent || earned) {
+        await db.customers.update(customer.id, { points: balance });
+        points = { earned, spent, balance };
+      }
+    }
     const store = await getMeta<{ footer?: string }>("store");
-    setReceipt({ storeName: device.storeName, shop, footer: store?.footer, deviceName: device.name, cashierName, sale, changeMinor: change, customerName: customer?.name, customerPhone: customer?.phone, employeeName: employees.find((e) => e.id === employeeId)?.name });
+    setReceipt({ storeName: device.storeName, shop, footer: store?.footer, deviceName: device.name, cashierName, sale, changeMinor: change, customerName: customer?.name, customerPhone: customer?.phone, employeeName: employees.find((e) => e.id === employeeId)?.name, points });
     finishCart();
     setDialog(null);
     sound("cash", prefs.sound);
@@ -429,12 +448,12 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     if (!device) return;
     await db.sales.put({
       id: crypto.randomUUID(), number: r.number, shiftId: shift?.id ?? null, createdAt: new Date().toISOString(), totalMinor: -r.totalMinor,
-      cashInMinor: r.method === "cash" ? -r.totalMinor : 0, changeMinor: 0, cashierName, input: null, kind: "return",
+      cashInMinor: r.method === "cash" ? -r.refundMinor : 0, changeMinor: 0, cashierName, input: null, kind: "return",
     });
     const store = await getMeta<{ footer?: string }>("store");
     setReceipt({ storeName: device.storeName, shop, footer: store?.footer, deviceName: device.name, cashierName, ret: r });
     setDialog(null);
-    flash(r.method === "cash" ? `رجّع للزبون ${formatMoney(r.totalMinor)} كاش` : "تم المرتجع");
+    flash(r.method === "cash" && r.refundMinor > 0 ? `رجّع للزبون ${formatMoney(r.refundMinor)} كاش` : "تم المرتجع");
     void syncNow();
     focusScan();
   }
@@ -750,7 +769,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
                 {!!lastPaid.changeMinor && <b className="num">{formatMoney(lastPaid.changeMinor)}</b>}
               </div>
             )}
-            {customer && <CustomerBox c={customer} onClear={() => setCustomer(null)} />}
+            {customer && <CustomerBox c={customer} rules={rules} onClear={() => setCustomer(null)} />}
             {message && lines.length > 0 && <div className={message.bad ? "error" : "badge ok"} style={{ textAlign: "center" }}>{message.text}</div>}
             {receipt?.sale && !lines.length && (shop?.settings.whatsapp.offerAfterSale ?? true) && (
               <button className="wa-offer" onClick={() => setDialog({ kind: "wa" })}>
@@ -788,7 +807,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
           <div className="row"><span className="spacer" /><button onClick={() => { setDialog(null); focusScan(); }}>إغلاق</button></div>
         </Modal>
       )}
-      {dialog?.kind === "pay" && <PayDialog totalMinor={totals.total} customer={customer} employees={employees} onPay={pay} onClose={() => { setDialog(null); focusScan(); }} />}
+      {dialog?.kind === "pay" && <PayDialog totalMinor={totals.total} customer={customer} employees={employees} rules={rules} onPay={pay} onClose={() => { setDialog(null); focusScan(); }} />}
       {dialog?.kind === "weight" && (
         <AmountDialog
           title={dialog.product.name}
@@ -974,7 +993,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
 
 
 /** The customer on the bill: what they owe, their limit, and a warning as they get close to it. */
-function CustomerBox({ c, onClear }: { c: CatalogCustomer; onClear: () => void }) {
+function CustomerBox({ c, rules, onClear }: { c: CatalogCustomer; rules: LoyaltySettings | null; onClear: () => void }) {
   const room = creditRoom(c);
   const limit = c.creditLimitMinor;
   const pct = limit ? Math.min(100, Math.round((c.balanceMinor / limit) * 100)) : 0;
@@ -983,6 +1002,7 @@ function CustomerBox({ c, onClear }: { c: CatalogCustomer; onClear: () => void }
     <div className={`cust-box ${level}`}>
       <div className="cust-head"><b>👤 {c.name}</b>{c.phone && <span className="muted num">{c.phone}</span>}<button className="ghost" onClick={onClear} aria-label="شيل العميل">✕</button></div>
       <div className="line"><span>عليه دين</span><b className="num">{formatMoney(c.balanceMinor)}</b></div>
+      {rules?.enabled && <div className="line"><span>⭐ نقاطه</span><span><b className="num">{c.points ?? 0}</b> <span className="muted num">({formatMoney((c.points ?? 0) * rules.pointValueMinor)})</span></span></div>}
       {limit !== null && limit > 0 && <>
         <div className="line"><span>حد الدين</span><span className="num">{formatMoney(limit)}</span></div>
         <div className="cust-bar"><i style={{ width: `${pct}%` }} /></div>
