@@ -179,4 +179,15 @@ export async function platformRoutes(app: FastifyInstance) {
     await platformAudit(app.db, { adminId: req.user.sub, action: "settings.save", data: b });
     return { ok: true };
   });
+
+  /** The last server errors, newest first, so a problem is seen before a shop calls about it. */
+  app.get("/platform/errors", staff, async () => {
+    await app.db.query(`DELETE FROM server_errors WHERE at < now() - interval '30 days'`);
+    const rows = (await app.db.query(
+      `SELECT e.id, e.at, e.method, e.url, e.message, e.stack, t.name AS tenant_name
+         FROM server_errors e LEFT JOIN tenants t ON t.id = e.tenant_id ORDER BY e.at DESC LIMIT 100`,
+    )).rows;
+    const day = (await app.db.query(`SELECT count(*)::int AS n FROM server_errors WHERE at > now() - interval '24 hours'`)).rows[0].n;
+    return { rows: rows.map((r) => ({ ...r, id: Number(r.id) })), last24h: day };
+  });
 }

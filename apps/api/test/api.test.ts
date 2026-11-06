@@ -1355,3 +1355,98 @@ describe("WhatsApp invoice link and a new shop's first steps", () => {
     expect((await app.inject({ method: "POST", url: "/auth/register", remoteAddress: "10.0.0.93", payload: { businessName: "x محل", storeName: "فرع", ownerName: "سس", email: "bad@test.ly", password: "password123", businessType: "spaceship" } })).statusCode).toBe(400);
   });
 });
+
+describe("pro pack: counts, variants, quick keys, two-step sign-in, audit and errors", () => {
+  let t: string;
+  let store: string;
+  let item: string;
+  const stockOf = async (pid: string) => Number((await db.query(`SELECT COALESCE(sum(qty_milli),0) AS q FROM stock_movements WHERE product_id = $1 AND store_id = $2`, [pid, store])).rows[0].q);
+  beforeAll(async () => {
+    const reg = (await app.inject({ method: "POST", url: "/auth/register", remoteAddress: "10.0.0.94", payload: { businessName: "بوتيك الورد", storeName: "الرئيسي", ownerName: "منى", email: "ward@test.ly", password: "password123", businessType: "clothing" } })).json();
+    t = reg.token; store = reg.storeId;
+    item = (await call("POST", "/products", t, { name: "شامبو", quick: true, units: [{ name: "حبة", priceMinor: 5000, isBase: true, barcodes: ["7770000000017"] }] })).body.id;
+    await call("POST", "/stock/adjust", t, { storeId: store, productId: item, qtyMilli: 10000, reason: "رصيد أول" });
+  });
+
+  it("gives a clothing shop clothing departments", async () => {
+    const names = (await call("GET", "/categories", t)).body.map((c: { name: string }) => c.name);
+    expect(names).toContain("أحذية");
+    expect(names).not.toContain("المعلبات");
+  });
+
+  it("marks an item as a quick key", async () => {
+    const p = (await call("GET", "/products", t)).body.find((x: { id: string }) => x.id === item);
+    expect(p.quick).toBe(true);
+  });
+
+  it("makes one item per colour and size, sharing a group", async () => {
+    const r = await call("POST", "/products/variants", t, { name: "قميص", sizes: ["M", "L", "M"], colors: ["أبيض", "أسود"], priceMinor: 45000 });
+    expect(r.body.error ?? r.status).toBe(200);
+    expect(r.body).toHaveLength(4);
+    expect(r.body.map((p: { name: string }) => p.name)).toContain("قميص - أسود - L");
+    expect(new Set(r.body.map((p: { groupId: string }) => p.groupId)).size).toBe(1);
+    expect(r.body[0].attrs).toEqual({ color: "أبيض", size: "M" });
+    expect(r.body[0].units[0]).toMatchObject({ priceMinor: 45000 });
+    expect(r.body[0].units[0].barcodes[0]).toBeTruthy();
+    expect((await call("POST", "/products/variants", t, { name: "قميص", sizes: [], colors: [] })).status).toBe(400);
+  });
+
+  it("counts the shelves and turns each difference into one correction", async () => {
+    const c = (await call("POST", "/counts", t, { storeId: store, note: "جرد آخر الشهر" })).body;
+    expect(c.id).toBeTruthy();
+    expect((await call("PUT", `/counts/${c.id}/lines`, t, { productId: item, countedMilli: 4000 })).body.countedMilli).toBe(4000);
+    expect((await call("PUT", `/counts/${c.id}/lines`, t, { productId: item, countedMilli: 3000, add: true })).body.countedMilli).toBe(7000);
+    const d = (await call("GET", `/counts/${c.id}`, t)).body;
+    expect(d.lines[0]).toMatchObject({ name: "شامبو", counted_milli: 7000, system_milli: 10000, diff_milli: -3000 });
+    expect((await call("GET", `/counts?storeId=${store}`, t)).body[0]).toMatchObject({ id: c.id, status: "open", items: 1 });
+    expect((await call("POST", `/counts/${c.id}/apply`, t)).body).toEqual({ items: 1, changed: 1 });
+    expect(await stockOf(item)).toBe(7000);
+    expect((await call("POST", `/counts/${c.id}/apply`, t)).status).toBe(400);
+    expect((await call("PUT", `/counts/${c.id}/lines`, t, { productId: item, countedMilli: 1 })).status).toBe(400);
+    const after = (await call("GET", `/counts/${c.id}`, t)).body;
+    expect(after.lines[0].system_milli).toBe(10000); // what the books said at the time
+    // Another shop can't see or touch it.
+    expect((await call("GET", `/counts/${c.id}`, owner)).status).toBe(404);
+    const c2 = (await call("POST", "/counts", t, { storeId: store })).body;
+    expect((await call("POST", `/counts/${c2.id}/apply`, t)).status).toBe(400); // nothing counted
+    expect((await call("POST", `/counts/${c2.id}/cancel`, t)).body.ok).toBe(true);
+  });
+
+  it("asks for an authenticator code once two-step sign-in is on", async () => {
+    const { totpCode } = await import("@pos/shared");
+    const s = (await call("POST", "/auth/2fa/setup", t)).body;
+    expect(s.uri).toContain("otpauth://totp/");
+    const step = Math.floor(Date.now() / 30000);
+    expect((await call("POST", "/auth/2fa/enable", t, { code: "000000" === (await totpCode(s.secret, step)) ? "111111" : "000000" })).status).toBe(400);
+    expect((await call("POST", "/auth/2fa/enable", t, { code: await totpCode(s.secret, step) })).body.ok).toBe(true);
+    expect((await call("GET", "/me", t)).body.user.totp_enabled).toBe(true);
+    const login = (body: object) => app.inject({ method: "POST", url: "/auth/login", remoteAddress: "10.0.0.95", payload: body });
+    expect((await login({ email: "ward@test.ly", password: "password123" })).json()).toEqual({ twoFactor: true });
+    expect((await login({ email: "ward@test.ly", password: "password123", code: "123456" === (await totpCode(s.secret, step)) ? "654321" : "123456" })).statusCode).toBe(401);
+    expect((await login({ email: "ward@test.ly", password: "password123", code: await totpCode(s.secret, step) })).json().token).toBeTruthy();
+    expect((await call("POST", "/auth/2fa/disable", t, { password: "wrong", code: await totpCode(s.secret, step) })).status).toBe(400);
+    expect((await call("POST", "/auth/2fa/disable", t, { password: "password123", code: await totpCode(s.secret, step) })).body.ok).toBe(true);
+    expect((await login({ email: "ward@test.ly", password: "password123" })).json().token).toBeTruthy();
+  });
+
+  it("shows the owner who did what, and nobody else", async () => {
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Tripoli" }).format(new Date());
+    const r = (await call("GET", `/audit/log?from=${today}&to=${today}`, t)).body;
+    const actions = r.rows.map((x: { action: string }) => x.action);
+    expect(actions).toEqual(expect.arrayContaining(["stock.count", "user.2fa_on", "user.2fa_off", "user.login", "product.variants"]));
+    expect(r.rows[0].user_name).toBe("منى");
+    expect((await call("GET", `/audit/log?from=${today}&to=${today}&action=user.2fa`, t)).body.rows.every((x: { action: string }) => x.action.startsWith("user.2fa"))).toBe(true);
+    expect((await call("GET", `/audit/log?from=${today}&to=${today}`, cashierToken)).status).toBe(403);
+  });
+
+  it("reports health with the database, and keeps server errors for the platform", async () => {
+    const h = await call("GET", "/health");
+    expect(h.body).toMatchObject({ ok: true, db: true });
+    await db.query(`INSERT INTO server_errors (method, url, message) VALUES ('GET', '/x', 'boom')`);
+    const l = await call("POST", "/platform/login", undefined, { email: "admin@sale7.ly", password: "platform-pass" });
+    const e = (await call("GET", "/platform/errors", l.body.token)).body;
+    expect(e.rows[0]).toMatchObject({ url: "/x", message: "boom" });
+    expect(e.last24h).toBeGreaterThan(0);
+    expect((await call("GET", "/platform/errors", t)).status).toBe(403);
+  });
+});

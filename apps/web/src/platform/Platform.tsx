@@ -55,7 +55,7 @@ function Login({ onToken }: { onToken: (t: string) => void }) {
   );
 }
 
-const TABS = { overview: "نظرة عامة", tenants: "المحلات", plans: "الباقات", settings: "الإعدادات" } as const;
+const TABS = { overview: "نظرة عامة", tenants: "المحلات", plans: "الباقات", errors: "أخطاء السيرفر", settings: "الإعدادات" } as const;
 
 function Console({ call, logout }: { call: Call; logout: () => void }) {
   const [tab, setTab] = useState<keyof typeof TABS>("overview");
@@ -79,6 +79,7 @@ function Console({ call, logout }: { call: Call; logout: () => void }) {
           {tab === "overview" && <Overview call={call} open={setTenant} />}
           {tab === "tenants" && <Tenants call={call} open={setTenant} />}
           {tab === "plans" && <Plans call={call} />}
+          {tab === "errors" && <Errors call={call} />}
           {tab === "settings" && <Settings call={call} />}
         </>
       )}
@@ -412,6 +413,48 @@ function Settings({ call }: { call: Call }) {
       </label>
       {msg && <div className="badge ok">{msg}</div>}
       <div><button className="primary" onClick={() => void call("/platform/settings", { method: "PUT", body: s }).then(() => setMsg("تم الحفظ"))}>حفظ</button></div>
+    </div>
+  );
+}
+
+interface ServerError { id: number; at: string; method: string | null; url: string | null; message: string | null; stack: string | null; tenant_name: string | null }
+
+/** The server's last errors (kept 30 days), so a problem is seen before a shop calls about it. */
+function Errors({ call }: { call: Call }) {
+  const [data, setData] = useState<{ rows: ServerError[]; last24h: number } | null>(null);
+  const [open, setOpen] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const load = useCallback(() => call<{ rows: ServerError[]; last24h: number }>("/platform/errors").then(setData).catch((e) => setError((e as Error).message)), [call]);
+  useEffect(() => void load(), [load]);
+  if (error) return <div className="error">{error}</div>;
+  if (!data) return <div className="muted">جاري التحميل…</div>;
+  return (
+    <div className="stack">
+      <div className="row">
+        <span className={`badge ${data.last24h ? "bad" : "ok"}`}>{data.last24h ? `${data.last24h} خطأ في آخر 24 ساعة` : "ما فيش أخطاء في آخر 24 ساعة ✓"}</span>
+        <span className="muted">فحص صحة السيرفر وقاعدة البيانات: <code>/api/health</code> (حطه في أي خدمة مراقبة).</span>
+        <span className="spacer" />
+        <button onClick={() => void load()}>تحديث</button>
+      </div>
+      <div className="card" style={{ padding: 0, overflow: "auto" }}>
+        <table>
+          <thead><tr><th>الوقت</th><th>المحل</th><th>الطلب</th><th>الخطأ</th></tr></thead>
+          <tbody>
+            {data.rows.length === 0 && <tr><td colSpan={4} className="muted" style={{ textAlign: "center", padding: 24 }}>ما فيش أخطاء مسجلة</td></tr>}
+            {data.rows.map((r) => (
+              <tr key={r.id} onClick={() => setOpen(open === r.id ? null : r.id)} style={{ cursor: "pointer", verticalAlign: "top" }}>
+                <td className="num" style={{ whiteSpace: "nowrap" }}>{new Date(r.at).toLocaleString("en-GB", { dateStyle: "short", timeStyle: "short" })}</td>
+                <td>{r.tenant_name ?? "—"}</td>
+                <td className="num" style={{ direction: "ltr", textAlign: "left" }}>{r.method} {r.url}</td>
+                <td style={{ direction: "ltr", textAlign: "left", maxWidth: 520 }}>
+                  {r.message}
+                  {open === r.id && r.stack && <pre style={{ whiteSpace: "pre-wrap", fontSize: ".75rem", margin: "6px 0 0" }}>{r.stack}</pre>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

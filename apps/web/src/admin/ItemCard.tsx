@@ -8,6 +8,34 @@ interface Dept { id: string; name: string; icon: string | null }
 
 const BASE_UNITS = ["حبة", "علبة", "قنينة", "كيس", "باكو", "لتر", "متر"];
 const PACKS = ["صندوق", "كرتونة", "شد", "جالون", "كيس", "باكو", "درزن", "طبقة"];
+const SIZE_SETS: [string, string[]][] = [
+  ["ملابس", ["S", "M", "L", "XL", "XXL"]],
+  ["أحذية", ["38", "39", "40", "41", "42", "43", "44"]],
+  ["أطفال", ["2", "4", "6", "8", "10", "12"]],
+];
+const COLORS = ["أبيض", "أسود", "رمادي", "كحلي", "أزرق", "أحمر", "أخضر", "بيج", "بني"];
+
+/** Words typed with Enter or a comma become chips; a tap on a suggestion adds it. */
+function Chips({ value, onChange, suggest, label }: { value: string[]; onChange: (v: string[]) => void; suggest: string[]; label: string }) {
+  const [t, setT] = useState("");
+  const add = (w: string) => {
+    const x = w.trim();
+    if (x && !value.includes(x)) onChange([...value, x]);
+    setT("");
+  };
+  return (
+    <div className="stack" style={{ gap: 6 }}>
+      <div className="chip-input" aria-label={label}>
+        {value.map((v) => <span key={v} className="badge">{v}<button type="button" aria-label={`شيل ${v}`} onClick={() => onChange(value.filter((x) => x !== v))}>✕</button></span>)}
+        <input value={t} placeholder={value.length ? "" : label} onChange={(e) => (/[,،]$/.test(e.target.value) ? add(e.target.value.slice(0, -1)) : setT(e.target.value))}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(t); } else if (e.key === "Backspace" && !t && value.length) onChange(value.slice(0, -1)); }} onBlur={() => t && add(t)} />
+      </div>
+      <div className="row wrap" style={{ gap: 4 }}>
+        {suggest.filter((x) => !value.includes(x)).map((x) => <button type="button" key={x} className="ghost" style={{ padding: "2px 8px" }} onClick={() => add(x)}>+ {x}</button>)}
+      </div>
+    </div>
+  );
+}
 
 /**
  * A new item card: what the item is and how it comes, never what it costs or sells for. Prices
@@ -28,13 +56,25 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
   const [cats, setCats] = useState<Dept[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [quick, setQuick] = useState(false);
+  // Clothing and shoes: one item per colour and size, each with its own barcode and stock.
+  const [variants, setVariants] = useState(false);
+  const [sizes, setSizes] = useState<string[]>([]);
+  const [colors, setColors] = useState<string[]>([]);
+  const [sizeSet, setSizeSet] = useState(0);
   useEffect(() => void call<Dept[]>("/categories").then(setCats), [call]);
+  useEffect(() => void call<{ tenant: { business_type?: string } }>("/me").then((m) => {
+    if (m.tenant.business_type === "clothing") { setVariants(true); setExpiry(false); }
+  }).catch(() => {}), [call]);
+  const combos = Math.max(sizes.length, 1) * Math.max(colors.length, 1);
 
   const baseName = weighted ? "كيلو" : base.trim() || "حبة";
   const setPack = (i: number, patch: Partial<Pack>) => setPacks((ps) => ps.map((p, j) => (j === i ? { ...p, ...patch } : p)));
   const packOk = packs.every((p) => p.name.trim() && Number(p.qty) > 1);
   const alertFactor = alert.unit >= 0 ? Number(packs[alert.unit]?.qty) || 1 : 1;
-  const ok = name.trim().length >= 2 && packOk && expiry !== null && (!alert.on || Number(alert.qty) > 0);
+  const ok = variants
+    ? name.trim().length >= 2 && sizes.length + colors.length > 0 && combos <= 100 && (!alert.on || Number(alert.qty) > 0)
+    : name.trim().length >= 2 && packOk && expiry !== null && (!alert.on || Number(alert.qty) > 0);
 
   async function addDept() {
     const n = prompt("اسم القسم الجديد");
@@ -48,9 +88,16 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
     setError(null);
     setBusy(true);
     try {
+      if (variants) {
+        const made = await call<CatalogProduct[]>("/products/variants", {
+          body: { name: name.trim(), categoryId: dept || null, sizes, colors, unitName: base.trim() || "حبة", minStockMilli: alert.on ? toMinor(Number(alert.qty) || 0) : 0 },
+        });
+        onCreated(made[0]);
+        return;
+      }
       const p = await call<CatalogProduct>("/products", {
         body: {
-          name: name.trim(), categoryId: dept || null, isWeighted: weighted, autoCode: true, trackExpiry: !!expiry,
+          name: name.trim(), categoryId: dept || null, isWeighted: weighted, autoCode: true, trackExpiry: !!expiry, quick,
           minStockMilli: alert.on ? toMinor((Number(alert.qty) || 0) * alertFactor) : 0,
           units: [
             { name: baseName, factorMilli: 1000, priceMinor: 0, isBase: true, barcodes: !weighted && barcode ? [barcode] : [] },
@@ -84,12 +131,33 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
           <label>طريقة البيع
             <div className="seg">
               <button type="button" className={!weighted ? "active" : ""} onClick={() => setWeighted(false)}>بالعدد</button>
-              <button type="button" className={weighted ? "active" : ""} onClick={() => setWeighted(true)}>بالوزن ⚖️</button>
+              <button type="button" className={weighted ? "active" : ""} onClick={() => { setWeighted(true); setVariants(false); }}>بالوزن ⚖️</button>
             </div>
           </label>
         </div>
 
-        {weighted ? (
+        <div className="seg" role="group" aria-label="نوع الصنف">
+          <button type="button" className={!variants ? "active" : ""} onClick={() => setVariants(false)}>صنف واحد</button>
+          <button type="button" className={variants ? "active" : ""} onClick={() => { setVariants(true); setWeighted(false); }}>👕 مقاسات وألوان</button>
+        </div>
+
+        {variants ? (
+          <fieldset className="item-box stack">
+            <legend>المقاسات والألوان</legend>
+            <div className="row" style={{ gap: 6 }}>
+              <span className="muted">المقاسات:</span>
+              {SIZE_SETS.map(([n], i) => <button type="button" key={n} className={sizeSet === i ? "active ghost" : "ghost"} style={{ padding: "2px 8px" }} onClick={() => setSizeSet(i)}>{n}</button>)}
+            </div>
+            <Chips label="اكتب مقاس واضغط Enter" value={sizes} onChange={setSizes} suggest={SIZE_SETS[sizeSet][1]} />
+            <span className="muted">الألوان:</span>
+            <Chips label="اكتب لون واضغط Enter" value={colors} onChange={setColors} suggest={COLORS} />
+            {sizes.length + colors.length > 0 && (
+              <div className={combos > 100 ? "error" : "hint"}>
+                {combos > 100 ? "أكثر من 100 نوع، قسّمهم على بطاقتين" : `يتعمل ${combos} صنف، كل واحد بباركود ومخزون خاص بيه: مثلاً «${[name.trim() || "الصنف", colors[0], sizes[0]].filter(Boolean).join(" - ")}»`}
+              </div>
+            )}
+          </fieldset>
+        ) : weighted ? (
           <div className="hint">⚖️ يتباع بالكيلو، وكود الميزان يتعطى له تلقائياً.</div>
         ) : (
           <div className="row" style={{ alignItems: "end" }}>
@@ -101,9 +169,9 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
             </label>
           </div>
         )}
-        {!weighted && !barcode && <div className="hint">🏷️ ما فيش باركود؟ يتعمل له باركود خاص بالمحل تلقائياً وتقدر تطبعه ملصق.</div>}
+        {!variants && !weighted && !barcode && <div className="hint">🏷️ ما فيش باركود؟ يتعمل له باركود خاص بالمحل تلقائياً وتقدر تطبعه ملصق.</div>}
 
-        <fieldset className="item-box">
+        {!variants && <fieldset className="item-box">
           <legend>التعبئة</legend>
           {packs.length === 0 && <div className="muted">يجي فرادى. لو يجي في صندوق أو جالون ضيف التعبئة.</div>}
           {packs.map((k, i) => (
@@ -122,16 +190,23 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
           {packs.some((k) => Number(k.qty) > 1) && (
             <div className="hint">{packs.filter((k) => Number(k.qty) > 1).map((k) => `${k.name} = ${k.qty} ${baseName}`).join(" · ")}</div>
           )}
-        </fieldset>
+        </fieldset>}
 
-        <div className="row" style={{ alignItems: "center" }}>
+        {!variants && <div className="row" style={{ alignItems: "center" }}>
           <span>خاضع للصلاحية؟</span>
           <div className="seg">
             <button type="button" className={expiry === true ? "active" : ""} onClick={() => setExpiry(true)}>نعم</button>
             <button type="button" className={expiry === false ? "active" : ""} onClick={() => setExpiry(false)}>لا</button>
           </div>
           {expiry && <span className="muted">تاريخ الصلاحية يتطلب في كل فاتورة توريد.</span>}
-        </div>
+        </div>}
+
+        {!variants && (
+          <label className="row" style={{ color: "var(--ink)" }}>
+            <input type="checkbox" style={{ width: "auto" }} checked={quick} onChange={(e) => setQuick(e.target.checked)} />
+            ⭐ زر سريع في شاشة الكاشير (للخبز والخضرة والأصناف اللي ما عندهاش باركود)
+          </label>
+        )}
 
         <label className="row" style={{ color: "var(--ink)" }}>
           <input type="checkbox" style={{ width: "auto" }} checked={alert.on} onChange={(e) => setAlert({ ...alert, on: e.target.checked })} />
@@ -150,7 +225,7 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
         )}
 
         <div className="hint">💰 الأسعار والكمية تدخلهم في فاتورة التوريد، مش في بطاقة الصنف.</div>
-        {expiry === null && name.trim().length >= 2 && <div className="muted">اختار إذا كان الصنف خاضع للصلاحية.</div>}
+        {!variants && expiry === null && name.trim().length >= 2 && <div className="muted">اختار إذا كان الصنف خاضع للصلاحية.</div>}
         {error && <div className="error">{error}</div>}
         <div className="row"><span className="spacer" /><button onClick={onClose}>إلغاء</button><button className="primary" disabled={!ok || busy} onClick={save}>حفظ البطاقة</button></div>
       </div>

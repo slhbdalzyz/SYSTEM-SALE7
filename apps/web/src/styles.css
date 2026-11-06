@@ -502,3 +502,35 @@ button.big, a.button.big { padding: 12px 22px; font-size: 1.05rem; }
 .start-steps button.done { opacity: .6; }
 .start-n { width: 26px; height: 26px; flex: none; border-radius: 50%; background: var(--brand-soft); color: var(--brand); display: grid; place-items: center; font-weight: 800; }
 .start-steps button.done .start-n { background: var(--brand); color: #fff; }
+
+/* Pro pack: quick keys, camera, shift report, counts, audit */
+.pos-left { grid-template-rows: auto auto 1fr; }
+.quick-keys { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; }
+.quick-keys button { flex: 0 0 auto; min-width: 96px; max-width: 150px; display: grid; gap: 2px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; text-align: center; }
+.quick-keys button:hover { border-color: var(--brand); background: var(--brand-soft); }
+.quick-keys small { color: var(--muted); }
+.scan-cam { position: absolute; inset-inline-end: 8px; top: 50%; transform: translateY(-50%); font-size: 1.3rem; padding: 4px 10px; }
+.camera-box { position: relative; border-radius: 12px; overflow: hidden; background: #000; aspect-ratio: 4 / 3; }
+.camera-box video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.camera-aim { position: absolute; inset: 30% 12%; border: 3px solid rgba(255,255,255,.85); border-radius: 10px; box-shadow: 0 0 0 999px rgba(0,0,0,.25); }
+.zreport { max-height: 60vh; overflow: auto; display: flex; justify-content: center; }
+.count-scan { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: end; }
+.count-line { display: grid; grid-template-columns: 1fr auto auto auto; gap: 10px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.count-line:last-child { border-bottom: 0; }
+.diff-up { color: var(--ok); }
+.diff-down { color: var(--danger); }
+.audit-data { font-size: .8rem; color: var(--muted); max-width: 380px; overflow-wrap: anywhere; }
+.chip-input { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.chip-input input { border: 0; flex: 1; min-width: 90px; padding: 4px; background: transparent; }
+.chip-input .badge button { all: unset; cursor: pointer; margin-inline-start: 4px; }
+.totp-qr { display: grid; gap: 8px; justify-items: center; }
+.totp-secret { font-family: monospace; letter-spacing: 2px; font-size: 1.05rem; background: var(--brand-soft); padding: 6px 10px; border-radius: 8px; overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  .count-scan { grid-template-columns: 1fr 1fr; }
+  .count-scan > :first-child { grid-column: 1 / -1; }
+  .count-line { grid-template-columns: 1fr 1fr 1fr; }
+  .count-line > :first-child { grid-column: 1 / -1; }
+  .count-head { display: none; }
+  .count-line [data-l]::before { content: attr(data-l) " "; font-weight: 400; color: var(--muted); font-size: .8rem; }
+}
+.scan:has(.scan-cam) input { padding-inline-end: 60px; }

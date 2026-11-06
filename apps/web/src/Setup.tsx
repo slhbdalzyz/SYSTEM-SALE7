@@ -20,7 +20,7 @@ const FEATURES: [string, string, string][] = [
 const TYPES: { id: string; icon: string; name: string; ready: boolean }[] = [
   { id: "grocery", icon: "🛒", name: "بقالة / سوبرماركت", ready: true },
   { id: "other", icon: "🏪", name: "محل تجاري آخر", ready: true },
-  { id: "clothing", icon: "👕", name: "ملابس وأحذية", ready: false },
+  { id: "clothing", icon: "👕", name: "ملابس وأحذية", ready: true },
   { id: "pharmacy", icon: "💊", name: "صيدلية", ready: false },
   { id: "butcher", icon: "🥩", name: "جزارة", ready: false },
   { id: "restaurant", icon: "🍽️", name: "مطعم / مقهى", ready: false },
@@ -112,6 +112,7 @@ function Landing({ plans, onStart, onLogin }: { plans: Plan[]; onStart: (plan?: 
 
 function Login({ go, onRegister, onBack }: { go: (s: Screen) => void; onRegister: () => void; onBack: () => void }) {
   const [f, setF] = useState({ email: "", password: "" });
+  const [code, setCode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   async function submit(e: FormEvent) {
@@ -119,7 +120,12 @@ function Login({ go, onRegister, onBack }: { go: (s: Screen) => void; onRegister
     setBusy(true);
     setError(null);
     try {
-      const r = await api<{ token: string }>("/auth/login", { body: f });
+      const r = await api<{ token?: string; twoFactor?: boolean }>("/auth/login", { body: code === null ? f : { ...f, code } });
+      // Two-step sign-in is on: the password was right, now the code from the authenticator app.
+      if (r.twoFactor || !r.token) {
+        setCode("");
+        return;
+      }
       session.adminToken = r.token;
       go(prefersOwnerView() ? "owner" : "admin");
     } catch (err) {
@@ -134,9 +140,14 @@ function Login({ go, onRegister, onBack }: { go: (s: Screen) => void; onRegister
         <button type="button" className="ghost back" onClick={onBack}>→ رجوع</button>
         <h1 style={{ margin: 0 }}>دخول</h1>
         <label>البريد الإلكتروني<input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} required autoFocus /></label>
-        <label>كلمة السر<input type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} required /></label>
+        <label>كلمة السر<input type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} required disabled={code !== null} /></label>
+        {code !== null && (
+          <label>🔐 رمز التحقق من تطبيق المصادقة
+            <input className="num" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} autoFocus required placeholder="6 أرقام" style={{ letterSpacing: 6, fontSize: "1.3rem", textAlign: "center" }} />
+          </label>
+        )}
         {error && <div className="error">{error}</div>}
-        <button className="primary big" disabled={busy}>دخول</button>
+        <button className="primary big" disabled={busy || (code !== null && code.length !== 6)}>{code !== null ? "تأكيد" : "دخول"}</button>
         <p className="muted" style={{ margin: 0, fontSize: ".85rem" }}>بعد الدخول تقدر تعتمد هذا الجهاز ككاشير من صفحة «الأجهزة».</p>
         <div className="row"><span className="muted">ما عندكش حساب؟</span><button type="button" className="ghost" onClick={onRegister}>سجّل محلك</button></div>
       </form>
