@@ -23,6 +23,7 @@ import { MyPay } from "./MyPay";
 import { ShopSettings } from "./ShopSettings";
 import { Invoices } from "./Invoices";
 import { Counts } from "./Counts";
+import { Zakat } from "./Zakat";
 import { AuditLog } from "./AuditLog";
 import { SecurityCard } from "./Security";
 import { FromPaper } from "./FromPaper";
@@ -41,7 +42,7 @@ const NAV = [
   { group: "", items: { home: ["🏠", "لوحة التحكم"], paper: ["📒", "من الدفتر للنظام"], reports: ["📊", "التقارير"], alerts: ["🔔", "التنبيهات"] } },
   { group: "المخزون", items: { products: ["📦", "الأصناف والأقسام"], purchasing: ["🚚", "المشتريات والموردين"], branches: ["🏬", "الفروع والتحويلات"], counts: ["📋", "جرد المخزون"], labels: ["🏷️", "ملصقات الباركود"] } },
   { group: "المبيعات", items: { invoices: ["🧾", "المبيعات والفواتير"], customers: ["👥", "العملاء والديون"], offers: ["🎁", "العروض"] } },
-  { group: "المال", items: { money: ["🏦", "الخزينة والأرصدة"], expenses: ["💸", "المصروفات"] } },
+  { group: "المال", items: { money: ["🏦", "الخزينة والأرصدة"], expenses: ["💸", "المصروفات"], zakat: ["🕌", "الزكاة"] } },
   { group: "الموظفين", items: { staff: ["🧑‍💼", "الموظفين والصلاحيات"], payroll: ["💰", "الرواتب"], mypay: ["💼", "راتبي"] } },
   { group: "الإدارة", items: { settings: ["⚙️", "الإعدادات"], devices: ["🖥️", "الأجهزة"], audit: ["🕵️", "سجل العمليات"], backup: ["💾", "النسخ الاحتياطي"], subscription: ["⭐", "الاشتراك"] } },
 ] as const;
@@ -53,7 +54,7 @@ const TABS = Object.assign({}, ...NAV.map((g) => g.items)) as Record<Tab, readon
 const NEEDS: Record<Tab, Permission | "owner" | null> = {
   home: "reports", paper: "owner", reports: "reports", alerts: "alerts", products: "products", purchasing: "purchasing", branches: "branches", counts: "products", labels: "products",
   invoices: "sales", settings: "settings", customers: "customers", offers: "offers", expenses: "expenses", money: "money", staff: "staff", payroll: "payroll", mypay: null, devices: "devices",
-  backup: "owner", subscription: "owner", audit: "owner",
+  backup: "owner", subscription: "owner", audit: "owner", zakat: "owner",
 };
 
 export function Admin({ go }: { go: (s: Screen) => void }) {
@@ -179,6 +180,7 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
           {shown === "paper" && <FromPaper call={call} storeId={store.id} open={setTab} />}
           {shown === "counts" && <Counts call={call} storeId={store.id} canApply={isOwner || me.user.role === "manager"} />}
           {shown === "audit" && <AuditLog call={call} />}
+          {shown === "zakat" && <Zakat call={call} open={setTab} />}
           {shown === "labels" && <Labels call={call} storeId={store.id} storeName={me.tenant.name} draft={labelDraft} clearDraft={() => setLabelDraft(null)} />}
           {shown === "branches" && <Branches call={call} storeId={store.id} isOwner={isOwner} onStoresChanged={loadMe} />}
           {shown === "offers" && <Offers call={call} storeId={store.id} stores={me.stores} />}

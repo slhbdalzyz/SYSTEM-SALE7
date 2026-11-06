@@ -1,7 +1,7 @@
-import { formatMoney, formatQty } from "@pos/shared";
+import { formatHijri, formatMoney, formatQty, nextHawl, readZakatSettings } from "@pos/shared";
 import type { Db, Tx } from "./db";
 
-export type AlertKind = "low_stock" | "out_of_stock" | "big_return" | "big_discount" | "cash_diff" | "over_credit_limit";
+export type AlertKind = "low_stock" | "out_of_stock" | "big_return" | "big_discount" | "cash_diff" | "over_credit_limit" | "zakat_due";
 
 /** What a shop wants to hear about. Amounts in dirham; 0 turns that alert off. */
 export interface AlertSettings {
@@ -95,6 +95,28 @@ export async function alertOverCreditLimit(q: Q, a: { tenantId: string; storeId:
     tenantId: a.tenantId, storeId: a.storeId, kind: "over_credit_limit", title: `${a.customer} فات حد الدين`,
     body: `عليه ${formatMoney(a.balanceMinor)} والحد ${formatMoney(a.limitMinor)}`,
   });
+}
+
+/**
+ * A few days before the shop's zakat year turns, once: time to count the shop. Only for shops that
+ * set their zakat day. Cheap enough to run on every sync.
+ */
+export async function checkZakatDue(q: Q, tenantId: string, now = new Date()) {
+  const raw = (await q.query(`SELECT zakat_settings FROM tenants WHERE id = $1`, [tenantId])).rows[0]?.zakat_settings;
+  if (!raw || !Object.keys(raw).length) return false;
+  const s = readZakatSettings(raw);
+  if (!s.remindDays) return false;
+  const h = nextHawl(s, now);
+  if (h.daysLeft > s.remindDays) return false;
+  const date = h.date.toISOString().slice(0, 10);
+  const seen = await q.query(`SELECT 1 FROM alerts WHERE tenant_id = $1 AND kind = 'zakat_due' AND data->>'date' = $2`, [tenantId, date]);
+  if (seen.rowCount) return false;
+  const when = h.daysLeft === 0 ? "اليوم" : h.daysLeft === 1 ? "بكرة" : `بعد ${h.daysLeft} أيام`;
+  await raiseAlert(q, {
+    tenantId, kind: "zakat_due", title: `حول الزكاة ${when}`,
+    body: `${s.calendar === "hijri" ? formatHijri(h.date) : date}: وقت جرد المحل وحساب الزكاة من صفحة «الزكاة».`, data: { date },
+  });
+  return true;
 }
 
 // ---- Phone notifications (Web Push) ----
