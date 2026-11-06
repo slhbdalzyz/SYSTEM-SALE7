@@ -66,6 +66,35 @@ export function receiptRows(d: ReceiptData): Row[] {
       ...tail,
     ];
   }
+  if (d.shift) {
+    const z = d.shift;
+    const diff = z.countedCashMinor - z.expectedCashMinor;
+    const m = (v: number) => formatMoney(v);
+    return [
+      ...head("تقرير قفل الوردية", z.closedAt),
+      { kind: "pair", right: "فتحت", left: when(z.openedAt) },
+      { kind: "pair", right: "قفلت", left: when(z.closedAt) },
+      { kind: "rule" },
+      { kind: "pair", right: `المبيعات (${z.sales} فاتورة)`, left: m(z.salesMinor), size: 24, bold: true },
+      ...(Object.entries(z.byMethod) as [keyof typeof METHOD, number][]).filter(([, v]) => v).map(([k, v]): Row => ({ kind: "pair", right: `  ${METHOD[k]}`, left: m(v) })),
+      ...(z.discountMinor > 0 ? [{ kind: "pair", right: "الخصومات", left: m(z.discountMinor) } as Row] : []),
+      ...(z.promoMinor > 0 ? [{ kind: "pair", right: "العروض", left: m(z.promoMinor) } as Row] : []),
+      ...(z.returns ? [{ kind: "pair", right: `المرتجعات (${z.returns})`, left: `−${m(z.returnsMinor)}` } as Row] : []),
+      ...(z.debtPaidCashMinor ? [{ kind: "pair", right: "تسديد ديون (كاش)", left: m(z.debtPaidCashMinor) } as Row] : []),
+      { kind: "rule" },
+      { kind: "pair", right: "كاش أول الوردية", left: m(z.openingCashMinor) },
+      { kind: "pair", right: "الكاش المتوقع", left: m(z.expectedCashMinor), bold: true },
+      { kind: "pair", right: "الكاش الموجود", left: m(z.countedCashMinor), bold: true },
+      { kind: "pair", right: diff === 0 ? "مطابق ✓" : diff > 0 ? "زيادة" : "عجز", left: m(Math.abs(diff)), size: 26, bold: true },
+      ...(z.items.length ? [{ kind: "rule" } as Row, { kind: "center", text: "الأكثر مبيعاً", bold: true } as Row,
+        ...z.items.map((l): Row => ({ kind: "item", name: l.name, detail: `× ${formatQty(l.qtyMilli, l.qtyMilli % 1000 !== 0)}`, amount: formatMoney(l.totalMinor, "") }))] : []),
+      { kind: "rule" },
+      { kind: "space", h: 30 },
+      { kind: "center", text: "توقيع الكاشير ____________" },
+      { kind: "space", h: 20 },
+      { kind: "center", text: "توقيع المسؤول ____________" },
+    ];
+  }
   if (d.payment) {
     const p = d.payment;
     return [

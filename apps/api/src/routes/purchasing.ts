@@ -227,11 +227,11 @@ export async function purchasingRoutes(app: FastifyInstance) {
        SELECT st.*, GREATEST(st.min_stock_milli * 2 - st.stock_milli, 0) AS suggest_milli,
               bu.id AS base_unit_id, bu.name AS base_unit_name,
               last.unit_id AS last_unit_id, last.unit_name AS last_unit_name, last.factor_milli AS last_factor_milli,
-              last.unit_cost_minor AS last_cost_minor, last.supplier_id, last.supplier_name, last.at AS last_at
+              last.unit_cost_minor AS last_cost_minor, last.supplier_id, last.supplier_name, last.supplier_phone, last.at AS last_at
        FROM stock st
        JOIN product_units bu ON bu.product_id = st.id AND bu.is_base
        LEFT JOIN LATERAL (
-         SELECT l.unit_id, l.unit_name, u.factor_milli, l.unit_cost_minor, i.supplier_id, s.name AS supplier_name, i.created_at AS at
+         SELECT l.unit_id, l.unit_name, u.factor_milli, l.unit_cost_minor, i.supplier_id, s.name AS supplier_name, s.phone AS supplier_phone, i.created_at AS at
          FROM purchase_lines l JOIN purchase_invoices i ON i.id = l.invoice_id JOIN product_units u ON u.id = l.unit_id
          LEFT JOIN suppliers s ON s.id = i.supplier_id
          WHERE l.product_id = st.id ORDER BY i.created_at DESC LIMIT 1

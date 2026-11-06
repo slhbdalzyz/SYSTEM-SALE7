@@ -17,6 +17,8 @@ import { PrinterDialog } from "../hardware/PrinterDialog";
 import { openCustomerDisplay, openDrawer, printReceipt } from "../hardware/printer";
 import { displaySender } from "../display/channel";
 import { sendInvoice } from "../whatsapp";
+import { shiftReport } from "./shiftReport";
+import { CameraScanner, hasCamera } from "../hardware/CameraScanner";
 
 type Dialog =
   | { kind: "pay" }
@@ -33,6 +35,8 @@ type Dialog =
   | { kind: "mypay" }
   | { kind: "keys" }
   | { kind: "wa" }
+  | { kind: "zreport"; data: ReceiptData }
+  | { kind: "camera" }
   | null;
 
 type Shop = { name: string; settings: ShopSettings };
@@ -120,6 +124,12 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   useEffect(() => {
     if (sync?.lastSync) void db.products.count().then(setCatalogSize);
   }, [sync?.lastSync]);
+
+  // Quick keys: bread, vegetables, a bag… items without a barcode, one tap away.
+  const [quick, setQuick] = useState<CatalogProduct[]>([]);
+  useEffect(() => {
+    void db.products.filter((p) => !!p.quick && p.active).toArray().then((ps) => setQuick(ps.sort((a, b) => a.name.localeCompare(b.name, "ar"))));
+  }, [sync?.lastSync, catalogSize]);
 
   // Windows app: once a day, when online and the owner allowed it, a full copy goes to this PC's disk.
   // It checks every 10 minutes; the backup itself decides whether a day has passed.
@@ -365,10 +375,16 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
       await db.shifts.update(shift.id, { closedAt });
       await db.outbox.add({ kind: "shift_close", refId: shift.id, payload: { shiftId: shift.id, closingCashMinor: countedMinor }, createdAt: closedAt });
     });
-    const diff = countedMinor - expected;
-    alert(`تم قفل الوردية.\nالمتوقع: ${formatMoney(expected)}\nالموجود: ${formatMoney(countedMinor)}\nالفرق: ${formatMoney(diff)}`);
-    await syncNow();
-    logout();
+    // The Z report: printed and shown, worked out from this till's own record of the shift.
+    const sales = await db.sales.where("shiftId").equals(shift.id).toArray();
+    const z = shiftReport(shift, sales, countedMinor, closedAt);
+    z.expectedCashMinor = expected;
+    const store = await getMeta<{ footer?: string }>("store");
+    const data: ReceiptData = { storeName: device?.storeName ?? "", shop, footer: store?.footer, deviceName: device?.name ?? "", cashierName, shift: z };
+    setShift(null);
+    setDialog({ kind: "zreport", data });
+    if (till.autoPrint ?? true) void print(data, false);
+    void syncNow();
   }
 
   function logout() {
@@ -490,6 +506,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
                 }
               }}
             />
+            {hasCamera() && <button className="scan-cam" onClick={() => setDialog({ kind: "camera" })} title="امسح بالكاميرا" aria-label="امسح بالكاميرا">📷</button>}
             {results.length > 0 && (
               <div className="results">
                 {results.map((p, i) => (
@@ -501,6 +518,17 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
               </div>
             )}
           </div>
+
+          {quick.length > 0 && (
+            <div className="quick-keys" aria-label="أزرار سريعة">
+              {quick.map((p) => (
+                <button key={p.id} onClick={() => pick(p)} title={p.name}>
+                  <span className="ellipsis">{p.name}</span>
+                  <small className="num">{p.isWeighted ? "⚖️" : formatMoney((p.units.find((u) => u.isBase) ?? p.units[0]).priceMinor, "")}</small>
+                </button>
+              ))}
+            </div>
+          )}
 
           <div className="cart">
             {lines.length === 0 ? (
@@ -704,6 +732,19 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
           onClose={() => setDialog(null)}
           onDone={(m) => void openShift(m)}
         />
+      )}
+      {dialog?.kind === "zreport" && (
+        <Modal title="تقرير قفل الوردية" onClose={logout}>
+          <div className="zreport"><Receipt data={dialog.data} preview /></div>
+          <div className="row">
+            <button onClick={() => void print({ ...dialog.data, copy: true }, false)}>🖨️ اطبعه</button>
+            <span className="spacer" />
+            <button className="primary" onClick={logout}>تم، خروج</button>
+          </div>
+        </Modal>
+      )}
+      {dialog?.kind === "camera" && (
+        <CameraScanner onClose={() => { setDialog(null); focusScan(); }} onCode={(c) => { setDialog(null); void scan(c); focusScan(); }} />
       )}
       {dialog?.kind === "closeShift" && (
         <AmountDialog

@@ -1,3 +1,4 @@
+import { sendSupplierOrder } from "../whatsapp";
 import { useEffect, useMemo, useState } from "react";
 import { formatMoney, formatQty, toMinor, type CatalogProduct } from "@pos/shared";
 import { Modal } from "../pos/dialogs";
@@ -10,7 +11,7 @@ interface Invoice { id: string; supplier_ref: string | null; invoice_date: strin
 interface Reorder {
   id: string; name: string; is_weighted: boolean; min_stock_milli: number; stock_milli: number; suggest_milli: number; cost_minor: number;
   base_unit_id: string; base_unit_name: string; last_unit_id: string | null; last_unit_name: string | null; last_factor_milli: number | null;
-  last_cost_minor: number | null; supplier_id: string | null; supplier_name: string | null;
+  last_cost_minor: number | null; supplier_id: string | null; supplier_name: string | null; supplier_phone?: string | null;
 }
 /** A supply line: bought in unitId, with a selling price for each of the item's units (the piece, the box…). */
 interface Line { key: string; productId: string; name: string; unitId: string; units: CatalogProduct["units"]; qty: string; cost: string; prices: Record<string, string>; expiry: string; trackExpiry: boolean }
@@ -423,7 +424,9 @@ function ReorderList({ call, storeId, order }: { call: Call; storeId: string; or
   useEffect(() => {
     void call<Reorder[]>(`/stock/reorder?storeId=${storeId}`).then(setRows);
     void call<CatalogProduct[]>(`/products?storeId=${storeId}`).then(setProducts);
+    void call<{ tenant: { name: string } }>("/me").then((m) => setShopName(m.tenant.name)).catch(() => {});
   }, [call, storeId]);
+  const [shopName, setShopName] = useState("");
   const bySupplier = useMemo(() => {
     const m = new Map<string, { name: string; rows: Reorder[] }>();
     for (const r of rows) {
@@ -447,12 +450,23 @@ function ReorderList({ call, storeId, order }: { call: Call; storeId: string; or
     });
   }
 
+  function whatsapp(list: Reorder[]) {
+    const r0 = list[0];
+    sendSupplierOrder({
+      shopName, supplierName: r0.supplier_id ? r0.supplier_name : null, phone: r0.supplier_phone,
+      lines: list.map((r) => {
+        const factor = r.last_factor_milli ?? 1000;
+        return { name: r.name, qty: String(Math.max(1, Math.ceil(r.suggest_milli / factor))), unit: r.last_unit_name ?? r.base_unit_name };
+      }),
+    });
+  }
+
   if (rows.length === 0) return <div className="card muted">ما فيش نواقص. (حط «حد التنبيه بالنقص» لكل صنف من صفحة الأصناف.)</div>;
   return (
     <div className="stack">
       {bySupplier.map(([sid, g]) => (
         <div className="card stack" key={sid}>
-          <div className="row"><h3 style={{ margin: 0 }}>{g.name}</h3><span className="spacer" /><button className="primary" onClick={() => toDraft(sid, g.rows)}>اعمل فاتورة شراء بيهم</button></div>
+          <div className="row"><h3 style={{ margin: 0 }}>{g.name}</h3><span className="spacer" /><button className="wa-offer" onClick={() => whatsapp(g.rows)} title={g.rows[0].supplier_phone ? `على ${g.rows[0].supplier_phone}` : "تختار الرقم في الواتساب"}>📲 اطلبهم من المورد</button><button className="primary" onClick={() => toDraft(sid, g.rows)}>اعمل فاتورة شراء بيهم</button></div>
           <table>
             <thead><tr><th>الصنف</th><th>الموجود</th><th>حد التنبيه</th><th>المقترح</th><th>آخر تكلفة</th></tr></thead>
             <tbody>

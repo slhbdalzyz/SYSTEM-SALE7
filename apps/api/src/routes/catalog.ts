@@ -16,7 +16,7 @@ export async function loadProducts(q: Db | Tx, tenantId: string, opts: { since?:
     where.push(`p.id = ANY($${args.length})`);
   }
   const r = await q.query(
-    `SELECT p.id, p.name, p.sku, p.category_id, p.is_weighted, p.scale_code, p.tax_bp, p.cost_minor, p.min_stock_milli, p.active, p.track_expiry, p.updated_at,
+    `SELECT p.id, p.name, p.sku, p.category_id, p.is_weighted, p.scale_code, p.tax_bp, p.cost_minor, p.min_stock_milli, p.active, p.track_expiry, p.quick, p.group_id, p.attrs, p.updated_at,
        COALESCE(json_agg(json_build_object(
          'id', u.id, 'name', u.name, 'factorMilli', u.factor_milli, 'priceMinor', u.price_minor, 'isBase', u.is_base,
          'barcodes', COALESCE((SELECT json_agg(b.code ORDER BY b.code) FROM barcodes b WHERE b.unit_id = u.id), '[]'::json)
@@ -38,6 +38,9 @@ export async function loadProducts(q: Db | Tx, tenantId: string, opts: { since?:
     minStockMilli: p.min_stock_milli,
     active: p.active,
     trackExpiry: p.track_expiry,
+    quick: p.quick,
+    groupId: p.group_id,
+    attrs: p.attrs,
     updatedAt: p.updated_at.toISOString(),
     units: p.units.map((u: CatalogProduct["units"][number]) => ({ ...u, factorMilli: Number(u.factorMilli), priceMinor: Number(u.priceMinor) })),
   }));
@@ -80,11 +83,11 @@ async function saveProduct(tx: Tx, tenantId: string, id: string | null, input: u
     if (!c.rowCount) throw new HttpError(400, "التصنيف غير موجود");
   }
 
-  const cols = [b.name, b.sku ?? null, b.categoryId ?? null, b.isWeighted, b.scaleCode ?? null, b.taxBp, b.costMinor, b.minStockMilli, b.active, b.trackExpiry];
+  const cols = [b.name, b.sku ?? null, b.categoryId ?? null, b.isWeighted, b.scaleCode ?? null, b.taxBp, b.costMinor, b.minStockMilli, b.active, b.trackExpiry, b.quick];
   let pid: string;
   if (id) {
     const r = await tx.query(
-      `UPDATE products SET name=$3, sku=$4, category_id=$5, is_weighted=$6, scale_code=$7, tax_bp=$8, cost_minor=$9, min_stock_milli=$10, active=$11, track_expiry=$12, updated_at=now()
+      `UPDATE products SET name=$3, sku=$4, category_id=$5, is_weighted=$6, scale_code=$7, tax_bp=$8, cost_minor=$9, min_stock_milli=$10, active=$11, track_expiry=$12, quick=$13, updated_at=now()
        WHERE id=$1 AND tenant_id=$2 RETURNING id`,
       [id, tenantId, ...cols],
     );
@@ -92,8 +95,8 @@ async function saveProduct(tx: Tx, tenantId: string, id: string | null, input: u
     pid = id;
   } else {
     const r = await tx.query(
-      `INSERT INTO products (tenant_id, name, sku, category_id, is_weighted, scale_code, tax_bp, cost_minor, min_stock_milli, active, track_expiry)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+      `INSERT INTO products (tenant_id, name, sku, category_id, is_weighted, scale_code, tax_bp, cost_minor, min_stock_milli, active, track_expiry, quick)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
       [tenantId, ...cols],
     );
     pid = r.rows[0].id;
@@ -234,6 +237,46 @@ export async function catalogRoutes(app: FastifyInstance) {
       data: priceChanges.length ? { priceChanges } : undefined,
     });
     return after;
+  });
+
+  /**
+   * One item in several sizes and colours (clothes, shoes): a card for each combination, each with
+   * its own barcode and stock, grouped so they show together.
+   */
+  app.post("/products/variants", managers, async (req) => {
+    const b = z.object({
+      name: z.string().trim().min(2).max(160),
+      categoryId: z.string().uuid().nullable().optional(),
+      sizes: z.array(z.string().trim().min(1).max(20)).max(20).default([]),
+      colors: z.array(z.string().trim().min(1).max(30)).max(20).default([]),
+      unitName: z.string().trim().min(1).max(40).default("حبة"),
+      minStockMilli: z.number().int().nonnegative().default(0),
+      priceMinor: z.number().int().nonnegative().default(0),
+      costMinor: z.number().int().nonnegative().default(0),
+    }).parse(req.body);
+    const sizes = [...new Set(b.sizes)];
+    const colors = [...new Set(b.colors)];
+    if (!sizes.length && !colors.length) throw new HttpError(400, "حط مقاس أو لون واحد على الأقل");
+    const combos: Record<string, string>[] = [];
+    for (const color of colors.length ? colors : [null]) for (const size of sizes.length ? sizes : [null]) combos.push({ ...(color ? { color } : {}), ...(size ? { size } : {}) });
+    if (combos.length > 100) throw new HttpError(400, "أكثر من 100 نوع، قسّمهم");
+    const ids = await inTx(app.db, async (tx) => {
+      const group = (await tx.query(`SELECT gen_random_uuid() AS g`)).rows[0].g as string;
+      const out: string[] = [];
+      for (const a of combos) {
+        const name = [b.name, a.color, a.size].filter(Boolean).join(" - ");
+        const id = await saveProduct(tx, req.user.tid, null, {
+          name, categoryId: b.categoryId ?? null, autoCode: true, minStockMilli: b.minStockMilli, costMinor: b.costMinor,
+          units: [{ name: b.unitName, factorMilli: 1000, priceMinor: b.priceMinor, isBase: true, barcodes: [] }],
+        });
+        await tx.query(`UPDATE products SET group_id = $2, attrs = $3 WHERE id = $1`, [id, group, JSON.stringify(a)]);
+        out.push(id);
+      }
+      return out;
+    });
+    await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "product.variants", entity: "product", entityId: ids[0], data: { name: b.name, count: ids.length } });
+    const made = await loadProducts(app.db, req.user.tid, { ids });
+    return made.sort((x, y) => ids.indexOf(x.id) - ids.indexOf(y.id)); // colour by colour, sizes in the order given
   });
 
   /** Gives a unit its own in-store barcode when it came without one (loose bread, local products…). */

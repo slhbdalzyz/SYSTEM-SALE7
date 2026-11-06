@@ -68,6 +68,8 @@ export const productInputSchema = z.object({
   trackExpiry: z.boolean().default(false),
   /** Give the base unit an in-store barcode (or a weighed item a scale code) when it has none. */
   autoCode: z.boolean().default(false),
+  /** Shown as a button on the till's quick keys (bread, vegetables, things without a barcode). */
+  quick: z.boolean().default(false),
   units: z.array(unitInputSchema).min(1).max(10),
 });
 export type ProductInput = z.infer<typeof productInputSchema>;
@@ -114,6 +116,10 @@ export interface CatalogProduct {
   minStockMilli: number;
   active: boolean;
   trackExpiry: boolean;
+  quick?: boolean;
+  /** Variants of one item (sizes, colours) share a group. */
+  groupId?: string | null;
+  attrs?: Record<string, string> | null;
   updatedAt: string;
   units: CatalogUnit[];
 }

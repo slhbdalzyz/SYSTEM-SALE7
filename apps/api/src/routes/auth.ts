@@ -1,4 +1,4 @@
-import { effectivePermissions, readShopSettings } from "@pos/shared";
+import { effectivePermissions, newTotpSecret, readShopSettings, totpUri, verifyTotp } from "@pos/shared";
 import type { FastifyInstance } from "fastify";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
@@ -18,7 +18,7 @@ const registerSchema = z.object({
   password: z.string().min(8).max(200),
 });
 
-const loginSchema = z.object({ email: z.string().email(), password: z.string().min(1) });
+const loginSchema = z.object({ email: z.string().email(), password: z.string().min(1), code: z.string().regex(/^\d{6}$/).optional() });
 const pinSchema = z.object({ deviceToken: z.string().length(64), userId: z.string().uuid(), pin: z.string().regex(/^\d{4,8}$/) });
 
 export async function authRoutes(app: FastifyInstance) {
@@ -45,7 +45,7 @@ export async function authRoutes(app: FastifyInstance) {
         `INSERT INTO users (tenant_id, name, email, password_hash, role) VALUES ($1,$2,$3,$4,'owner') RETURNING id`,
         [tid, b.ownerName, email, hash],
       );
-      await tx.query(`SELECT pos_default_departments($1)`, [tid]);
+      await tx.query(b.businessType === "clothing" ? `SELECT pos_clothing_departments($1)` : `SELECT pos_default_departments($1)`, [tid]);
       await audit(tx, { tenantId: tid, userId: u.rows[0].id, action: "tenant.register" });
       return { tid, sid: s.rows[0].id as string, uid: u.rows[0].id as string };
     });
@@ -55,12 +55,20 @@ export async function authRoutes(app: FastifyInstance) {
   app.post("/auth/login", loginLimit, async (req) => {
     const b = loginSchema.parse(req.body);
     const r = await app.db.query(
-      `SELECT id, tenant_id, role, password_hash FROM users WHERE email = $1 AND active`,
+      `SELECT id, tenant_id, role, password_hash, totp_enabled, totp_secret FROM users WHERE email = $1 AND active`,
       [b.email.toLowerCase()],
     );
     const u = r.rows[0];
     if (!u?.password_hash || !(await bcrypt.compare(b.password, u.password_hash))) {
       throw new HttpError(401, "البريد أو كلمة السر غير صحيحة");
+    }
+    // Second step: with the authenticator app on, the password alone is not enough.
+    if (u.totp_enabled) {
+      if (!b.code) return { twoFactor: true };
+      if (!(await verifyTotp(u.totp_secret, b.code))) {
+        await audit(app.db, { tenantId: u.tenant_id, userId: u.id, action: "user.2fa_failed" });
+        throw new HttpError(401, "رمز التحقق غير صحيح");
+      }
     }
     await audit(app.db, { tenantId: u.tenant_id, userId: u.id, action: "user.login" });
     return { token: sign({ sub: u.id, tid: u.tenant_id, role: u.role }, "12h") };
@@ -95,12 +103,42 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   app.get("/me", { preHandler: authenticate }, async (req) => {
-    const row = (await app.db.query(`SELECT id, name, email, role, job_title, permissions FROM users WHERE id = $1 AND tenant_id = $2`, [req.user.sub, req.user.tid])).rows[0];
+    const row = (await app.db.query(`SELECT id, name, email, role, job_title, permissions, COALESCE(totp_enabled, false) AS totp_enabled FROM users WHERE id = $1 AND tenant_id = $2`, [req.user.sub, req.user.tid])).rows[0];
     const { permissions, ...u } = row;
     u.permissions = effectivePermissions(row.role, permissions);
     const t = (await app.db.query(`SELECT id, name, currency, business_type, settings FROM tenants WHERE id = $1`, [req.user.tid])).rows[0];
     t.settings = readShopSettings(t.settings);
     const stores = await app.db.query(`SELECT id, name, address, phone, receipt_footer, active FROM stores WHERE tenant_id = $1 ORDER BY created_at`, [req.user.tid]);
     return { user: u, tenant: t, stores: stores.rows, deviceId: req.user.did ?? null, storeId: req.user.sid ?? null };
+  });
+
+  /** Two-step sign-in with an authenticator app (Google Authenticator, Microsoft Authenticator…). */
+  const twoFa = { preHandler: authenticate, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } };
+  app.post("/auth/2fa/setup", twoFa, async (req) => {
+    const u = (await app.db.query(`SELECT email, totp_enabled FROM users WHERE id = $1 AND tenant_id = $2`, [req.user.sub, req.user.tid])).rows[0];
+    if (!u?.email) throw new HttpError(400, "التحقق بخطوتين للحسابات اللي تدخل بالبريد بس");
+    if (u.totp_enabled) throw new HttpError(400, "التحقق بخطوتين مفعّل من قبل");
+    const secret = newTotpSecret();
+    await app.db.query(`UPDATE users SET totp_secret = $2 WHERE id = $1`, [req.user.sub, secret]);
+    return { secret, uri: totpUri(secret, u.email, "Sale7 POS") };
+  });
+  app.post("/auth/2fa/enable", twoFa, async (req) => {
+    const { code } = z.object({ code: z.string().regex(/^\d{6}$/) }).parse(req.body);
+    const u = (await app.db.query(`SELECT totp_secret FROM users WHERE id = $1 AND tenant_id = $2`, [req.user.sub, req.user.tid])).rows[0];
+    if (!u?.totp_secret) throw new HttpError(400, "ابدأ الإعداد أولاً");
+    if (!(await verifyTotp(u.totp_secret, code))) throw new HttpError(400, "الرمز غير صحيح، تأكد من وقت التلفون");
+    await app.db.query(`UPDATE users SET totp_enabled = true WHERE id = $1`, [req.user.sub]);
+    await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "user.2fa_on" });
+    return { ok: true };
+  });
+  app.post("/auth/2fa/disable", twoFa, async (req) => {
+    const b = z.object({ password: z.string().min(1), code: z.string().regex(/^\d{6}$/) }).parse(req.body);
+    const u = (await app.db.query(`SELECT password_hash, totp_secret, totp_enabled FROM users WHERE id = $1 AND tenant_id = $2`, [req.user.sub, req.user.tid])).rows[0];
+    if (!u?.totp_enabled) throw new HttpError(400, "التحقق بخطوتين مش مفعّل");
+    if (!u.password_hash || !(await bcrypt.compare(b.password, u.password_hash))) throw new HttpError(400, "كلمة السر غير صحيحة");
+    if (!(await verifyTotp(u.totp_secret, b.code))) throw new HttpError(400, "الرمز غير صحيح");
+    await app.db.query(`UPDATE users SET totp_enabled = false, totp_secret = NULL WHERE id = $1`, [req.user.sub]);
+    await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "user.2fa_off" });
+    return { ok: true };
   });
 }

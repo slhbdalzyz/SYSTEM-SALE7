@@ -1,6 +1,7 @@
 import type { SaleInput, ShopSettings } from "@pos/shared";
 import { receiptRows } from "../hardware/receiptImage";
 import type { ReturnDone } from "./ReturnDialog";
+import type { ShiftReport } from "./shiftReport";
 
 export interface ReceiptData {
   /** The branch's name (the shop's own name comes from `shop` when known). */
@@ -21,6 +22,8 @@ export interface ReceiptData {
   employeeName?: string | null;
   ret?: ReturnDone;
   payment?: { customerName: string; amountMinor: number; method: "cash" | "card"; balanceMinor: number; at: string };
+  /** The shift-close (Z) report. */
+  shift?: ShiftReport;
 }
 
 /**

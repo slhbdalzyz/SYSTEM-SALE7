@@ -11,7 +11,7 @@ import { DEFAULT_ALERT_SETTINGS, alertSettings, pushPublicKey } from "../alerts"
 export const BACKUP_TABLES: { name: string; key: "uuid" | "bigint"; omit?: string[]; own?: string }[] = [
   { name: "tenants", key: "uuid", own: "id" },
   { name: "stores", key: "uuid" },
-  { name: "users", key: "uuid", omit: ["password_hash", "pin_hash"] },
+  { name: "users", key: "uuid", omit: ["password_hash", "pin_hash", "totp_secret", "totp_enabled"] },
   { name: "devices", key: "uuid", omit: ["token_hash"] },
   { name: "categories", key: "uuid" },
   { name: "products", key: "uuid" },

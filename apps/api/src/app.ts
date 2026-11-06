@@ -27,6 +27,7 @@ import { moneyRoutes } from "./routes/money";
 import { settingsRoutes } from "./routes/settings";
 import { invoiceRoutes } from "./routes/invoices";
 import { restoreRoutes } from "./routes/restore";
+import { countRoutes } from "./routes/counts";
 import { subscriptionGuard } from "./billing";
 import { setGateway, type Gateway } from "./payments/gateway";
 import { plutuFromEnv } from "./payments/plutu";
@@ -68,10 +69,25 @@ export async function buildApp(opts: AppOptions) {
     const status = (err as { statusCode?: number }).statusCode;
     if (status && status < 500) return reply.status(status).send({ error: (err as Error).message });
     req.log.error(err);
+    // Keep a copy for the platform's error page; never let logging itself break the reply.
+    const e = err as Error;
+    app.db.query(
+      `INSERT INTO server_errors (method, url, tenant_id, message, stack) VALUES ($1,$2,$3,$4,$5)`,
+      [req.method, req.url.slice(0, 500), (req.user as { tid?: string } | undefined)?.tid ?? null, String(e?.message ?? err).slice(0, 2000), String(e?.stack ?? "").slice(0, 8000)],
+    ).catch(() => {});
     return reply.status(500).send({ error: "خطأ في السيرفر" });
   });
 
-  app.get("/health", async () => ({ ok: true }));
+  app.get("/health", async (_req, reply) => {
+    // Also checks the database, so an uptime monitor sees a dead database, not just a live process.
+    const t = Date.now();
+    try {
+      await app.db.query("SELECT 1");
+      return { ok: true, db: true, dbMs: Date.now() - t };
+    } catch {
+      return reply.status(503).send({ ok: false, db: false });
+    }
+  });
   subscriptionGuard(app);
   await app.register(authRoutes);
   await app.register(adminRoutes);
@@ -94,5 +110,6 @@ export async function buildApp(opts: AppOptions) {
   await app.register(moneyRoutes);
   await app.register(settingsRoutes);
   await app.register(invoiceRoutes);
+  await app.register(countRoutes);
   return app;
 }

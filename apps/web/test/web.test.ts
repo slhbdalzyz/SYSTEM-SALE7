@@ -156,3 +156,32 @@ describe("WhatsApp links", async () => {
     expect(waLink(null, "x")).toBe("https://wa.me/?text=x");
   });
 });
+
+describe("shift-close (Z) report", async () => {
+  const { shiftReport } = await import("../src/pos/shiftReport");
+  const { receiptRows } = await import("../src/hardware/receiptImage");
+  it("adds up sales by way of payment, returns, debt paid and the cash in the drawer", () => {
+    const at = new Date().toISOString();
+    const line = (qty: number, price: number) => ({ productId: water.id, unitId: water.units[0].id, name: "مياه", qtyMilli: qty, priceMinor: price, discountMinor: 0, promoMinor: 0, taxBp: 0 });
+    const sale = (id: string, total: number, payments: { method: "cash" | "card" | "credit"; amountMinor: number }[], change = 0) => ({
+      id, number: id, shiftId: "s", createdAt: at, totalMinor: total, cashierName: "أحمد", kind: "sale" as const,
+      cashInMinor: payments.filter((p) => p.method === "cash").reduce((a, p) => a + p.amountMinor, 0), changeMinor: change,
+      input: { id, number: id, shiftId: "s", createdAt: at, lines: [line(2000, total / 2)], invoiceDiscountMinor: 0, payments, totalMinor: total },
+    });
+    const list = [
+      sale("A1", 10000, [{ method: "cash", amountMinor: 20000 }], 10000),
+      sale("A2", 6000, [{ method: "card", amountMinor: 6000 }]),
+      sale("A3", 4000, [{ method: "cash", amountMinor: 1000 }, { method: "credit", amountMinor: 3000 }]),
+      { id: "r", number: "R1", shiftId: "s", createdAt: at, totalMinor: -1500, cashInMinor: -1500, changeMinor: 0, cashierName: "أحمد", input: null, kind: "return" as const },
+      { id: "p", number: "تسديد", shiftId: "s", createdAt: at, totalMinor: 0, cashInMinor: 2500, changeMinor: 0, cashierName: "أحمد", input: null, kind: "payment" as const },
+    ];
+    const z = shiftReport({ openedAt: at, openingCashMinor: 50000 }, list, 61500, at);
+    expect(z).toMatchObject({ sales: 3, salesMinor: 20000, byMethod: { cash: 11000, card: 6000, credit: 3000 }, returns: 1, returnsMinor: 1500, debtPaidCashMinor: 2500 });
+    expect(z.expectedCashMinor).toBe(50000 + 10000 + 1000 - 1500 + 2500);
+    expect(z.items[0]).toMatchObject({ name: "مياه", qtyMilli: 6000, totalMinor: 20000 });
+    const rows = receiptRows({ storeName: "الرئيسي", deviceName: "كاشير 1", cashierName: "أحمد", shift: z });
+    const text = rows.map((r) => ("text" in r ? r.text : "right" in r ? `${r.right} ${r.left}` : "")).join("\n");
+    expect(text).toContain("تقرير قفل الوردية");
+    expect(text).toContain("عجز");
+  });
+});
