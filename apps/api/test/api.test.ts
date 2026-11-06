@@ -1450,3 +1450,62 @@ describe("pro pack: counts, variants, quick keys, two-step sign-in, audit and er
     expect((await call("GET", "/platform/errors", t)).status).toBe(403);
   });
 });
+
+describe("moving a shop from paper", () => {
+  let t: string;
+  let store: string;
+  beforeAll(async () => {
+    const reg = (await app.inject({ method: "POST", url: "/auth/register", remoteAddress: "10.0.0.96", payload: { businessName: "بقالة الحاج", storeName: "الرئيسي", ownerName: "علي", email: "haj@test.ly", password: "password123" } })).json();
+    t = reg.token; store = reg.storeId;
+  });
+
+  it("brings in items from a spreadsheet with their department, price and what is on the shelf", async () => {
+    const rows = [
+      { name: "سكر 1 كيلو", barcode: "6281000000011", category: "المواد الغذائية", priceMinor: 4500, costMinor: 3800, qtyMilli: 24000 },
+      { name: "صابون غسيل", category: "منظفات البيت", priceMinor: 2000, qtyMilli: 10000, minStockMilli: 3000 },
+      { name: "بطاطا", weighted: true, priceMinor: 3000, qtyMilli: 50500 },
+      { name: "سكر مكرر", barcode: "6281000000011", priceMinor: 1 },
+      { name: "صابون غسيل", priceMinor: 1 },
+    ];
+    const r = await call("POST", "/import/products", t, { storeId: store, rows });
+    expect(r.body.error ?? r.status).toBe(200);
+    expect(r.body).toMatchObject({ created: 3, stocked: 3, newCategories: 1 });
+    expect(r.body.skipped).toEqual([{ row: 4, reason: expect.stringContaining("موجود") }, { row: 5, reason: "صنف بنفس الاسم موجود" }]);
+    const ps = (await call("GET", `/products?storeId=${store}`, t)).body;
+    const sugar = ps.find((p: { name: string }) => p.name === "سكر 1 كيلو");
+    expect(sugar).toMatchObject({ costMinor: 3800, stockMilli: 24000 });
+    expect(sugar.units[0]).toMatchObject({ priceMinor: 4500, barcodes: ["6281000000011"] });
+    const soap = ps.find((p: { name: string }) => p.name === "صابون غسيل");
+    expect(soap.units[0].barcodes[0]).toMatch(/^299/); // given an in-store code
+    const potato = ps.find((p: { name: string }) => p.name === "بطاطا");
+    expect(potato).toMatchObject({ isWeighted: true, stockMilli: 50500 });
+    expect(potato.scaleCode).toBeTruthy();
+    expect((await call("POST", "/import/products", cashierToken, { storeId: store, rows })).status).toBe(403);
+  });
+
+  it("brings in customers with what they already owe, counted in their balance and statement", async () => {
+    const r = await call("POST", "/import/customers", t, { rows: [
+      { name: "محمد الطاهر", phone: "091 234 5678", balanceMinor: 125500 },
+      { name: "سالم", balanceMinor: 0 },
+      { name: "مكرر", phone: "0912345678", balanceMinor: 1 },
+    ] });
+    expect(r.body).toMatchObject({ created: 2, totalMinor: 125500, skipped: [{ row: 3 }] });
+    const c = (await call("GET", "/customers", t)).body.find((x: { name: string }) => x.name === "محمد الطاهر");
+    expect(c).toMatchObject({ phone: "0912345678", balanceMinor: 125500 });
+    const st = (await call("GET", `/customers/${c.id}/statement`, t)).body;
+    expect(st.entries[0]).toMatchObject({ type: "opening", amount_minor: 125500, balance_minor: 125500 });
+    expect((await call("PUT", `/customers/${c.id}/opening`, t, { balanceMinor: 100000 })).body.ok).toBe(true);
+    expect((await call("GET", "/customers", t)).body.find((x: { id: string }) => x.id === c.id).balanceMinor).toBe(100000);
+  });
+
+  it("brings in suppliers with what the shop owes them, and shows where the move has got to", async () => {
+    const r = await call("POST", "/import/suppliers", t, { rows: [{ name: "شركة النسيم", phone: "0925550000", balanceMinor: 800000 }, { name: "شركة النسيم" }] });
+    expect(r.body).toMatchObject({ created: 1, totalMinor: 800000, skipped: [{ row: 2 }] });
+    const s = (await call("GET", "/suppliers", t)).body.find((x: { name: string }) => x.name === "شركة النسيم");
+    expect(Number(s.balance_minor)).toBe(800000);
+    const st = (await call("GET", `/suppliers/${s.id}/statement`, t)).body;
+    expect(st.entries[0]).toMatchObject({ type: "opening", balance_minor: 800000 });
+    const status = (await call("GET", "/import/status", t)).body;
+    expect(status).toMatchObject({ products: 3, stocked: 3, customers: 2, customers_owe: 100000, suppliers: 1, suppliers_owed: 800000, cash_opening: 0, sales: 0 });
+  });
+});

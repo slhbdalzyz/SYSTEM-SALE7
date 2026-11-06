@@ -70,7 +70,7 @@ async function nextScaleCode(tx: Tx, tenantId: string): Promise<string> {
   return String(r.n);
 }
 
-async function saveProduct(tx: Tx, tenantId: string, id: string | null, input: unknown) {
+export async function saveProduct(tx: Tx, tenantId: string, id: string | null, input: unknown) {
   const b = productInputSchema.parse(input);
   if (b.units.filter((u) => u.isBase).length !== 1) throw new HttpError(400, "لازم وحدة أساسية وحدة بالضبط");
   if (b.autoCode && b.isWeighted && !b.scaleCode) b.scaleCode = await nextScaleCode(tx, tenantId);

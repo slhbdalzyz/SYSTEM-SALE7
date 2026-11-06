@@ -91,7 +91,9 @@ export async function purchasingRoutes(app: FastifyInstance) {
          SELECT created_at AS at, 'invoice' AS type, id AS ref_id, COALESCE(supplier_ref, '') AS ref, total_minor AS amount_minor FROM purchase_invoices WHERE supplier_id = $1
          UNION ALL
          SELECT created_at, 'payment', invoice_id, method, -amount_minor FROM supplier_payments WHERE supplier_id = $1
-       ) t ORDER BY at, type`, // an invoice and its payment share a timestamp: invoice first
+         UNION ALL
+         SELECT created_at, 'opening', NULL, '', opening_balance_minor FROM suppliers WHERE id = $1 AND opening_balance_minor <> 0
+       ) t ORDER BY at, type <> 'opening', type`, // an invoice and its payment share a timestamp: invoice first
       [id],
     );
     let running = 0;
