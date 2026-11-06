@@ -534,3 +534,16 @@ button.big, a.button.big { padding: 12px 22px; font-size: 1.05rem; }
   .count-line [data-l]::before { content: attr(data-l) " "; font-weight: 400; color: var(--muted); font-size: .8rem; }
 }
 .scan:has(.scan-cam) input { padding-inline-end: 60px; }
+
+/* From paper to the system */
+.paper-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.paper-step { display: flex; gap: 12px; align-items: center; text-align: start; cursor: pointer; border: 1px solid var(--line); }
+.paper-step span:last-child { display: grid; gap: 2px; min-width: 0; }
+.paper-step.active { border-color: var(--brand); box-shadow: 0 0 0 2px var(--brand-soft); }
+.paper-num { flex: 0 0 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: var(--bg); font-weight: 700; }
+.paper-step.done .paper-num { background: var(--ok); color: #fff; }
+.file-pick { display: inline-flex; cursor: pointer; }
+.file-pick input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.file-pick .primary-like { background: var(--brand); color: var(--brand-ink); padding: 8px 14px; border-radius: var(--radius); font-weight: 600; }
+.file-pick:focus-within .primary-like { outline: 2px solid var(--brand); outline-offset: 2px; }
+.paper-cta { text-align: start; background: var(--warn-soft); border-color: #fcd34d; color: var(--ink); padding: 10px 14px; }

@@ -102,7 +102,9 @@ export async function customerRoutes(app: FastifyInstance) {
          FROM payments p JOIN sales s ON s.id = p.sale_id WHERE s.customer_id = $1 AND p.method = 'credit'
          UNION ALL
          SELECT cp.created_at, 'payment', cp.method, -cp.amount_minor FROM customer_payments cp WHERE cp.customer_id = $1
-       ) t ORDER BY at`,
+         UNION ALL
+         SELECT c.created_at, 'opening', '', c.opening_balance_minor FROM customers c WHERE c.id = $1 AND c.opening_balance_minor <> 0
+       ) t ORDER BY at, type = 'opening' DESC`,
       [id],
     );
     let running = 0;

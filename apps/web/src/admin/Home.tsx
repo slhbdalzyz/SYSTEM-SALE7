@@ -7,7 +7,7 @@ import { TimeChart } from "./charts";
 const DAYS = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
 
 /** The owner's first screen: today against yesterday, the week, the month, and what needs attention. */
-export function Home({ call, storeId, userName, open }: { call: Call; storeId: string; userName: string; open: (tab: "reports" | "purchasing" | "products" | "alerts" | "customers" | "settings" | "devices" | "staff") => void }) {
+export function Home({ call, storeId, userName, open }: { call: Call; storeId: string; userName: string; open: (tab: "reports" | "purchasing" | "products" | "alerts" | "customers" | "settings" | "devices" | "staff" | "paper") => void }) {
   const [d, setD] = useState<Dashboard | null>(null);
   const [expiring, setExpiring] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -117,7 +117,7 @@ export function Home({ call, storeId, userName, open }: { call: Call; storeId: s
 interface Onboarding { businessType: string; steps: Record<"settings" | "products" | "purchases" | "devices" | "staff" | "sales", boolean> }
 
 /** A new shop's first steps, each one a button to the screen that does it; it goes away once done. */
-function GettingStarted({ s, open, hide }: { s: Onboarding; open: (tab: "settings" | "products" | "purchasing" | "devices" | "staff") => void; hide: () => void }) {
+function GettingStarted({ s, open, hide }: { s: Onboarding; open: (tab: "settings" | "products" | "purchasing" | "devices" | "staff" | "paper") => void; hide: () => void }) {
   const steps: { done: boolean; title: string; hint: string; go: () => void }[] = [
     { done: s.steps.settings, title: "بيانات المحل", hint: "العنوان والهاتف والشعار تطلع في الفاتورة", go: () => open("settings") },
     { done: s.steps.products, title: "ضيف أصنافك", hint: "بطاقة صنف لكل صنف، والباركود يتعمل تلقائياً", go: () => open("products") },
@@ -136,6 +136,11 @@ function GettingStarted({ s, open, hide }: { s: Onboarding; open: (tab: "setting
         <button className="ghost" onClick={hide}>إخفاء</button>
       </div>
       <div className="progress"><span style={{ width: `${(done / steps.length) * 100}%` }} /></div>
+      {!s.steps.products && (
+        <button className="paper-cta" onClick={() => open("paper")}>
+          📒 <b>كنت تخدم بالدفتر؟</b> دخّل أصنافك وكمياتها وديون العملاء من ملف Excel مرة وحدة، وابدأ اليوم ←
+        </button>
+      )}
       <div className="start-steps">
         {steps.map((x, i) => (
           <button key={x.title} className={x.done ? "done" : ""} onClick={x.go}>

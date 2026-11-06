@@ -28,6 +28,7 @@ import { settingsRoutes } from "./routes/settings";
 import { invoiceRoutes } from "./routes/invoices";
 import { restoreRoutes } from "./routes/restore";
 import { countRoutes } from "./routes/counts";
+import { importRoutes } from "./routes/import";
 import { subscriptionGuard } from "./billing";
 import { setGateway, type Gateway } from "./payments/gateway";
 import { plutuFromEnv } from "./payments/plutu";
@@ -111,5 +112,6 @@ export async function buildApp(opts: AppOptions) {
   await app.register(settingsRoutes);
   await app.register(invoiceRoutes);
   await app.register(countRoutes);
+  await app.register(importRoutes);
   return app;
 }

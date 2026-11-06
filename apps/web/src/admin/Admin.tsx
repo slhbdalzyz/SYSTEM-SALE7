@@ -25,6 +25,7 @@ import { Invoices } from "./Invoices";
 import { Counts } from "./Counts";
 import { AuditLog } from "./AuditLog";
 import { SecurityCard } from "./Security";
+import { FromPaper } from "./FromPaper";
 import { ROLE_NAMES, type Permission } from "@pos/shared";
 
 export interface Me {
@@ -37,7 +38,7 @@ export type Call = <T>(path: string, opts?: { method?: string; body?: unknown })
 
 /** The owner's screens, grouped as they appear in the side menu. */
 const NAV = [
-  { group: "", items: { home: ["🏠", "لوحة التحكم"], reports: ["📊", "التقارير"], alerts: ["🔔", "التنبيهات"] } },
+  { group: "", items: { home: ["🏠", "لوحة التحكم"], paper: ["📒", "من الدفتر للنظام"], reports: ["📊", "التقارير"], alerts: ["🔔", "التنبيهات"] } },
   { group: "المخزون", items: { products: ["📦", "الأصناف والأقسام"], purchasing: ["🚚", "المشتريات والموردين"], branches: ["🏬", "الفروع والتحويلات"], counts: ["📋", "جرد المخزون"], labels: ["🏷️", "ملصقات الباركود"] } },
   { group: "المبيعات", items: { invoices: ["🧾", "المبيعات والفواتير"], customers: ["👥", "العملاء والديون"], offers: ["🎁", "العروض"] } },
   { group: "المال", items: { money: ["🏦", "الخزينة والأرصدة"], expenses: ["💸", "المصروفات"] } },
@@ -50,7 +51,7 @@ const TABS = Object.assign({}, ...NAV.map((g) => g.items)) as Record<Tab, readon
 
 /** What opens each screen. "owner" = the shop owner only; null = everyone (their own pay). */
 const NEEDS: Record<Tab, Permission | "owner" | null> = {
-  home: "reports", reports: "reports", alerts: "alerts", products: "products", purchasing: "purchasing", branches: "branches", counts: "products", labels: "products",
+  home: "reports", paper: "owner", reports: "reports", alerts: "alerts", products: "products", purchasing: "purchasing", branches: "branches", counts: "products", labels: "products",
   invoices: "sales", settings: "settings", customers: "customers", offers: "offers", expenses: "expenses", money: "money", staff: "staff", payroll: "payroll", mypay: null, devices: "devices",
   backup: "owner", subscription: "owner", audit: "owner",
 };
@@ -175,6 +176,7 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
           {shown === "reports" && <Reports call={call} storeId={store.id} stores={open} />}
           {shown === "products" && <Products call={call} storeId={store.id} />}
           {shown === "purchasing" && <Purchasing call={call} storeId={store.id} onLabels={(d) => { setLabelDraft(d); setTab("labels"); }} />}
+          {shown === "paper" && <FromPaper call={call} storeId={store.id} open={setTab} />}
           {shown === "counts" && <Counts call={call} storeId={store.id} canApply={isOwner || me.user.role === "manager"} />}
           {shown === "audit" && <AuditLog call={call} />}
           {shown === "labels" && <Labels call={call} storeId={store.id} storeName={me.tenant.name} draft={labelDraft} clearDraft={() => setLabelDraft(null)} />}

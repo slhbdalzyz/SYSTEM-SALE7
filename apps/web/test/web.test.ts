@@ -185,3 +185,55 @@ describe("shift-close (Z) report", async () => {
     expect(text).toContain("عجز");
   });
 });
+
+describe("spreadsheets from paper", async () => {
+  const { mapSheet, parseCsv, readNumber, templateCsv } = await import("../src/admin/sheet");
+  it("reads numbers the way people write them", () => {
+    expect(readNumber("4.500")).toBe(4.5);
+    expect(readNumber("12,5")).toBe(12.5);
+    expect(readNumber("1,250.75")).toBe(1250.75);
+    expect(readNumber("١٢٥٫٥ د.ل")).toBe(125.5);
+    expect(readNumber("")).toBeNaN();
+  });
+  it("turns the filled template back into items, any column order, and points at bad lines", () => {
+    const back = parseCsv(templateCsv("products"));
+    expect(back[0][0]).toBe("اسم الصنف");
+    const m = mapSheet("products", back);
+    expect(m.rows[0]).toEqual({ name: "سكر 1 كيلو", barcode: "6281000000011", category: "المواد الغذائية", unit: "كيس", priceMinor: 4500, costMinor: 3800, qtyMilli: 24000, minStockMilli: 5000, weighted: false });
+    expect(m.rows[1]).toMatchObject({ name: "طماطم", qtyMilli: 40500, weighted: true });
+    expect(m.rows[1].barcode).toBeUndefined();
+    const odd = mapSheet("products", [["دفتر البقالة"], ["الكمية", "السعر", "الاسم"], ["3", "abc", "بيبسي"], ["", "", ""], ["2", "1.5", "مياه"], ["1", "1", ""]]);
+    expect(odd.rows).toEqual([expect.objectContaining({ name: "مياه", priceMinor: 1500, qtyMilli: 2000 })]);
+    expect(odd.lines).toEqual([5]);
+    expect(odd.errors).toEqual([{ row: 3, message: "السعر مش رقم: abc" }, { row: 6, message: "بدون اسم" }]);
+    expect(mapSheet("customers", [["شي"], ["ثاني"]]).missing).toEqual(["اسم العميل"]);
+  });
+  it("reads the debt book, fixing phone numbers Excel stripped of their 0", () => {
+    const m = mapSheet("customers", [["الاسم", "الهاتف", "الدين"], ["محمد", 912345678, "125.5"], ["علي", "", "-20"]]);
+    expect(m.rows).toEqual([{ name: "محمد", phone: "0912345678", balanceMinor: 125500 }, { name: "علي", balanceMinor: -20000 }]);
+  });
+});
+
+describe("reading an .xlsx file", async () => {
+  const { readXlsx, mapSheet } = await import("../src/admin/sheet");
+  it("reads shared strings, inline strings, numbers and blank cells", async () => {
+    const { zipSync, strToU8 } = await import("fflate");
+    const x = (s: string) => strToU8(`<?xml version="1.0"?>${s}`);
+    const zip = zipSync({
+      "xl/workbook.xml": x(`<workbook xmlns:r="r"><sheets><sheet name="ديون" sheetId="1" r:id="rId1"/></sheets></workbook>`),
+      "xl/_rels/workbook.xml.rels": x(`<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>`),
+      "xl/sharedStrings.xml": x(`<sst><si><t>اسم العميل</t></si><si><t>الدين القديم</t></si><si><r><t>محمد </t></r><r><t>&amp; أولاده</t></r></si></sst>`),
+      "xl/worksheets/sheet1.xml": x(`<worksheet><sheetData>
+        <row r="1"><c r="A1" t="s"><v>0</v></c><c r="C1" t="s"><v>1</v></c></row>
+        <row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2"><v>912345678</v></c><c r="C2"><v>125.5</v></c></row>
+        <row r="4"><c r="A4" t="inlineStr"></c><c r="B4"/></row>
+        <row r="5"><c r="A5" t="inlineStr"><is><t>سالم</t></is></c><c r="C5" t="str"><v>40</v></c></row>
+      </sheetData></worksheet>`),
+    });
+    const rows = readXlsx(zip);
+    expect(rows[0]).toEqual(["اسم العميل", "", "الدين القديم"]);
+    expect(rows[1]).toEqual(["محمد & أولاده", 912345678, 125.5]);
+    expect(rows[2]).toEqual([]);
+    expect(mapSheet("customers", rows).rows).toEqual([{ name: "محمد & أولاده", balanceMinor: 125500 }, { name: "سالم", balanceMinor: 40000 }]);
+  });
+});
