@@ -23,7 +23,7 @@ export const FLOWS = `
          p.amount_minor - CASE WHEN p.method = 'cash' AND s.kind = 'sale' THEN s.change_minor ELSE 0 END AS amount,
          s.number AS ref, st.name AS detail, NULL::uuid AS movement_id
     FROM payments p JOIN sales s ON s.id = p.sale_id JOIN stores st ON st.id = s.store_id
-   WHERE p.tenant_id = $1 AND p.method NOT IN ('credit', 'payroll')
+   WHERE p.tenant_id = $1 AND p.method NOT IN ('credit', 'payroll', 'points')
   UNION ALL
   SELECT cp.created_at, (cp.created_at AT TIME ZONE '${TZ}')::date, cp.method, 'customer', cp.amount_minor, c.name, cp.note, NULL
     FROM customer_payments cp JOIN customers c ON c.id = cp.customer_id WHERE cp.tenant_id = $1

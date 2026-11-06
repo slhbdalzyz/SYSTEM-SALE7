@@ -55,11 +55,14 @@ const shiftLabel = (cashier: string | null, opened: string | null, closed: strin
 export function receiptFromDetail(d: Detail, shop: { name: string; settings: ShopSettings }): ReceiptData {
   const base = { storeName: d.store_name, footer: d.receipt_footer, deviceName: d.device_name, cashierName: d.cashier, shop, copy: true };
   if (d.kind === "return") {
+    // A return of a sale paid partly with points gave that part back as points.
+    const pointsMinor = -d.payments.filter((p) => p.method === "points").reduce((a, p) => a + p.amount_minor, 0);
     return {
       ...base,
       ret: {
         number: d.number, originalNumber: d.original_number ?? "", customerName: d.customer_name, totalMinor: -d.total_minor, reason: d.reason ?? "",
-        method: (d.payments[0]?.method ?? "cash") as RefundMethod,
+        refundMinor: -d.total_minor - pointsMinor, pointsMinor, pointsBack: 0, pointsTaken: 0,
+        method: (d.payments.find((p) => p.method !== "points")?.method ?? "cash") as RefundMethod,
         lines: d.lines.map((l) => ({ name: l.name, qtyMilli: Math.abs(l.qty_milli), totalMinor: Math.abs(l.total_minor) })),
       },
     };

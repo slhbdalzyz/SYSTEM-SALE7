@@ -102,7 +102,7 @@ export function CustomerDialog({ current, shiftId, onPick, onClose, onPaid }: {
                   <div>
                     <b>{c.name}</b> <span className="muted num">{c.phone}</span>
                     <div className="muted">
-                      الرصيد <span className="num">{formatMoney(c.balanceMinor)}</span>
+                      الرصيد <span className="num">{formatMoney(c.balanceMinor)}</span>{(c.points ?? 0) !== 0 && <> · ⭐ <span className="num">{c.points}</span></>}
                       {" · "}
                       {room === null ? "آجل بدون حد" : room === 0 && c.creditLimitMinor === 0 ? "بدون آجل" : <>متاح <span className="num">{formatMoney(room)}</span></>}
                     </div>
