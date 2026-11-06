@@ -7,7 +7,7 @@ import { TimeChart } from "./charts";
 const DAYS = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
 
 /** The owner's first screen: today against yesterday, the week, the month, and what needs attention. */
-export function Home({ call, storeId, userName, open }: { call: Call; storeId: string; userName: string; open: (tab: "reports" | "purchasing" | "products" | "alerts" | "customers" | "settings" | "devices" | "staff" | "paper") => void }) {
+export function Home({ call, storeId, userName, open }: { call: Call; storeId: string; userName: string; open: (tab: "reports" | "purchasing" | "products" | "alerts" | "customers" | "settings" | "devices" | "staff" | "paper" | "zakat") => void }) {
   const [d, setD] = useState<Dashboard | null>(null);
   const [expiring, setExpiring] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -20,6 +20,9 @@ export function Home({ call, storeId, userName, open }: { call: Call; storeId: s
     }
   });
   useEffect(() => void call<Onboarding>("/onboarding").then(setStart).catch(() => setStart(null)), [call]);
+  const [hawl, setHawl] = useState<{ daysLeft: number; label: string; remind: number } | null>(null);
+  // Only the owner can read it; for everyone else the call fails quietly and nothing shows.
+  useEffect(() => void call<{ hawl: { daysLeft: number; label: string }; settings: { remindDays: number } }>("/zakat/settings").then((r) => setHawl({ ...r.hawl, remind: r.settings.remindDays })).catch(() => setHawl(null)), [call]);
   useEffect(() => {
     call<Dashboard>(`/dashboard?storeId=${storeId}`).then(setD).catch((e) => setError((e as Error).message));
     call<unknown[]>(`/stock/expiring?storeId=${storeId}&days=7`).then((r) => setExpiring(r.length)).catch(() => setExpiring(null));
@@ -45,6 +48,12 @@ export function Home({ call, storeId, userName, open }: { call: Call; storeId: s
         <button onClick={() => open("products")}>+ بطاقة صنف</button>
         <button onClick={() => open("reports")}>📊 التقارير</button>
       </div>
+
+      {hawl && hawl.daysLeft <= Math.max(hawl.remind, 7) && (
+        <div className="notice" style={{ cursor: "pointer" }} onClick={() => open("zakat")}>
+          🕌 حول الزكاة {hawl.daysLeft === 0 ? "اليوم" : `بعد ${hawl.daysLeft} يوم`} ({hawl.label}). <u>ابدأ جرد الزكاة واحسبها</u>
+        </div>
+      )}
 
       {start && !hideStart && <GettingStarted s={start} open={open} hide={() => {
         setHideStart(true);

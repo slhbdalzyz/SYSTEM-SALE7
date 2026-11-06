@@ -547,3 +547,41 @@ button.big, a.button.big { padding: 12px 22px; font-size: 1.05rem; }
 .file-pick .primary-like { background: var(--brand); color: var(--brand-ink); padding: 8px 14px; border-radius: var(--radius); font-weight: 600; }
 .file-pick:focus-within .primary-like { outline: 2px solid var(--brand); outline-offset: 2px; }
 .paper-cta { text-align: start; background: var(--warn-soft); border-color: #fcd34d; color: var(--ink); padding: 10px 14px; }
+
+/* Counts: department and blind options, totals in money, and the zakat page. */
+.count-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.count-scan-3 { grid-template-columns: 1fr 1fr auto; }
+.count-line.blind { grid-template-columns: 1fr auto auto; }
+.count-totals { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.count-totals .card { display: grid; gap: 4px; padding: 12px; }
+.count-totals b { font-size: 1.15rem; }
+.zakat-hawl { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; background: var(--brand-soft); border-radius: 14px; padding: 16px; }
+.zakat-hawl .big { font-size: 2rem; font-weight: 800; line-height: 1; }
+.zakat-sheet { display: grid; gap: 0; }
+.zakat-sheet > div { display: flex; justify-content: space-between; gap: 10px; padding: 9px 0; border-bottom: 1px dashed var(--line); }
+.zakat-sheet > div.sub { padding-inline-start: 18px; font-size: .9rem; color: var(--muted); }
+.zakat-sheet > div.total { border-bottom: 0; border-top: 2px solid var(--ink); font-weight: 800; font-size: 1.1rem; }
+.zakat-due { font-size: 2rem; font-weight: 800; color: var(--brand); white-space: nowrap; }
+.zakat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+.zakat-debts { max-height: 260px; overflow: auto; display: grid; gap: 4px; }
+.print-only { display: none; }
+@media (max-width: 640px) {
+  .count-form, .zakat-grid { grid-template-columns: 1fr; }
+  .zakat-due { font-size: 1.5rem; }
+  .count-totals { grid-template-columns: 1fr 1fr; }
+  .count-line.blind { grid-template-columns: 1fr auto; }
+  .count-scan-3 { grid-template-columns: 1fr 1fr; }
+  .count-scan-3 > :first-child { grid-column: auto; }
+  .count-scan-3 > button { grid-column: 1 / -1; }
+}
+
+/* A sheet (count, zakat) printed on A4, not on the receipt roll. */
+@page sheet { size: A4; margin: 12mm; }
+@media print {
+  body.print-a4 * { visibility: hidden; }
+  body.print-a4 .printable, body.print-a4 .printable * { visibility: visible; }
+  body.print-a4 .printable { page: sheet; position: absolute; top: 0; inset-inline: 0; color: #000; }
+  body.print-a4 .printable .no-print { display: none !important; }
+  body.print-a4 .printable .print-only { display: block; }
+  body.print-a4 .printable .card { box-shadow: none; border: 1px solid #999; }
+}

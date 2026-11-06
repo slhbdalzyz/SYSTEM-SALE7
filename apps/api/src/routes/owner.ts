@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { audit } from "../db";
 import { HttpError, authenticate, requirePerm, requireRole } from "../auth";
-import { DEFAULT_ALERT_SETTINGS, alertSettings, pushPublicKey } from "../alerts";
+import { DEFAULT_ALERT_SETTINGS, alertSettings, checkZakatDue, flushPushes, pushPublicKey } from "../alerts";
 
 /**
  * Every table that holds a shop's data, in the order a restore would load them, with the
@@ -68,6 +68,7 @@ export async function ownerRoutes(app: FastifyInstance) {
     const q = z.object({ storeId: z.string().uuid().optional(), tz: tzSchema }).parse(req.query);
     const tid = req.user.tid;
     await ownStore(tid, q.storeId);
+    if (await checkZakatDue(app.db, tid).catch(() => false)) await flushPushes(app.db, tid);
     const store = q.storeId ?? null;
     const args = [tid, store, q.tz];
     const inStore = (a: string) => `${a}.tenant_id = $1 AND ($2::uuid IS NULL OR ${a}.store_id = $2)`;

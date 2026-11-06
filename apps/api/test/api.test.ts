@@ -1399,7 +1399,7 @@ describe("pro pack: counts, variants, quick keys, two-step sign-in, audit and er
     const d = (await call("GET", `/counts/${c.id}`, t)).body;
     expect(d.lines[0]).toMatchObject({ name: "شامبو", counted_milli: 7000, system_milli: 10000, diff_milli: -3000 });
     expect((await call("GET", `/counts?storeId=${store}`, t)).body[0]).toMatchObject({ id: c.id, status: "open", items: 1 });
-    expect((await call("POST", `/counts/${c.id}/apply`, t)).body).toEqual({ items: 1, changed: 1 });
+    expect((await call("POST", `/counts/${c.id}/apply`, t)).body).toEqual({ items: 1, changed: 1, damaged: 0 });
     expect(await stockOf(item)).toBe(7000);
     expect((await call("POST", `/counts/${c.id}/apply`, t)).status).toBe(400);
     expect((await call("PUT", `/counts/${c.id}/lines`, t, { productId: item, countedMilli: 1 })).status).toBe(400);
@@ -1507,5 +1507,96 @@ describe("moving a shop from paper", () => {
     expect(st.entries[0]).toMatchObject({ type: "opening", balance_minor: 800000 });
     const status = (await call("GET", "/import/status", t)).body;
     expect(status).toMatchObject({ products: 3, stocked: 3, customers: 2, customers_owe: 100000, suppliers: 1, suppliers_owed: 800000, cash_opening: 0, sales: 0 });
+  });
+});
+
+describe("annual count and zakat", () => {
+  let t: string;
+  let store: string;
+  let clerk: string;
+  const ids: Record<string, string> = {};
+  const stockOf = async (pid: string) => Number((await db.query(`SELECT COALESCE(sum(qty_milli),0) AS q FROM stock_movements WHERE product_id = $1 AND store_id = $2`, [pid, store])).rows[0].q);
+  beforeAll(async () => {
+    const reg = (await app.inject({ method: "POST", url: "/auth/register", remoteAddress: "10.0.0.97", payload: { businessName: "بقالة الزكاة", storeName: "الرئيسي", ownerName: "عمر", email: "zakat@test.ly", password: "password123" } })).json();
+    t = reg.token; store = reg.storeId;
+    await call("POST", "/import/products", t, { storeId: store, rows: [
+      { name: "أرز", category: "المواد الغذائية", priceMinor: 5000, costMinor: 4000, qtyMilli: 10000 },
+      { name: "زيت", category: "المواد الغذائية", priceMinor: 12000, costMinor: 10000, qtyMilli: 5000 },
+      { name: "حليب", category: "المواد الغذائية", priceMinor: 3000, costMinor: 2000, qtyMilli: 4000 },
+      { name: "صابون", category: "منظفات البيت", priceMinor: 2000, costMinor: 1000, qtyMilli: 6000 },
+    ] });
+    for (const p of (await call("GET", `/products?storeId=${store}`, t)).body) ids[p.name] = p.id;
+    await call("POST", "/users", t, { name: "عامل الجرد", role: "data_entry", email: "counter@test.ly", password: "password123" });
+    clerk = (await call("POST", "/auth/login", undefined, { email: "counter@test.ly", password: "password123" })).body.token;
+  });
+
+  it("counts one department blind, with the shop open, damaged goods apart, and the rest taken as gone", async () => {
+    const cats = (await call("GET", "/categories", t)).body as { id: string; name: string }[];
+    const food = cats.find((c) => c.name === "المواد الغذائية")!.id;
+    const c = (await call("POST", "/counts", t, { storeId: store, categoryId: food, blind: true, purpose: "zakat" })).body;
+    // The clerk counts without seeing the books.
+    expect((await call("PUT", `/counts/${c.id}/lines`, clerk, { productId: ids["أرز"], countedMilli: 8000, damagedMilli: 1000 })).body).toEqual({ countedMilli: 8000, damagedMilli: 1000 });
+    expect((await call("PUT", `/counts/${c.id}/lines`, clerk, { productId: ids["زيت"], countedMilli: 5000 })).status).toBe(200);
+    const seen = (await call("GET", `/counts/${c.id}`, clerk)).body;
+    expect(seen.seesBooks).toBe(false);
+    expect(seen.lines[0].system_milli).toBeNull();
+    expect(seen.totals).toBeNull();
+    expect(seen.left.map((p: { name: string }) => p.name)).toEqual(["حليب"]); // soap is another department
+    // Two bags of rice sold after they were counted: not a shortage.
+    await new Promise((r) => setTimeout(r, 15));
+    await db.query(`INSERT INTO stock_movements (tenant_id, store_id, product_id, qty_milli, kind) SELECT tenant_id, $1, id, -2000, 'sale' FROM products WHERE id = $2`, [store, ids["أرز"]]);
+    const d = (await call("GET", `/counts/${c.id}`, t)).body;
+    const rice = d.lines.find((l: { name: string }) => l.name === "أرز");
+    expect(rice).toMatchObject({ system_milli: 10000, diff_milli: -1000, counted_by_name: "عامل الجرد" });
+    expect(d.totals).toMatchObject({ shortMinor: -4000, overMinor: 0, damagedMinor: 4000, leftWithStock: 1, leftCostMinor: 8000 });
+    expect((await call("POST", `/counts/${c.id}/apply`, clerk)).status).toBe(403);
+    expect((await call("POST", `/counts/${c.id}/apply`, t, { zeroMissing: true })).body).toEqual({ items: 3, changed: 2, damaged: 1 });
+    expect(await stockOf(ids["أرز"])).toBe(6000); // 8 good on the shelf, less the 2 sold since
+    expect(await stockOf(ids["حليب"])).toBe(0);
+    expect(await stockOf(ids["صابون"])).toBe(6000);
+  });
+
+  it("works out the zakat from stock, money and debts, against the nisab, and keeps the sheet", async () => {
+    expect((await call("GET", "/zakat/settings", clerk)).status).toBe(403);
+    const set = (await call("PUT", "/zakat/settings", t, { calendar: "hijri", month: 9, day: 1, valuation: "cost", nisabGrams: 85 })).body;
+    expect(set.hawl.daysLeft).toBeGreaterThanOrEqual(0);
+    await call("POST", "/money/movements", t, { account: "cash", kind: "opening", amountMinor: 500000, onDate: "2026-01-01" });
+    await call("POST", "/import/customers", t, { rows: [{ name: "زبون مضمون", balanceMinor: 100000 }, { name: "زبون هارب", balanceMinor: 50000 }] });
+    await call("POST", "/import/suppliers", t, { rows: [{ name: "المورد", balanceMinor: 200000 }] });
+    const p = (await call("GET", "/zakat/preview", t)).body;
+    // rice 6 × 4.000 + oil 5 × 10.000 + soap 6 × 1.000
+    expect(p.inventoryMinor).toBe(24000 + 50000 + 6000);
+    expect(p.cashMinor).toBe(500000);
+    expect(p.receivablesMinor).toBe(150000);
+    expect(p.payablesMinor).toBe(200000);
+    expect(p.stores[0].lastCountAt).toBeTruthy();
+    expect((await call("GET", "/zakat/preview?valuation=price", t)).body.inventoryMinor).toBe(6 * 5000 + 5 * 12000 + 6 * 2000);
+    const gone = p.customers.find((c: { name: string }) => c.name === "زبون هارب").id;
+    // base = 80 000 + 500 000 + 100 000 + 20 000 other − 200 000 = 500 000 dirham (500 LYD)
+    const low = (await call("POST", "/zakat/reports", t, { valuation: "cost", goldGramMinor: 5000, otherAssetsMinor: 20000, excludeCustomers: [gone] })).body;
+    expect(low).toMatchObject({ baseMinor: 500000, nisabMinor: 425000, reachesNisab: true, rate: 2500, zakatMinor: 12500 });
+    const high = (await call("POST", "/zakat/reports", t, { valuation: "cost", goldGramMinor: 10000, excludeCustomers: [gone] })).body;
+    expect(high).toMatchObject({ reachesNisab: false, zakatMinor: 0 });
+    expect((await call("POST", "/zakat/reports", t, { valuation: "cost", goldGramMinor: 0 })).status).toBe(400);
+    const list = (await call("GET", "/zakat/reports", t)).body;
+    expect(list).toHaveLength(2);
+    const one = (await call("GET", `/zakat/reports/${low.id}`, t)).body;
+    expect(one).toMatchObject({ inventoryMinor: 80000, receivablesMinor: 100000, otherAssetsMinor: 20000, zakatMinor: 12500 });
+    expect(one.details.excluded).toEqual([{ name: "زبون هارب", balanceMinor: 50000 }]);
+    expect((await call("GET", "/zakat/settings", t)).body.settings.goldGramMinor).toBe(10000);
+    expect((await call("POST", `/zakat/reports/${high.id}/delete`, t)).body.ok).toBe(true);
+    expect((await call("GET", "/zakat/reports", t)).body).toHaveLength(1);
+  });
+
+  it("tells the owner's phone once when the zakat year is close", async () => {
+    const { checkZakatDue } = await import("../src/alerts");
+    const { hijriDate } = await import("@pos/shared");
+    const tid = (await db.query(`SELECT tenant_id FROM users WHERE email = 'zakat@test.ly'`)).rows[0].tenant_id;
+    const h = hijriDate(new Date(Date.now() + 3 * 86_400_000));
+    expect((await call("PUT", "/zakat/settings", t, { calendar: "hijri", month: h.month, day: h.day, remindDays: 7 })).body.hawl.daysLeft).toBe(3);
+    expect(await checkZakatDue(db, tid)).toBe(true);
+    expect(await checkZakatDue(db, tid)).toBe(false);
+    const a = (await call("GET", "/alerts", t)).body.alerts.find((x: { kind: string }) => x.kind === "zakat_due");
+    expect(a.title).toContain("حول الزكاة");
   });
 });

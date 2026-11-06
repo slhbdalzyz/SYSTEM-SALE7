@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { applyOffers, computeLine, computeTotals, saleInputSchema, type SaleInput } from "@pos/shared";
 import { currentOffers } from "./offers";
-import { alertBigDiscount, alertOverCreditLimit, checkLowStock, flushPushes } from "../alerts";
+import { alertBigDiscount, alertOverCreditLimit, checkLowStock, checkZakatDue, flushPushes } from "../alerts";
 import { audit, inTx } from "../db";
 import { requireDevice } from "../auth";
 import { payrollPurchase } from "./payroll";
@@ -34,7 +34,10 @@ export async function salesRoutes(app: FastifyInstance) {
         else throw e;
       }
     }
-    if (results.some((r) => r.status === "accepted")) await flushPushes(app.db, req.user.tid);
+    if (results.some((r) => r.status === "accepted")) {
+      await checkZakatDue(app.db, req.user.tid).catch(() => false);
+      await flushPushes(app.db, req.user.tid);
+    }
     return { results };
   });
 
@@ -140,8 +143,10 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
             l.offerId && knownOffers.has(l.offerId) ? l.offerId : null],
         );
         await tx.query(
-          `INSERT INTO stock_movements (tenant_id, store_id, product_id, qty_milli, kind, ref_id, user_id) VALUES ($1,$2,$3,$4,'sale',$5,$6)`,
-          [tid, who.sid, l.productId, -baseQty, s.id, who.sub],
+          // Dated when the sale was made, not when an offline till sent it, so a stock count
+          // taken in between compares with the right figure.
+          `INSERT INTO stock_movements (tenant_id, store_id, product_id, qty_milli, kind, ref_id, user_id, created_at) VALUES ($1,$2,$3,$4,'sale',$5,$6,LEAST($7::timestamptz, now()))`,
+          [tid, who.sid, l.productId, -baseQty, s.id, who.sub, s.createdAt],
         );
         taken.set(l.productId, (taken.get(l.productId) ?? 0) + baseQty);
         if (l.priceMinor !== u.price_minor) overrides.push({ name: l.name, catalog: u.price_minor, sold: l.priceMinor });

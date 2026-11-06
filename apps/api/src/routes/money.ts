@@ -16,7 +16,7 @@ type Account = (typeof ACCOUNTS)[number];
 const dateRe = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Every movement of money, one row each: + in, − out. $1 = tenant. */
-const FLOWS = `
+export const FLOWS = `
   SELECT s.created_at AS at, (s.created_at AT TIME ZONE '${TZ}')::date AS day,
          CASE p.method WHEN 'cash' THEN 'cash' ELSE 'card' END AS account,
          CASE WHEN s.kind = 'return' THEN 'refund' ELSE 'sale' END AS source,
