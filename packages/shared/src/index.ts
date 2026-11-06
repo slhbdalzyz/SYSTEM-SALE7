@@ -12,3 +12,4 @@ export * from "./settings";
 export * from "./whatsapp";
 export * from "./totp";
 export * from "./zakat";
+export * from "./loyalty";

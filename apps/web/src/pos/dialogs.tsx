@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { METHOD_LABELS, OTHER_METHODS, creditRoom, formatMoney, toMinor, type CatalogCustomer, type PaymentMethod } from "@pos/shared";
+import { METHOD_LABELS, OTHER_METHODS, creditRoom, formatMoney, maxPointsPayment, pointsFor, toMinor, type CatalogCustomer, type LoyaltySettings, type PaymentMethod } from "@pos/shared";
 import { readScaleWeight, scaleSupported } from "../scale";
 
 export function Modal({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
@@ -64,8 +64,8 @@ type Other = (typeof OTHER_METHODS)[number] | "credit";
  * Paying: cash with ready banknote buttons (each tap adds that note), any of the Libyan ways of
  * paying for all or part of the bill, or on the customer's account. The change shows big.
  */
-export function PayDialog({ totalMinor, customer, employees, onPay, onClose }: {
-  totalMinor: number; customer: CatalogCustomer | null; employees: Employee[];
+export function PayDialog({ totalMinor, customer, employees, rules, onPay, onClose }: {
+  totalMinor: number; customer: CatalogCustomer | null; employees: Employee[]; rules?: LoyaltySettings | null;
   onPay: (p: { method: PaymentMethod; amountMinor: number }[], employeeId: string | null) => void; onClose: () => void;
 }) {
   const [cash, setCash] = useState(String(totalMinor / 1000));
@@ -81,10 +81,14 @@ export function PayDialog({ totalMinor, customer, employees, onPay, onClose }: {
   const creditM = customer ? num(others.credit) : 0;
   const room = customer ? creditRoom(customer) : 0;
   const salaryM = staff && employeeId ? totalMinor : 0;
-  const paid = staff ? salaryM : cashM + otherM;
+  // Points: the most this customer can pay with what they hold, in whole points.
+  const [usePoints, setUsePoints] = useState(false);
+  const pointsMax = customer && rules ? maxPointsPayment(rules, customer.points ?? 0, totalMinor) : 0;
+  const pointsM = usePoints && !staff ? pointsMax : 0;
+  const paid = staff ? salaryM : cashM + otherM + pointsM;
   const change = paid - totalMinor;
   const overLimit = !staff && creditM > 0 && room !== null && creditM > room;
-  const valid = staff ? !!employeeId : paid >= totalMinor && change <= cashM && otherM <= totalMinor && !overLimit;
+  const valid = staff ? !!employeeId : paid >= totalMinor && change <= cashM && otherM + pointsM <= totalMinor && !overLimit;
   const notes = [5000, 10000, 20000, 50000];
   const choices: Other[] = [...OTHER_METHODS, ...(customer && room !== 0 ? (["credit"] as const) : [])];
 
@@ -96,10 +100,16 @@ export function PayDialog({ totalMinor, customer, employees, onPay, onClose }: {
 
   function useMethod(m: Other) {
     if (others[m] !== undefined) return;
-    const rest = Math.max(0, totalMinor - otherM - (fresh ? 0 : cashM));
+    const rest = Math.max(0, totalMinor - otherM - pointsM - (fresh ? 0 : cashM));
     if (fresh) setCash("0");
     setFresh(false);
     setOthers({ ...others, [m]: String((m === "credit" && room !== null ? Math.min(rest, room) : rest) / 1000) });
+  }
+
+  function spendPoints(on: boolean) {
+    setUsePoints(on);
+    // While the cash box still holds the exact amount, it follows what is left to pay.
+    if (fresh) setCash(String(Math.max(0, totalMinor - otherM - (on ? pointsMax : 0)) / 1000));
   }
 
   function pay() {
@@ -111,6 +121,7 @@ export function PayDialog({ totalMinor, customer, employees, onPay, onClose }: {
       const v = k === "credit" && !customer ? 0 : num(others[k]);
       if (v > 0) p.push({ method: k, amountMinor: v });
     }
+    if (pointsM > 0) p.push({ method: "points", amountMinor: pointsM });
     if (!p.length) p.push({ method: "cash", amountMinor: 0 });
     onPay(p, null);
   }
@@ -142,7 +153,7 @@ export function PayDialog({ totalMinor, customer, employees, onPay, onClose }: {
             onChange={(e) => { setCash(e.target.value); setFresh(false); }} onKeyDown={(e) => e.key === "Enter" && pay()} />
         </label>
         <div className="pay-notes">
-          <button className={fresh ? "active" : ""} onClick={() => { setCash(String(Math.max(0, totalMinor - otherM) / 1000)); setFresh(true); }}>بالضبط</button>
+          <button className={fresh ? "active" : ""} onClick={() => { setCash(String(Math.max(0, totalMinor - otherM - pointsM) / 1000)); setFresh(true); }}>بالضبط</button>
           {notes.map((n) => <button key={n} className="num" onClick={() => addNote(n)}>+{n / 1000}</button>)}
           <button className="ghost" onClick={() => { setCash("0"); setFresh(false); cashRef.current?.focus(); }}>مسح</button>
         </div>
@@ -159,6 +170,20 @@ export function PayDialog({ totalMinor, customer, employees, onPay, onClose }: {
             <button className="ghost" aria-label="شيل" onClick={() => { const n = { ...others }; delete n[m]; setOthers(n); }}>✕</button>
           </div>
         ))}
+        {customer && rules?.enabled && (
+          <div className="points-box">
+            <span>⭐ <b className="num">{customer.points ?? 0}</b> نقطة{(customer.points ?? 0) > 0 && <span className="muted"> (تسوى {formatMoney((customer.points ?? 0) * rules.pointValueMinor)})</span>}</span>
+            <span className="spacer" />
+            {pointsMax > 0 ? (
+              <label className="check">
+                <input type="checkbox" checked={usePoints} onChange={(e) => spendPoints(e.target.checked)} />
+                <span>{`ادفع ${formatMoney(pointsMax)} بالنقاط (${pointsFor(rules, pointsMax)} نقطة)`}</span>
+              </label>
+            ) : (
+              <span className="muted small">{(customer.points ?? 0) > 0 ? `يقدر يصرف من ${rules.minRedeemPoints} نقطة وفوق` : "يكسب نقاط على هالفاتورة"}</span>
+            )}
+          </div>
+        )}
         <div className={`pay-change ${change >= 0 ? "ok" : "short"}`}>
           <span>{change >= 0 ? "الباقي للزبون" : "ناقص"}</span>
           <b className="num">{formatMoney(Math.abs(change))}</b>

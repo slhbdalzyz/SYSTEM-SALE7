@@ -645,3 +645,5 @@ html.till-dark .pos-top button { border-color: #1e293b; }
 .cust-head button { margin-inline-start: auto; padding: 0 6px; }
 .change-big { cursor: pointer; }
 .modal:has(.pay-total) { max-height: 94vh; overflow: auto; }
+
+.points-box { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; background: var(--warn-soft); padding: 8px 12px; border-radius: var(--radius); }

@@ -3,11 +3,11 @@ import { z } from "zod";
 export const ROLES = ["owner", "manager", "accountant", "data_entry", "cashier"] as const;
 export type Role = (typeof ROLES)[number];
 
-export const PAYMENT_METHODS = ["cash", "card", "credit", "payroll", "sadad", "edfali", "mobicash", "cheque", "transfer"] as const;
+export const PAYMENT_METHODS = ["cash", "card", "credit", "payroll", "sadad", "edfali", "mobicash", "cheque", "transfer", "points"] as const;
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
 /** What the till, receipts and reports call each way of paying. */
 export const METHOD_LABELS: Record<PaymentMethod, string> = {
-  cash: "كاش", card: "بطاقة", credit: "آجل", payroll: "على الراتب", sadad: "سداد", edfali: "إدفع لي", mobicash: "موبي كاش", cheque: "صك", transfer: "تحويل مصرفي",
+  cash: "كاش", card: "بطاقة", credit: "آجل", payroll: "على الراتب", sadad: "سداد", edfali: "إدفع لي", mobicash: "موبي كاش", cheque: "صك", transfer: "تحويل مصرفي", points: "نقاط",
 };
 /** Paid at the till other than in cash, on the customer's account, or off a salary. */
 export const OTHER_METHODS = ["card", "sadad", "edfali", "mobicash", "transfer", "cheque"] as const;
@@ -166,6 +166,8 @@ export interface CatalogCustomer {
   phone: string | null;
   creditLimitMinor: number | null;
   balanceMinor: number;
+  /** Loyalty points held (when the shop has points switched on). */
+  points?: number;
   active: boolean;
 }
 

@@ -7,6 +7,7 @@ import { Reports } from "./Reports";
 import { Home } from "./Home";
 import { Staff } from "./Staff";
 import { Devices } from "./Devices";
+import { LoyaltyCard } from "./LoyaltyCard";
 import { Customers } from "./Customers";
 import { Purchasing } from "./Purchasing";
 import { Branches } from "./Branches";
@@ -184,9 +185,9 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
           {shown === "labels" && <Labels call={call} storeId={store.id} storeName={me.tenant.name} draft={labelDraft} clearDraft={() => setLabelDraft(null)} />}
           {shown === "branches" && <Branches call={call} storeId={store.id} isOwner={isOwner} onStoresChanged={loadMe} />}
           {shown === "offers" && <Offers call={call} storeId={store.id} stores={me.stores} />}
-          {shown === "customers" && <Customers call={call} />}
+          {shown === "customers" && <Customers call={call} isOwner={me.user.role === "owner"} />}
           {shown === "invoices" && <Invoices call={call} storeId={store.id} stores={open} />}
-          {shown === "settings" && <><ShopSettings call={call} storeName={store.name} onSaved={loadMe} openAlerts={() => setTab("alerts")} /><SecurityCard call={call} /></>}
+          {shown === "settings" && <><ShopSettings call={call} storeName={store.name} onSaved={loadMe} openAlerts={() => setTab("alerts")} /><LoyaltyCard call={call} isOwner={me.user.role === "owner"} /><SecurityCard call={call} /></>}
           {shown === "mypay" && !can("settings") && <SecurityCard call={call} />}
           {shown === "alerts" && <><Alerts call={call} /><AlertSettings call={call} isOwner={isOwner} /></>}
           {shown === "expenses" && <Expenses call={call} storeId={store.id} stores={open} />}
