@@ -441,3 +441,64 @@ table.invoices td { white-space: nowrap; }
 .totals-box { display: grid; gap: 4px; margin-inline-start: auto; width: min(320px, 100%); }
 .totals-box .line { display: flex; justify-content: space-between; }
 .totals-box .line.big { font-size: 1.2rem; font-weight: 700; border-top: 1px solid var(--line); padding-top: 4px; }
+
+/* WhatsApp */
+.wa-offer { display: flex; align-items: center; gap: 8px; justify-content: center; background: #dcfce7; color: #166534; border-color: #86efac; }
+.wa-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.wa-grid textarea { width: 100%; font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius); resize: vertical; box-sizing: border-box; }
+.wa-bubble { display: block; white-space: pre-wrap; background: #dcf8c6; color: #111; border-radius: 10px 0 10px 10px; padding: 8px 10px; font-size: .88rem; margin-top: 6px; }
+.remind-list { display: grid; gap: 6px; max-height: 50vh; overflow: auto; min-width: min(520px, 100%); }
+.remind-list > .row { border-bottom: 1px dashed var(--line); padding: 4px 0; }
+
+/* The invoice a customer opens from WhatsApp */
+.public-receipt { min-height: 100vh; display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 20px 16px 40px; box-sizing: border-box; }
+.public-head { display: grid; text-align: center; gap: 2px; }
+.public-head b { font-size: 1.2rem; }
+.public-receipt .receipt-paper { width: min(320px, 100%); box-sizing: border-box; }
+.public-actions { justify-content: center; }
+a.button { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--panel); padding: 8px 14px; border-radius: var(--radius); font-weight: 600; color: var(--ink); text-decoration: none; }
+
+/* Landing page and sign-up */
+.landing { max-width: 1100px; margin: 0 auto; padding: 0 16px 40px; display: flex; flex-direction: column; gap: 40px; }
+.land-top { display: flex; align-items: center; gap: 8px; padding: 14px 0; position: sticky; top: 0; background: var(--bg); z-index: 3; }
+.land-brand { display: flex; align-items: center; gap: 8px; font-size: 1.1rem; }
+.land-brand .logo { width: 34px; height: 34px; border-radius: 10px; background: var(--brand); color: #fff; display: grid; place-items: center; }
+.land-hero { text-align: center; display: grid; gap: 14px; justify-items: center; padding: 30px 0 10px; }
+.land-hero h1 { font-size: clamp(1.8rem, 5vw, 3rem); line-height: 1.3; margin: 0; }
+.land-hero h1 span { color: var(--brand); }
+.land-hero p { font-size: 1.1rem; color: var(--muted); max-width: 640px; margin: 0; }
+.land-features { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
+.land-feature { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: grid; gap: 4px; }
+.land-feature span { font-size: 1.6rem; }
+.land-feature small { color: var(--muted); font-size: .88rem; }
+.land-steps ol { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; padding: 0; list-style: none; counter-reset: s; }
+.land-steps li { counter-increment: s; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: grid; gap: 4px; }
+.land-steps li::before { content: counter(s); width: 30px; height: 30px; border-radius: 50%; background: var(--brand-soft); color: var(--brand); display: grid; place-items: center; font-weight: 800; }
+.land-steps li span { color: var(--muted); font-size: .9rem; }
+.land-plans { display: grid; gap: 12px; }
+.land-plans .plan button { margin-top: 6px; }
+.land-steps h2, .land-plans h2 { margin: 0 0 4px; }
+.land-foot { display: flex; justify-content: center; align-items: center; gap: 10px; border-top: 1px solid var(--line); padding-top: 20px; }
+button.big, a.button.big { padding: 12px 22px; font-size: 1.05rem; }
+.back { align-self: flex-start; padding: 4px 8px; }
+.wizard { width: min(640px, 100%); }
+.wizard-steps { display: flex; gap: 6px; list-style: none; padding: 0; margin: 0; }
+.wizard-steps li { flex: 1; text-align: center; padding: 6px; border-radius: 999px; background: var(--bg); color: var(--muted); font-weight: 600; font-size: .9rem; }
+.wizard-steps li.active { background: var(--brand); color: #fff; }
+.wizard-steps li.done { background: var(--brand-soft); color: var(--brand); }
+.type-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.type-grid button { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 12px; }
+.type-grid button span { font-size: 1.5rem; }
+.type-grid button.picked { border-color: var(--brand); box-shadow: 0 0 0 2px var(--brand-soft); background: var(--brand-soft); }
+.type-grid button small { color: var(--muted); font-weight: 400; }
+
+/* Getting started */
+.getting-started { border-color: var(--brand); }
+.progress { height: 6px; background: var(--bg); border-radius: 999px; overflow: hidden; }
+.progress span { display: block; height: 100%; background: var(--brand); }
+.start-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; }
+.start-steps button { display: flex; gap: 10px; align-items: flex-start; text-align: start; padding: 10px; }
+.start-steps button small { display: block; color: var(--muted); font-weight: 400; font-size: .82rem; }
+.start-steps button.done { opacity: .6; }
+.start-n { width: 26px; height: 26px; flex: none; border-radius: 50%; background: var(--brand-soft); color: var(--brand); display: grid; place-items: center; font-weight: 800; }
+.start-steps button.done .start-n { background: var(--brand); color: #fff; }

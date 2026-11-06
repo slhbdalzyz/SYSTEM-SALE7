@@ -137,3 +137,22 @@ describe("switching the packing sold", () => {
     expect(lineFor(tomato, tomato.units[0], 1000).units).toBeUndefined();
   });
 });
+
+describe("WhatsApp links", async () => {
+  const { waNumber, waLink, fillTemplate, DEFAULT_INVOICE_MESSAGE } = await import("@pos/shared");
+  it("turns Libyan numbers into WhatsApp numbers", () => {
+    expect(waNumber("091-234 5678")).toBe("218912345678");
+    expect(waNumber("+218 92 1234567")).toBe("218921234567");
+    expect(waNumber("00218911111111")).toBe("218911111111");
+    expect(waNumber("912345678")).toBe("218912345678");
+    expect(waNumber("123")).toBeNull();
+  });
+  it("writes the message and leaves the number out when there is none", () => {
+    const text = fillTemplate(DEFAULT_INVOICE_MESSAGE, { shop: "النور", number: "P1-7", total: "9.500 د.ل", link: "https://x/?r=1" });
+    expect(text).toContain("P1-7");
+    expect(text).toContain("https://x/?r=1");
+    expect(fillTemplate("{a} {b}", { a: "1" })).toBe("1 {b}");
+    expect(waLink("0912345678", "مرحبا")).toBe(`https://wa.me/218912345678?text=${encodeURIComponent("مرحبا")}`);
+    expect(waLink(null, "x")).toBe("https://wa.me/?text=x");
+  });
+});

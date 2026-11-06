@@ -13,6 +13,7 @@ import { CustomerDisplay } from "./display/CustomerDisplay";
 import { PriceChecker } from "./pricecheck/PriceChecker";
 import { Platform } from "./platform/Platform";
 import { Owner, prefersOwnerView } from "./owner/Owner";
+import { PublicReceipt } from "./public/PublicReceipt";
 
 export type Screen = "setup" | "pin" | "pos" | "admin" | "price" | "owner";
 
@@ -20,6 +21,8 @@ export type Screen = "setup" | "pin" | "pos" | "admin" | "price" | "owner";
 if (DEMO && !session.deviceToken) session.deviceToken = "d".repeat(64);
 
 function initial(): Screen {
+  // ?welcome shows the landing page even on a till (the demo's way to see it).
+  if (new URLSearchParams(location.search).has("welcome")) return "setup";
   // Coming back from the card payment page: straight to the owner's subscription screen.
   if (new URLSearchParams(location.search).has("payment") && tokenValid(session.adminToken)) return "admin";
   // A notification tapped on the phone opens the owner's view, even on a till.
@@ -34,6 +37,9 @@ export function App() {
   // The customer display is a second window of the till, with no session of its own.
   const q = new URLSearchParams(location.search);
   if (q.get("screen") === "display") return <CustomerDisplay />;
+  // A customer opening the invoice link from WhatsApp: no sign-in, just the receipt.
+  const receiptId = q.get("r");
+  if (receiptId && /^[0-9a-f-]{36}$/i.test(receiptId)) return <PublicReceipt id={receiptId} />;
   if (q.get("app") === "platform")
     return (
       <>

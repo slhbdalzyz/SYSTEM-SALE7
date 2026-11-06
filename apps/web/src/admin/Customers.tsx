@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { formatMoney, toMinor, type CatalogCustomer } from "@pos/shared";
+import { formatMoney, readShopSettings, toMinor, type CatalogCustomer, type ShopSettings } from "@pos/shared";
+import { sendDebtReminder } from "../whatsapp";
 import { Modal } from "../pos/dialogs";
 import type { Call } from "./Admin";
 
@@ -12,6 +13,15 @@ export function Customers({ call }: { call: Call }) {
   const [edit, setEdit] = useState<{ id?: string; name: string; phone: string; limit: string; noLimit: boolean } | null>(null);
   const [statement, setStatement] = useState<{ customer: CatalogCustomer; entries: Entry[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [shop, setShop] = useState<{ name: string; settings: ShopSettings } | null>(null);
+  const [remind, setRemind] = useState(false);
+  const [sent, setSent] = useState<Set<string>>(new Set());
+  useEffect(() => void call<{ name: string; settings: unknown }>("/settings").then((r) => setShop({ name: r.name, settings: readShopSettings(r.settings) })).catch(() => undefined), [call]);
+  const owing = list.filter((c) => c.balanceMinor > 0).sort((a, b) => b.balanceMinor - a.balanceMinor);
+  const nudge = (c: CatalogCustomer) => {
+    sendDebtReminder({ shopName: shop?.name ?? "", settings: shop?.settings, name: c.name, balanceMinor: c.balanceMinor, phone: c.phone });
+    setSent((s) => new Set(s).add(c.id));
+  };
 
   const load = () => call<CatalogCustomer[]>(`/customers${q ? `?q=${encodeURIComponent(q)}` : ""}`).then(setList);
   useEffect(() => void load(), [q]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -37,6 +47,7 @@ export function Customers({ call }: { call: Call }) {
         <input placeholder="بحث بالاسم أو الهاتف" value={q} onChange={(e) => setQ(e.target.value)} style={{ maxWidth: 320 }} />
         <span className="muted">إجمالي الديون: <b className="num">{formatMoney(totalDebt)}</b></span>
         <span className="spacer" />
+        <button onClick={() => setRemind(true)} disabled={!owing.length}>📲 تذكير المدينين ({owing.length})</button>
         <button className="primary" onClick={() => setEdit({ name: "", phone: "", limit: "0", noLimit: false })}>+ عميل</button>
       </div>
       <div className="card" style={{ padding: 0, overflow: "auto" }}>
@@ -53,6 +64,7 @@ export function Customers({ call }: { call: Call }) {
                   <td className="num">{c.creditLimitMinor === null ? "بدون حد" : c.creditLimitMinor === 0 ? "بدون آجل" : formatMoney(c.creditLimitMinor)}</td>
                   <td className="row">
                     <button onClick={async () => setStatement(await call(`/customers/${c.id}/statement`))}>كشف حساب</button>
+                    {c.balanceMinor > 0 && <button onClick={() => nudge(c)} title={c.phone ? "" : "ما عندهش رقم: تختار المحادثة من الواتساب"}>{sent.has(c.id) ? "✓ تذكير" : "📲 تذكير"}</button>}
                     <button onClick={() => setEdit({ id: c.id, name: c.name, phone: c.phone ?? "", limit: String((c.creditLimitMinor ?? 0) / 1000), noLimit: c.creditLimitMinor === null })}>تعديل</button>
                   </td>
                 </tr>
@@ -93,6 +105,23 @@ export function Customers({ call }: { call: Call }) {
           </table>
           {statement.entries.length === 0 && <span className="muted">ما فيش حركات</span>}
           <div className="row"><b>الرصيد الحالي</b><span className="spacer" /><b className="num">{formatMoney(statement.customer.balanceMinor)}</b></div>
+        </Modal>
+      )}
+      {remind && (
+        <Modal title="📲 تذكير المدينين على الواتساب" onClose={() => setRemind(false)}>
+          <div className="muted">كل زر يفتح الواتساب على محادثة العميل والرسالة جاهزة. الرسالة تتعدل من ⚙️ الإعدادات.</div>
+          <div className="remind-list">
+            {owing.map((c) => (
+              <div key={c.id} className="row">
+                <span>{c.name}</span>
+                <span className="muted num">{c.phone ?? "بدون رقم"}</span>
+                <span className="spacer" />
+                <b className="num">{formatMoney(c.balanceMinor)}</b>
+                <button className={sent.has(c.id) ? "" : "primary"} onClick={() => nudge(c)}>{sent.has(c.id) ? "✓ تبعت" : "إرسال"}</button>
+              </div>
+            ))}
+          </div>
+          <div className="row"><span className="muted">{sent.size} من {owing.length}</span><span className="spacer" /><button onClick={() => setRemind(false)}>إغلاق</button></div>
         </Modal>
       )}
     </div>

@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { readShopSettings } from "@pos/shared";
 import { HttpError, requirePerm } from "../auth";
 
 const TZ = "Africa/Tripoli";
@@ -71,16 +72,40 @@ export async function invoiceRoutes(app: FastifyInstance) {
   /** One invoice in full: lines, payments, the shift it was made in, and any returns against it. */
   app.get("/invoices/:id", allowed, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    return invoiceDetail(req.user.tid, id);
+  });
+
+  /**
+   * The invoice a customer opens from the link sent on WhatsApp. No sign-in: the link carries the
+   * invoice's random id, which nobody can guess. It shows what the paper receipt shows, nothing more.
+   */
+  app.get("/public/receipts/:id", { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } }, async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const t = (await app.db.query(`SELECT s.tenant_id, te.name, te.settings FROM sales s JOIN tenants te ON te.id = s.tenant_id WHERE s.id = $1`, [id])).rows[0];
+    if (!t) throw new HttpError(404, "الفاتورة غير موجودة أو لسه ما وصلتش");
+    const d = await invoiceDetail(t.tenant_id, id);
+    const settings = readShopSettings(t.settings);
+    return {
+      number: d.number, kind: d.kind, created_at: d.created_at, id: d.id, shift_id: null, store_name: d.store_name, receipt_footer: d.receipt_footer,
+      device_name: d.device_name, cashier: settings.receipt.showCashier ? d.cashier : "", customer_name: d.customer_name, employee_name: null,
+      original_number: d.original_number, reason: d.reason, total_minor: d.total_minor, change_minor: d.change_minor,
+      lines: d.lines.map((l: Record<string, unknown>) => ({ ...l, product_id: "", unit_id: "" })), payments: d.payments,
+      // What the receipt prints; the till's rules and message wording stay private.
+      shop: { name: t.name as string, settings: { ...settings, till: undefined, whatsapp: undefined } },
+    };
+  });
+
+  async function invoiceDetail(tid: string, id: string) {
     const s = (await app.db.query(
       `SELECT s.id, s.number, s.kind, s.created_at, s.received_at, s.subtotal_minor, s.discount_minor, s.tax_minor, s.total_minor, s.paid_minor, s.change_minor,
               s.shift_id, s.reason, s.original_sale_id, s.customer_id, s.employee_id, o.number AS original_number,
-              st.name AS store_name, st.receipt_footer, d.name AS device_name, u.name AS cashier, c.name AS customer_name, e.name AS employee_name, a.name AS approved_by_name,
+              st.name AS store_name, st.receipt_footer, d.name AS device_name, u.name AS cashier, c.name AS customer_name, c.phone AS customer_phone, e.name AS employee_name, a.name AS approved_by_name,
               sh.opened_at AS shift_opened_at, sh.closed_at AS shift_closed_at, su.name AS shift_cashier
          FROM sales s JOIN stores st ON st.id = s.store_id JOIN devices d ON d.id = s.device_id JOIN users u ON u.id = s.user_id
          LEFT JOIN customers c ON c.id = s.customer_id LEFT JOIN users e ON e.id = s.employee_id LEFT JOIN users a ON a.id = s.approved_by
          LEFT JOIN sales o ON o.id = s.original_sale_id LEFT JOIN shifts sh ON sh.id = s.shift_id LEFT JOIN users su ON su.id = sh.user_id
         WHERE s.id = $1 AND s.tenant_id = $2`,
-      [id, req.user.tid],
+      [id, tid],
     )).rows[0];
     if (!s) throw new HttpError(404, "الفاتورة غير موجودة");
     const lines = (await app.db.query(
@@ -91,7 +116,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
     const payments = (await app.db.query(`SELECT method, amount_minor FROM payments WHERE sale_id = $1`, [id])).rows;
     const returns = (await app.db.query(
       `SELECT r.id, r.number, r.created_at, -r.total_minor AS amount_minor, r.reason FROM sales r WHERE r.original_sale_id = $1 AND r.tenant_id = $2 ORDER BY r.created_at`,
-      [id, req.user.tid],
+      [id, tid],
     )).rows;
     const n = (x: unknown) => Number(x);
     return {
@@ -101,7 +126,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
       payments: payments.map((p) => ({ method: p.method, amount_minor: n(p.amount_minor) })),
       returns: returns.map((r) => ({ ...r, amount_minor: n(r.amount_minor) })),
     };
-  });
+  }
 
   /** The shifts in a period: who worked which till, when, what they sold and how the drawer came out. */
   app.get("/shifts", allowed, async (req) => {

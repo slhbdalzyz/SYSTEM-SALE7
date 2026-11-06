@@ -7,10 +7,19 @@ import { TimeChart } from "./charts";
 const DAYS = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
 
 /** The owner's first screen: today against yesterday, the week, the month, and what needs attention. */
-export function Home({ call, storeId, userName, open }: { call: Call; storeId: string; userName: string; open: (tab: "reports" | "purchasing" | "products" | "alerts" | "customers") => void }) {
+export function Home({ call, storeId, userName, open }: { call: Call; storeId: string; userName: string; open: (tab: "reports" | "purchasing" | "products" | "alerts" | "customers" | "settings" | "devices" | "staff") => void }) {
   const [d, setD] = useState<Dashboard | null>(null);
   const [expiring, setExpiring] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [start, setStart] = useState<Onboarding | null>(null);
+  const [hideStart, setHideStart] = useState(() => {
+    try {
+      return localStorage.getItem("pos.hideStart") === "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => void call<Onboarding>("/onboarding").then(setStart).catch(() => setStart(null)), [call]);
   useEffect(() => {
     call<Dashboard>(`/dashboard?storeId=${storeId}`).then(setD).catch((e) => setError((e as Error).message));
     call<unknown[]>(`/stock/expiring?storeId=${storeId}&days=7`).then((r) => setExpiring(r.length)).catch(() => setExpiring(null));
@@ -36,6 +45,15 @@ export function Home({ call, storeId, userName, open }: { call: Call; storeId: s
         <button onClick={() => open("products")}>+ بطاقة صنف</button>
         <button onClick={() => open("reports")}>📊 التقارير</button>
       </div>
+
+      {start && !hideStart && <GettingStarted s={start} open={open} hide={() => {
+        setHideStart(true);
+        try {
+          localStorage.setItem("pos.hideStart", "1");
+        } catch {
+          /* private mode */
+        }
+      }} />}
 
       <div className="kpis kpis-hero">
         <div className="kpi hero">
@@ -91,6 +109,40 @@ export function Home({ call, storeId, userName, open }: { call: Call; storeId: s
             ))}</tbody></table>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+interface Onboarding { businessType: string; steps: Record<"settings" | "products" | "purchases" | "devices" | "staff" | "sales", boolean> }
+
+/** A new shop's first steps, each one a button to the screen that does it; it goes away once done. */
+function GettingStarted({ s, open, hide }: { s: Onboarding; open: (tab: "settings" | "products" | "purchasing" | "devices" | "staff") => void; hide: () => void }) {
+  const steps: { done: boolean; title: string; hint: string; go: () => void }[] = [
+    { done: s.steps.settings, title: "بيانات المحل", hint: "العنوان والهاتف والشعار تطلع في الفاتورة", go: () => open("settings") },
+    { done: s.steps.products, title: "ضيف أصنافك", hint: "بطاقة صنف لكل صنف، والباركود يتعمل تلقائياً", go: () => open("products") },
+    { done: s.steps.purchases, title: "أول فاتورة توريد", hint: "الكميات والتكلفة وأسعار البيع مرة وحدة", go: () => open("purchasing") },
+    { done: s.steps.devices, title: "اعتمد جهاز الكاشير", hint: "هذا الكمبيوتر أو أي جهاز تاني", go: () => open("devices") },
+    { done: s.steps.staff, title: "ضيف الكاشيرات", hint: "كل واحد برقم سري وصلاحياته", go: () => open("staff") },
+  ];
+  const done = steps.filter((x) => x.done).length;
+  if (done === steps.length) return null;
+  return (
+    <div className="card stack getting-started">
+      <div className="row">
+        <b>🚀 خطوات البداية</b>
+        <span className="muted">{done} من {steps.length}</span>
+        <span className="spacer" />
+        <button className="ghost" onClick={hide}>إخفاء</button>
+      </div>
+      <div className="progress"><span style={{ width: `${(done / steps.length) * 100}%` }} /></div>
+      <div className="start-steps">
+        {steps.map((x, i) => (
+          <button key={x.title} className={x.done ? "done" : ""} onClick={x.go}>
+            <span className="start-n">{x.done ? "✓" : i + 1}</span>
+            <span><b>{x.title}</b><small>{x.hint}</small></span>
+          </button>
+        ))}
       </div>
     </div>
   );

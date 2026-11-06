@@ -9,3 +9,4 @@ export * from "./symbology";
 export * from "./tspl";
 export * from "./permissions";
 export * from "./settings";
+export * from "./whatsapp";

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { formatMoney, formatQty, readShopSettings, type RefundMethod, type SaleInput, type ShopSettings } from "@pos/shared";
 import type { Call } from "./Admin";
+import { sendInvoice } from "../whatsapp";
 import { downloadCsv } from "./charts";
 import { Modal } from "../pos/dialogs";
 import { Receipt, type ReceiptData } from "../pos/Receipt";
@@ -18,7 +19,7 @@ interface List {
 interface Detail {
   id: string; number: string; kind: "sale" | "return"; created_at: string; received_at: string | null; subtotal_minor: number; discount_minor: number; tax_minor: number;
   total_minor: number; paid_minor: number; change_minor: number; shift_id: string | null; reason: string | null; original_sale_id: string | null; original_number: string | null;
-  store_name: string; receipt_footer: string | null; device_name: string; cashier: string; customer_name: string | null; employee_name: string | null; approved_by_name: string | null;
+  store_name: string; receipt_footer: string | null; device_name: string; cashier: string; customer_name: string | null; customer_phone?: string | null; employee_name: string | null; approved_by_name: string | null;
   shift_opened_at: string | null; shift_closed_at: string | null; shift_cashier: string | null;
   lines: { id: string; product_id: string; unit_id: string; name: string; qty_milli: number; price_minor: number; discount_minor: number; tax_minor: number; total_minor: number; promo_minor: number; offer_name: string | null; tax_bp: number }[];
   payments: { method: string; amount_minor: number }[];
@@ -341,6 +342,11 @@ function InvoiceDetail({ call, id, onClose, onOpen }: { call: Call; id: string; 
             <span className="muted">{d.received_at ? `وصلت للسيرفر ${at(d.received_at)}` : ""}</span>
             <span className="spacer" />
             <button onClick={onClose}>إغلاق</button>
+            <button onClick={() => {
+              const phone = d.customer_phone ?? prompt("رقم واتساب الزبون (اتركه فاضي وتختار المحادثة من الواتساب)", "") ?? null;
+              if (phone === null && !d.customer_phone) return;
+              sendInvoice({ shopName: shop?.name ?? d.store_name, settings: shop?.settings, saleId: d.id, number: d.number, totalMinor: Math.abs(d.total_minor), phone });
+            }}>📲 واتساب</button>
             <button className="primary" onClick={() => void reprint()}>🖨️ طباعة الفاتورة</button>
           </div>
         </div>

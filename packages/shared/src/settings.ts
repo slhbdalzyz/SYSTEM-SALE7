@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DEFAULT_DEBT_MESSAGE, DEFAULT_INVOICE_MESSAGE } from "./whatsapp";
 
 const text = (max: number) => z.string().trim().max(max).default("");
 
@@ -38,6 +39,13 @@ export const shopSettingsSchema = z.object({
     showCashier: z.boolean().default(true),
     showSavings: z.boolean().default(true),
     copies: z.number().int().min(1).max(3).default(1),
+  }).default({}),
+  /** The messages sent on WhatsApp; {shop} {number} {total} {link} {name} {balance} are filled in. */
+  whatsapp: z.object({
+    invoiceMessage: z.string().trim().min(1).max(600).default(DEFAULT_INVOICE_MESSAGE).catch(DEFAULT_INVOICE_MESSAGE),
+    debtMessage: z.string().trim().min(1).max(600).default(DEFAULT_DEBT_MESSAGE).catch(DEFAULT_DEBT_MESSAGE),
+    /** After each sale to a customer with a phone, the till offers to send the invoice. */
+    offerAfterSale: z.boolean().default(true),
   }).default({}),
   till: z.object({
     /** Print the receipt as soon as a sale is paid (off: the cashier presses print). */

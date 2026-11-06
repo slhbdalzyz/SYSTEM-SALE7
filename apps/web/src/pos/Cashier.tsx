@@ -16,6 +16,7 @@ import { ReturnDialog, type ReturnDone } from "./ReturnDialog";
 import { PrinterDialog } from "../hardware/PrinterDialog";
 import { openCustomerDisplay, openDrawer, printReceipt } from "../hardware/printer";
 import { displaySender } from "../display/channel";
+import { sendInvoice } from "../whatsapp";
 
 type Dialog =
   | { kind: "pay" }
@@ -31,6 +32,7 @@ type Dialog =
   | { kind: "printer" }
   | { kind: "mypay" }
   | { kind: "keys" }
+  | { kind: "wa" }
   | null;
 
 type Shop = { name: string; settings: ShopSettings };
@@ -291,7 +293,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     // Until the next sync, count the new debt locally so the credit limit still holds offline.
     if (customer && credit > 0) await db.customers.update(customer.id, { balanceMinor: customer.balanceMinor + credit });
     const store = await getMeta<{ footer?: string }>("store");
-    setReceipt({ storeName: device.storeName, shop, footer: store?.footer, deviceName: device.name, cashierName, sale, changeMinor: change, customerName: customer?.name, employeeName: employees.find((e) => e.id === employeeId)?.name });
+    setReceipt({ storeName: device.storeName, shop, footer: store?.footer, deviceName: device.name, cashierName, sale, changeMinor: change, customerName: customer?.name, customerPhone: customer?.phone, employeeName: employees.find((e) => e.id === employeeId)?.name });
     clearCart();
     setDialog(null);
     flash(change > 0 ? `الباقي ${formatMoney(change)}` : "تم البيع");
@@ -578,6 +580,11 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
               </div>
             )}
             {message && lines.length > 0 && <div className={message.bad ? "error" : "badge ok"} style={{ textAlign: "center" }}>{message.text}</div>}
+            {receipt?.sale && !lines.length && (shop?.settings.whatsapp.offerAfterSale ?? true) && (
+              <button className="wa-offer" onClick={() => setDialog({ kind: "wa" })}>
+                <span>📲</span> أرسل الفاتورة {receipt.sale.number} على الواتساب{receipt.customerName ? ` لـ${receipt.customerName}` : ""}
+              </button>
+            )}
           </div>
           <div className="keys">
             <button onClick={() => selected && setDialog({ kind: "qty", key: selected })} disabled={!selected}>الكمية <kbd>F4</kbd></button>
@@ -649,6 +656,17 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
           }}
           onDone={(m) => {
             setLines((ls) => (dialog.required && m <= 0 ? ls.filter((l) => l.key !== dialog.key) : ls.map((l) => (l.key === dialog.key ? { ...l, priceMinor: m } : l))));
+            setDialog(null);
+            focusScan();
+          }}
+        />
+      )}
+      {dialog?.kind === "wa" && receipt?.sale && (
+        <WaDialog
+          initial={receipt.customerPhone ?? ""}
+          onClose={() => { setDialog(null); focusScan(); }}
+          onSend={(phone) => {
+            sendInvoice({ shopName: shop?.name ?? device?.storeName ?? "", settings: shop?.settings, saleId: receipt.sale!.id, number: receipt.sale!.number, totalMinor: receipt.sale!.totalMinor, phone });
             setDialog(null);
             focusScan();
           }}
@@ -736,3 +754,19 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   );
 }
 
+
+/** Asks the customer's WhatsApp number (or leaves it empty to pick the chat in WhatsApp). */
+function WaDialog({ initial, onSend, onClose }: { initial: string; onSend: (phone: string) => void; onClose: () => void }) {
+  const [phone, setPhone] = useState(initial);
+  return (
+    <Modal title="📲 إرسال الفاتورة على الواتساب" onClose={onClose}>
+      <label>
+        رقم واتساب الزبون
+        <input className="num" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="09xxxxxxxx" autoFocus
+          onKeyDown={(e) => e.key === "Enter" && onSend(phone)} />
+      </label>
+      <div className="muted">الواتساب يفتح والرسالة مكتوبة فيها رابط الفاتورة، وانت تضغط إرسال. لو تخليه فاضي تختار المحادثة من الواتساب.</div>
+      <div className="row"><span className="spacer" /><button onClick={onClose}>إلغاء</button><button className="primary" onClick={() => onSend(phone)}>فتح الواتساب</button></div>
+    </Modal>
+  );
+}

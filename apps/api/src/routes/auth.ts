@@ -11,6 +11,8 @@ const registerSchema = z.object({
   storeName: z.string().min(2).max(120),
   phone: z.string().max(40).optional(),
   planCode: z.string().max(30).optional(),
+  businessType: z.enum(["grocery", "clothing", "pharmacy", "butcher", "restaurant", "other"]).default("grocery"),
+  city: z.string().trim().max(80).optional(),
   ownerName: z.string().min(2).max(120),
   email: z.string().email().max(200),
   password: z.string().min(8).max(200),
@@ -33,8 +35,9 @@ export async function authRoutes(app: FastifyInstance) {
       // Every new shop starts on a 14-day free trial of the plan it picked.
       const plan = b.planCode && (await tx.query(`SELECT 1 FROM plans WHERE code = $1 AND active`, [b.planCode])).rowCount ? b.planCode : "basic";
       const t = await tx.query(
-        `INSERT INTO tenants (name, phone, plan_code, status, paid_until) VALUES ($1,$2,$3,'trial', now() + interval '14 days') RETURNING id`,
-        [b.businessName, b.phone ?? null, plan],
+        `INSERT INTO tenants (name, phone, plan_code, status, paid_until, business_type, settings) VALUES ($1,$2,$3,'trial', now() + interval '14 days', $4, $5) RETURNING id`,
+        // What they typed at sign-up already fills the receipt's phone and city.
+        [b.businessName, b.phone ?? null, plan, b.businessType, JSON.stringify({ phone: b.phone ?? "", city: b.city ?? "" })],
       );
       const tid = t.rows[0].id as string;
       const s = await tx.query(`INSERT INTO stores (tenant_id, name) VALUES ($1,$2) RETURNING id`, [tid, b.storeName]);
