@@ -8,8 +8,12 @@ import { migrate } from "../src/migrate";
 const db = createPool(process.env.TEST_DATABASE_URL ?? "postgres://pos:pos@localhost:5432/pos_test");
 let app: Awaited<ReturnType<typeof buildApp>>;
 
+// The whole suite runs in well under a minute, past the API's 600 requests a minute per address:
+// spread the calls over a few addresses, as many tills would be.
+let calls = 0;
 async function call(method: string, url: string, token?: string, body?: unknown) {
-  const res = await app.inject({ method: method as "GET", url, headers: token ? { authorization: `Bearer ${token}` } : {}, payload: body as object });
+  const remoteAddress = `10.1.${Math.floor(calls++ / 500)}.1`;
+  const res = await app.inject({ method: method as "GET", url, remoteAddress, headers: token ? { authorization: `Bearer ${token}` } : {}, payload: body as object });
   return { status: res.statusCode, body: res.json() };
 }
 
@@ -1727,5 +1731,89 @@ describe("loyalty points", () => {
     expect((await call("GET", `/reports/daily?storeId=${store}&date=${day}`, t)).body.byMethod.points).toBe(1000);
     expect((await call("GET", "/backup/loyalty_entries", t)).body.rows.length).toBeGreaterThan(5);
     void lastSaleId;
+  });
+});
+
+describe("till quick keys", () => {
+  let t: string;
+  let till: string;
+  let store: string;
+  let bread: { id: string; piece: string; bag: string };
+  let veg: string;
+  let shift: string;
+  const fresh = async (url: string, body: unknown) => (await app.inject({ method: "POST", url, payload: body as object, remoteAddress: "10.0.0.99" })).json();
+
+  it("turns products ticked as quick into keys, and keeps the tick and the keys in step", async () => {
+    const r = await fresh("/auth/register", { businessName: "مخبز الأزرار", storeName: "الرئيسي", ownerName: "سالم", email: "keys@test.ly", password: "password123" });
+    t = r.token;
+    store = r.storeId;
+    const p = await call("POST", "/products", t, { name: "خبز", costMinor: 100, quick: true, units: [{ name: "رغيف", priceMinor: 250, isBase: true }, { name: "كيس", factorMilli: 10000, priceMinor: 2250 }] });
+    bread = { id: p.body.id, piece: p.body.units.find((u: { isBase: boolean }) => u.isBase).id, bag: p.body.units.find((u: { isBase: boolean }) => !u.isBase).id };
+    veg = (await call("POST", "/products", t, { name: "خضرة متنوعة", costMinor: 0, units: [{ name: "قطعة", priceMinor: 1000, isBase: true }] })).body.id;
+    let all = (await call("GET", "/quick-keys", t)).body;
+    expect(all.keys).toHaveLength(1);
+    expect(all.keys[0]).toMatchObject({ productId: bread.id, productName: "خبز", qtyMilli: 1000 });
+    // Untick in the item card: the key goes; tick again: a plain key comes back.
+    const body = { name: "خبز", costMinor: 100, units: [{ id: bread.piece, name: "رغيف", priceMinor: 250, isBase: true }, { id: bread.bag, name: "كيس", factorMilli: 10000, priceMinor: 2250 }] };
+    expect((await call("PUT", `/products/${bread.id}`, t, { ...body, quick: false })).status).toBe(200);
+    expect((await call("GET", "/quick-keys", t)).body.keys).toHaveLength(0);
+    await call("PUT", `/products/${bread.id}`, t, { ...body, quick: true });
+    all = (await call("GET", "/quick-keys", t)).body;
+    expect(all.keys).toHaveLength(1);
+    await call("POST", `/quick-keys/${all.keys[0].id}/delete`, t);
+    expect((await db.query(`SELECT quick FROM products WHERE id = $1`, [bread.id])).rows[0].quick).toBe(false);
+  });
+
+  it("sets keys in groups with a quantity, a colour, a picture, an open price, per branch and per cashier", async () => {
+    const g = (await call("POST", "/quick-groups", t, { name: "مخبوزات", color: "#ca8a04" })).body;
+    const g2 = (await call("POST", "/quick-groups", t, { name: "خضرة" })).body;
+    expect((await call("POST", "/quick-groups", t, { name: "" })).status).toBe(400);
+    const five = await call("POST", "/quick-keys", t, { productId: bread.id, unitId: bread.piece, qtyMilli: 5000, groupId: g.id, color: "#ca8a04", image: "data:image/png;base64,iVBORw0KGgo=" });
+    expect(five.body).toMatchObject({ qtyMilli: 5000, groupId: g.id, image: expect.stringContaining("data:image/png") });
+    expect((await call("POST", "/quick-keys", t, { productId: bread.id, unitId: veg })).status).toBe(400);
+    expect((await call("POST", "/quick-keys", t, { productId: bread.id, image: "javascript:alert(1)" })).status).toBe(400);
+    const open = (await call("POST", "/quick-keys", t, { productId: veg, openPrice: true, groupId: g2.id, label: "خضرة بالوزن" })).body;
+    const d = await call("POST", "/devices", t, { storeId: store, name: "كاشير" });
+    const u = await call("POST", "/users", t, { name: "نادية", role: "cashier", pin: "2468" });
+    const other = await call("POST", "/users", t, { name: "فرج", role: "cashier", pin: "1357" });
+    await call("POST", "/quick-keys", t, { productId: bread.id, unitId: bread.bag, label: "كيس فرج", userId: other.body.id });
+    till = (await fresh("/auth/pin", { deviceToken: d.body.deviceToken, userId: u.body.id, pin: "2468" })).token;
+    const mine = (await call("GET", "/quick-keys/till", till)).body;
+    expect(mine.keys.map((k: { label: string | null }) => k.label)).not.toContain("كيس فرج");
+    expect(mine.keys).toHaveLength(2);
+    expect(mine.groups.map((x: { name: string }) => x.name)).toEqual(["مخبوزات", "خضرة"]);
+    // Drag: the open-price key first in the bakery group.
+    const ids = [open.id, five.body.id];
+    expect((await call("POST", "/quick-keys/order", t, { groupId: g.id, ids })).status).toBe(200);
+    const after = (await call("GET", "/quick-keys", t)).body.keys.filter((k: { groupId: string }) => k.groupId === g.id);
+    expect(after.map((k: { id: string }) => k.id)).toEqual(ids);
+    // A group deleted keeps its keys on the main page.
+    await call("POST", `/quick-groups/${g.id}/delete`, t);
+    expect((await call("GET", "/quick-keys", t)).body.keys.find((k: { id: string }) => k.id === open.id).groupId).toBeNull();
+    expect((await db.query(`SELECT quick FROM products WHERE id = $1`, [bread.id])).rows[0].quick).toBe(true);
+    expect((await call("POST", "/quick-keys", till, { productId: veg })).status).toBe(403);
+  });
+
+  it("sells an open-price key at the typed price without flagging it as an override", async () => {
+    shift = randomUUID();
+    await call("POST", "/shifts/open", till, { id: shift, openingCashMinor: 0 });
+    const vegUnit = (await db.query(`SELECT id FROM product_units WHERE product_id = $1`, [veg])).rows[0].id;
+    const sale = (lines: object[], total: number) => ({ id: randomUUID(), number: `Q-${randomUUID().slice(0, 6)}`, shiftId: shift, createdAt: new Date().toISOString(), lines, payments: [{ method: "cash", amountMinor: total }], totalMinor: total });
+    const a = sale([{ productId: veg, unitId: vegUnit, name: "خضرة", qtyMilli: 1000, priceMinor: 3750 }], 3750);
+    expect((await call("POST", "/sales/batch", till, { sales: [a] })).body.results[0].status).toBe("accepted");
+    expect((await db.query(`SELECT 1 FROM audit_log WHERE action = 'sale.price_mismatch' AND entity_id = $1`, [a.id])).rowCount).toBe(0);
+    const b = sale([{ productId: bread.id, unitId: bread.piece, name: "خبز", qtyMilli: 1000, priceMinor: 200 }], 200);
+    await call("POST", "/sales/batch", till, { sales: [b] });
+    expect((await db.query(`SELECT 1 FROM audit_log WHERE action = 'sale.price_mismatch' AND entity_id = $1`, [b.id])).rowCount).toBe(1);
+  });
+
+  it("suggests the best sellers that have no barcode and no key yet", async () => {
+    const p = await call("POST", "/products", t, { name: "كيس بلاستيك", costMinor: 10, units: [{ name: "كيس", priceMinor: 50, isBase: true }] });
+    const sale = { id: randomUUID(), number: `Q-${randomUUID().slice(0, 6)}`, shiftId: shift, createdAt: new Date().toISOString(),
+      lines: [{ productId: p.body.id, unitId: p.body.units[0].id, name: "كيس", qtyMilli: 2000, priceMinor: 50 }], payments: [{ method: "cash", amountMinor: 100 }], totalMinor: 100 };
+    await call("POST", "/sales/batch", till, { sales: [sale] });
+    const s = (await call("GET", "/quick-keys/suggest", t)).body;
+    expect(s.map((x: { name: string }) => x.name)).toEqual(["كيس بلاستيك"]);
+    expect((await call("GET", "/backup/quick_keys", t)).body.rows.length).toBeGreaterThan(0);
   });
 });

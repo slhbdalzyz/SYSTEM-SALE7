@@ -505,10 +505,38 @@ button.big, a.button.big { padding: 12px 22px; font-size: 1.05rem; }
 
 /* Pro pack: quick keys, camera, shift report, counts, audit */
 .pos-left { grid-template-rows: auto auto 1fr; }
+.quick-pad { display: grid; gap: 6px; }
+.qk-groups { display: flex; gap: 6px; overflow-x: auto; }
+.qk-groups button { flex: 0 0 auto; padding: 6px 12px; min-height: 0; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); border-inline-start: 4px solid var(--qk, var(--line)); }
+.qk-groups button.active { background: var(--qk, var(--brand)); border-color: var(--qk, var(--brand)); color: #fff; }
 .quick-keys { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; }
-.quick-keys button { flex: 0 0 auto; min-width: 96px; max-width: 150px; display: grid; gap: 2px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; text-align: center; }
-.quick-keys button:hover { border-color: var(--brand); background: var(--brand-soft); }
-.quick-keys small { color: var(--muted); }
+.quick-keys > button { position: relative; flex: 0 0 auto; min-width: 96px; max-width: 150px; display: grid; justify-items: center; gap: 2px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-top: 4px solid var(--qk, var(--line)); border-radius: 12px; text-align: center; }
+.quick-keys > button:hover { border-color: var(--qk, var(--brand)); background: var(--brand-soft); }
+.quick-keys > button.tinted { background: color-mix(in srgb, var(--qk) 12%, var(--panel)); }
+.qk-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.qk-price { color: var(--muted); }
+.qk-img { width: 40px; height: 40px; border-radius: 8px; object-fit: cover; }
+.qk-hot { position: absolute; top: 3px; inset-inline-start: 4px; font-size: .62rem; padding: 0 4px; opacity: .7; }
+.qk-sm .quick-keys > button { min-width: 76px; padding: 6px 8px; font-size: .85rem; }
+.qk-sm .qk-img { width: 28px; height: 28px; }
+.qk-lg .quick-keys { flex-wrap: wrap; overflow: visible; }
+.qk-lg .quick-keys > button { min-width: 128px; max-width: 180px; min-height: 96px; padding: 14px; font-size: 1.05rem; }
+.qk-lg .qk-img { width: 56px; height: 56px; }
+.qk-admin { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+.qk-admin > .qk-tile { position: relative; display: grid; justify-items: center; gap: 4px; padding: 12px 8px; min-height: 104px; background: var(--panel); border: 1px solid var(--line); border-top: 4px solid var(--qk, var(--line)); border-radius: 12px; cursor: grab; text-align: center; }
+.qk-admin > .qk-tile.tinted { background: color-mix(in srgb, var(--qk) 12%, var(--panel)); }
+.qk-admin > .qk-tile.drag { opacity: .4; }
+.qk-admin > .qk-tile.over { outline: 2px dashed var(--brand); outline-offset: 2px; }
+.qk-admin > .qk-add { border-style: dashed; color: var(--muted); cursor: pointer; justify-content: center; align-content: center; }
+.qk-tags { display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; }
+.qk-tags .badge { font-size: .65rem; }
+.qk-gtabs { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.qk-gtabs > button { border-inline-start: 4px solid var(--qk, var(--line)); }
+.qk-gtabs > button.over { outline: 2px dashed var(--brand); }
+.swatches { display: flex; gap: 6px; flex-wrap: wrap; }
+.swatches button { width: 30px; height: 30px; min-height: 0; padding: 0; border-radius: 50%; border: 2px solid transparent; background: var(--sw); }
+.swatches button.active { border-color: var(--ink); box-shadow: 0 0 0 2px var(--panel) inset; }
+.swatches button.none { background: var(--panel); border: 1px dashed var(--muted); font-size: .8rem; }
 .scan-cam { position: absolute; inset-inline-end: 8px; top: 50%; transform: translateY(-50%); font-size: 1.3rem; padding: 4px 10px; }
 .camera-box { position: relative; border-radius: 12px; overflow: hidden; background: #000; aspect-ratio: 4 / 3; }
 .camera-box video { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -647,3 +675,5 @@ html.till-dark .pos-top button { border-color: #1e293b; }
 .modal:has(.pay-total) { max-height: 94vh; overflow: auto; }
 
 .points-box { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; background: var(--warn-soft); padding: 8px 12px; border-radius: var(--radius); }
+.pos-left > .cart { flex: 1 1 0; min-height: 120px; }
+.pos-left > .quick-pad { flex: 0 0 auto; }

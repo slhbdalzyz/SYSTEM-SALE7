@@ -13,3 +13,4 @@ export * from "./whatsapp";
 export * from "./totp";
 export * from "./zakat";
 export * from "./loyalty";
+export * from "./quick";

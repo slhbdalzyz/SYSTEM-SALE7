@@ -30,6 +30,7 @@ import { restoreRoutes } from "./routes/restore";
 import { countRoutes } from "./routes/counts";
 import { zakatRoutes } from "./routes/zakat";
 import { loyaltyRoutes } from "./routes/loyalty";
+import { quickRoutes } from "./routes/quick";
 import { importRoutes } from "./routes/import";
 import { subscriptionGuard } from "./billing";
 import { setGateway, type Gateway } from "./payments/gateway";
@@ -116,6 +117,7 @@ export async function buildApp(opts: AppOptions) {
   await app.register(countRoutes);
   await app.register(zakatRoutes);
   await app.register(loyaltyRoutes);
+  await app.register(quickRoutes);
   await app.register(importRoutes);
   return app;
 }
