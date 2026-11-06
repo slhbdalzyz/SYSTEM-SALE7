@@ -88,6 +88,11 @@ export async function seedDemo(db: Q) {
   await product("موز", veg, 4000, [{ name: "كيلو", factor: 1000, price: 5500, barcodes: [] }], "00103");
   await product("لحم غنمي", meat, 38000, [{ name: "كيلو", factor: 1000, price: 48000, barcodes: [] }], "00201");
   await product("دجاج كامل", meat, 9000, [{ name: "كيلو", factor: 1000, price: 12500, barcodes: [] }], "00202");
+  // Sold without a barcode: bread, bags, mixed vegetables. They get till keys below.
+  await product("خبز", pantry, 200, [{ name: "رغيف", factor: 1000, price: 250, barcodes: [] }, { name: "كيس 10", factor: 10000, price: 2250, barcodes: [] }]);
+  await product("كيس بلاستيك", pantry, 20, [{ name: "كيس", factor: 1000, price: 100, barcodes: [] }]);
+  await product("خضرة متنوعة", veg, 0, [{ name: "قطعة", factor: 1000, price: 1000, barcodes: [] }]);
+  await addQuickKeys(db, tid);
   await addSuppliers(db);
   await addBranch(db);
   await addOffers(db);
@@ -351,4 +356,34 @@ async function seedPayroll(db: Q, tid: string, sid: string, owner: string) {
       [tid, u, kind, amount, days, minutes, day, note, expense, owner],
     );
   }
+}
+
+/** Till keys as a bakery-corner grocery would set them: bread by the piece and by five, water, bags, vegetables at an open price. */
+async function addQuickKeys(db: Q, tid: string) {
+  const pid = async (name: string) => (await db.query(`SELECT id FROM products WHERE tenant_id = $1 AND name = $2`, [tid, name])).rows[0].id as string;
+  const uid = async (product: string, unit: string) => (await db.query(`SELECT u.id FROM product_units u JOIN products p ON p.id = u.product_id WHERE p.tenant_id = $1 AND p.name = $2 AND u.name = $3`, [tid, product, unit])).rows[0].id as string;
+  const group = async (name: string, color: string, sort: number) => (await db.query(`INSERT INTO quick_groups (tenant_id, name, color, sort) VALUES ($1,$2,$3,$4) RETURNING id`, [tid, name, color, sort])).rows[0].id as string;
+  const bakery = await group("مخبوزات", "#ca8a04", 1);
+  const veg = await group("خضرة وفواكه", "#16a34a", 2);
+  const key = (k: { product: string; unit?: string | null; qty?: number; group?: string | null; label?: string | null; color?: string | null; open?: boolean; sort: number }) => k;
+  const keys = [
+    key({ product: "خبز", sort: 1, color: "#ca8a04", label: "خبز" }),
+    key({ product: "خبز", qty: 5000, sort: 2, color: "#ca8a04", label: "خبز × 5" }),
+    key({ product: "كيس بلاستيك", sort: 3, color: "#475569" }),
+    key({ product: "مياه معدنية 1.5 لتر", unit: "شد 6", sort: 4, color: "#2563eb", label: "مياه شد 6" }),
+    key({ product: "خضرة متنوعة", sort: 5, color: "#16a34a", open: true }),
+    key({ product: "خبز", unit: "كيس 10", group: bakery, sort: 1, color: "#ca8a04" }),
+    key({ product: "خبز", qty: 10000, group: bakery, sort: 2, color: "#ca8a04", label: "خبز × 10" }),
+    key({ product: "طماطم", group: veg, sort: 1, color: "#dc2626" }),
+    key({ product: "بطاطا", group: veg, sort: 2, color: "#ca8a04" }),
+    key({ product: "موز", group: veg, sort: 3, color: "#ca8a04" }),
+    key({ product: "خضرة متنوعة", group: veg, sort: 4, color: "#16a34a", open: true }),
+  ];
+  for (const k of keys) {
+    await db.query(
+      `INSERT INTO quick_keys (tenant_id, group_id, product_id, unit_id, qty_milli, open_price, label, color, sort) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [tid, k.group ?? null, await pid(k.product), k.unit ? await uid(k.product, k.unit) : null, k.qty ?? 1000, !!k.open, k.label ?? null, k.color ?? null, k.sort],
+    );
+  }
+  await db.query(`UPDATE products SET quick = EXISTS (SELECT 1 FROM quick_keys k WHERE k.product_id = products.id) WHERE tenant_id = $1`, [tid]);
 }
