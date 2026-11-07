@@ -1817,3 +1817,161 @@ describe("till quick keys", () => {
     expect((await call("GET", "/backup/quick_keys", t)).body.rows.length).toBeGreaterThan(0);
   });
 });
+
+describe("platform back office: team, coupons, agents, reminders, support", () => {
+  let boss: string;
+  let tid: string;
+  let shop: string;
+  // Sign-in is held to 5 a minute per address: each sign-in here comes from its own.
+  let n = 0;
+  const plogin = async (body: object) => {
+    const res = await app.inject({ method: "POST", url: "/platform/login", remoteAddress: `10.9.${n++}.1`, payload: body });
+    return { status: res.statusCode, body: res.json() };
+  };
+  const login = async (email: string, password: string) => (await plogin({ email, password })).body;
+
+  it("adds team members with roles, and each role sees only its part", async () => {
+    boss = (await login("admin@sale7.ly", "platform-pass")).token;
+    const add = await call("POST", "/platform/team", boss, { name: "منى", email: "mona@sale7.ly", role: "accountant", password: "accountant1" });
+    expect(add.status).toBe(200);
+    expect((await call("POST", "/platform/team", boss, { name: "سامي", email: "mona@sale7.ly", role: "support", password: "whatever12" })).status).toBe(409);
+    const l = await login("mona@sale7.ly", "accountant1");
+    expect(l.role).toBe("accountant");
+    expect((await call("GET", "/platform/revenue", l.token)).status).toBe(200);
+    expect((await call("GET", "/platform/team", l.token)).status).toBe(403);
+    expect((await call("GET", "/platform/settings", l.token)).status).toBe(403);
+    // Switched off: cut off at once, not when the token runs out.
+    await call("PATCH", `/platform/team/${add.body.id}`, boss, { active: false });
+    expect((await call("GET", "/platform/revenue", l.token)).status).toBe(401);
+    // The last owner cannot be demoted or switched off.
+    const me = (await call("GET", "/platform/me", boss)).body;
+    expect((await call("PATCH", `/platform/team/${me.id}`, boss, { role: "support" })).status).toBe(400);
+  });
+
+  it("asks platform staff for the authenticator code once two-step sign-in is on", async () => {
+    const { totpCode } = await import("@pos/shared");
+    await call("POST", "/platform/team", boss, { name: "سند", email: "sanad@sale7.ly", role: "support", password: "support123" });
+    const t = (await login("sanad@sale7.ly", "support123")).token;
+    const s = (await call("POST", "/platform/2fa/setup", t)).body;
+    const code = await totpCode(s.secret, Math.floor(Date.now() / 30000));
+    expect((await call("POST", "/platform/2fa/enable", t, { code })).body.ok).toBe(true);
+    expect(await login("sanad@sale7.ly", "support123")).toEqual({ twoFactor: true });
+    const bad = await plogin({ email: "sanad@sale7.ly", password: "support123", code: code === "123456" ? "654321" : "123456" });
+    expect(bad.status).toBe(401);
+    const ok = await plogin({ email: "sanad@sale7.ly", password: "support123", code });
+    expect(ok.body.role).toBe("support");
+    const log = (await call("GET", "/platform/audit?action=admin.2fa", boss)).body;
+    expect(log.map((x: { action: string }) => x.action)).toEqual(expect.arrayContaining(["admin.2fa_on", "admin.2fa_failed"]));
+  });
+
+  it("signs a shop up under a city agent and pays the agent's commission on its payments", async () => {
+    const a = await call("POST", "/platform/agents", boss, { name: "علي - مصراتة", phone: "0912345678", city: "مصراتة", code: "misr1", commissionPct: 15 });
+    expect(a.status).toBe(200);
+    const r = await call("POST", "/auth/register", undefined, { businessName: "بقالة الوكيل", storeName: "الرئيسي", ownerName: "خالد", email: "agentshop@test.ly", password: "password123", agentCode: "MISR1" });
+    shop = r.body.token;
+    tid = (await call("GET", "/me", shop)).body.tenant.id;
+    const t = (await call("GET", `/platform/tenants/${tid}`, boss)).body;
+    expect(t.agent_name).toBe("علي - مصراتة");
+    // A coupon: 20% off a 3-month payment.
+    const plan = (await call("GET", "/platform/plans", boss)).body[0];
+    expect((await call("POST", "/platform/coupons", boss, { code: "eid20", kind: "percent", value: 20, minMonths: 3 })).status).toBe(200);
+    expect((await call("POST", "/subscription/coupon", shop, { code: "EID20", planCode: plan.code, months: 1 })).status).toBe(400);
+    const prev = (await call("POST", "/subscription/coupon", shop, { code: "EID20", planCode: plan.code, months: 3 })).body;
+    expect(prev.amountMinor).toBe(Math.round(plan.price_minor * 3 * 0.8));
+    const p = await call("POST", `/platform/tenants/${tid}/payments`, boss, { months: 3, method: "cash", couponCode: "eid20" });
+    expect(p.status).toBe(200);
+    expect(p.body.amountMinor).toBe(prev.amountMinor);
+    expect(p.body.invoiceNo).toBeGreaterThan(1000);
+    // Once per shop.
+    expect((await call("POST", `/platform/tenants/${tid}/payments`, boss, { months: 3, method: "cash", couponCode: "EID20" })).status).toBe(400);
+    const ag = (await call("GET", "/platform/agents", boss)).body.find((x: { code: string }) => x.code === "MISR1");
+    expect(ag.shops).toBe(1);
+    expect(ag.earned).toBe(Math.round(prev.amountMinor * 0.15));
+    await call("POST", `/platform/agents/${ag.id}/payouts`, boss, { amountMinor: 1000 });
+    expect((await call("GET", "/platform/agents", boss)).body.find((x: { code: string }) => x.code === "MISR1").balance).toBe(ag.earned - 1000);
+    // The agent's own login sees only their shops.
+    await call("POST", "/platform/team", boss, { name: "علي", email: "ali@agents.ly", role: "agent", password: "agent12345", agentId: ag.id });
+    const at = (await login("ali@agents.ly", "agent12345")).token;
+    expect((await call("GET", "/platform/tenants", at)).body.map((x: { id: string }) => x.id)).toEqual([tid]);
+    expect((await call("GET", "/platform/agent/me", at)).body.shops.length).toBe(1);
+    expect((await call("GET", "/platform/revenue", at)).status).toBe(403);
+    // The invoice, for the shop and for the platform.
+    const inv = (await call("GET", `/subscription/invoices/${p.body.id}`, shop)).body;
+    expect(inv.invoice_no).toBe(p.body.invoiceNo);
+    expect((await call("GET", `/platform/payments/${p.body.id}/invoice`, boss)).status).toBe(200);
+    expect((await call("GET", `/subscription/invoices/${p.body.id}`, owner)).status).toBe(404);
+    const rev = (await call("GET", "/platform/revenue", boss)).body;
+    expect(rev.months.at(-1).collected).toBeGreaterThanOrEqual(prev.amountMinor);
+    expect(rev.months.at(-1).discounts).toBeGreaterThan(0);
+  });
+
+  it("reminds a shop before its subscription ends, by SMS when a gateway is set", async () => {
+    const { runReminders, setSmsSender } = await import("../src/routes/platform-pro");
+    const sent: { to: string; message: string }[] = [];
+    setSmsSender(async (_c, to, message) => void sent.push({ to, message }));
+    await db.query(`UPDATE tenants SET paid_until = now() + interval '5 days', phone = '0921112233' WHERE id = $1`, [tid]);
+    await call("PUT", "/platform/settings", boss, { sms: { enabled: true, url: "https://sms.example.ly/send", token: "secret-token" } });
+    expect((await call("GET", "/platform/settings", boss)).body.sms.token).toBe("••••");
+    await runReminders(db);
+    await runReminders(db); // once, not twice
+    expect(sent.filter((s) => s.to === "218921112233")).toHaveLength(1);
+    expect(sent.at(-1)!.message).toContain("بقالة الوكيل");
+    const alerts = (await call("GET", "/alerts", shop)).body;
+    expect(JSON.stringify(alerts)).toContain("الاشتراك ينتهي");
+    // Without a gateway it waits for a WhatsApp tap.
+    await call("PUT", "/platform/settings", boss, { sms: { enabled: false, url: "", token: "••••" } });
+    await db.query(`UPDATE tenants SET paid_until = now() + interval '2 days' WHERE id = $1`, [tid]);
+    await runReminders(db);
+    const list = (await call("GET", "/platform/reminders", boss)).body;
+    const pending = list.find((x: { tenant_id: string; kind: string }) => x.tenant_id === tid && x.kind === "3d");
+    expect(pending.sent_at).toBeNull();
+    expect(pending.wa).toBe("218921112233");
+    await call("POST", `/platform/reminders/${pending.id}/sent`, boss, { channel: "whatsapp" });
+    expect((await call("GET", "/platform/reminders", boss)).body.find((x: { id: string }) => x.id === pending.id).channel).toBe("whatsapp");
+  });
+
+  it("shows announcements to the shops they target until dismissed", async () => {
+    const n = await call("POST", "/platform/announcements", boss, { title: "صيانة الليلة", body: "من 2 لـ 3 الفجر", level: "warn", tenantIds: [tid], alert: true });
+    expect(n.status).toBe(200);
+    expect((await call("GET", "/announcements", shop)).body.map((x: { title: string }) => x.title)).toContain("صيانة الليلة");
+    expect((await call("GET", "/announcements", owner)).body.map((x: { title: string }) => x.title)).not.toContain("صيانة الليلة");
+    await call("POST", `/announcements/${n.body.id}/dismiss`, shop);
+    expect((await call("GET", "/announcements", shop)).body).toHaveLength(0);
+  });
+
+  it("runs support tickets both ways and opens a read-only look only with the owner's consent", async () => {
+    const k = await call("POST", "/support/tickets", shop, { subject: "الطابعة ما تطبعش", body: "من الصبح الإيصال ما يطلعش" });
+    expect(k.status).toBe(200);
+    const list = (await call("GET", "/platform/tickets", boss)).body;
+    expect(list.rows.find((x: { id: string }) => x.id === k.body.id).tenant_name).toBe("بقالة الوكيل");
+    await call("POST", `/platform/tickets/${k.body.id}/reply`, boss, { body: "جرّب تعيد تشغيل الطابعة" });
+    const v = (await call("GET", `/support/tickets/${k.body.id}`, shop)).body;
+    expect(v.status).toBe("answered");
+    expect(v.messages.map((m: { author: string }) => m.author)).toEqual(["shop", "platform"]);
+    expect((await call("GET", `/support/tickets/${k.body.id}`, owner)).status).toBe(404);
+    // Support access.
+    expect((await call("POST", `/platform/tenants/${tid}/support-login`, boss)).status).toBe(403);
+    await call("POST", "/support/access", shop, { hours: 2 });
+    const s = await call("POST", `/platform/tenants/${tid}/support-login`, boss);
+    expect(s.status).toBe(200);
+    const ro = s.body.token;
+    expect((await call("GET", "/products", ro)).status).toBe(200);
+    expect((await call("GET", "/me", ro)).body.support).toEqual({ readOnly: true });
+    expect((await call("POST", "/products", ro, { name: "x", units: [{ name: "قطعة", priceMinor: 1, isBase: true }] })).status).toBe(403);
+    expect((await call("GET", "/backup", ro)).status).toBe(403);
+    expect((await call("GET", "/support/access", shop)).body.logins.length).toBe(1);
+    await call("POST", "/support/access", shop, { hours: 0 });
+    expect((await call("POST", `/platform/tenants/${tid}/support-login`, boss)).status).toBe(403);
+  });
+
+  it("closes features per plan or per shop, and marks shops' health", async () => {
+    await call("PATCH", `/platform/tenants/${tid}`, boss, { features: { zakat: false } });
+    expect((await call("GET", "/me", shop)).body.tenant.features.zakat).toBe(false);
+    expect((await call("GET", "/zakat", shop)).status).toBe(403);
+    expect((await call("GET", "/me", owner)).body.tenant.features.zakat).toBe(true);
+    await call("PATCH", `/platform/tenants/${tid}`, boss, { features: {} });
+    expect((await call("GET", "/me", shop)).body.tenant.features.zakat).toBe(true);
+    const rows = (await call("GET", "/platform/tenants", boss)).body;
+    expect(rows.find((x: { id: string }) => x.id === tid).health).toBe("new");
+  });
+});

@@ -2,7 +2,8 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { HttpError, requireRole } from "../auth";
 import { audit, inTx } from "../db";
-import { daysLeft, graceDays, planLimits, recordSubscriptionPayment, subState, usage } from "../billing";
+import { applyCoupon, couponLabel } from "@pos/shared";
+import { daysLeft, findCoupon, graceDays, planLimits, recordSubscriptionPayment, subState, usage } from "../billing";
 import { GatewayError, PAY_METHODS, getGateway, lyd } from "../payments/gateway";
 
 const startSchema = z.object({
@@ -11,6 +12,7 @@ const startSchema = z.object({
   method: z.enum(PAY_METHODS),
   mobile: z.string().regex(/^09\d{8}$/).optional(),
   birthYear: z.string().regex(/^(19|20)\d{2}$/).optional(),
+  couponCode: z.string().trim().max(30).optional(),
 });
 
 /** Where the card gateway sends the customer back: PUBLIC_URL when set, else this request's own host. */
@@ -30,7 +32,7 @@ export async function subscriptionRoutes(app: FastifyInstance) {
     const [plan, used, payments, info, grace] = await Promise.all([
       planLimits(app.db, tid),
       usage(app.db, tid),
-      app.db.query(`SELECT months, amount_minor, method, period_from, period_to, created_at, plan_code FROM subscription_payments WHERE tenant_id = $1 ORDER BY created_at DESC`, [tid]),
+      app.db.query(`SELECT id, invoice_no, months, amount_minor, discount_minor, bonus_months, coupon_code, method, period_from, period_to, created_at, plan_code FROM subscription_payments WHERE tenant_id = $1 ORDER BY created_at DESC`, [tid]),
       app.db.query(`SELECT value FROM platform_settings WHERE key = 'payment_instructions'`),
       graceDays(app.db),
     ]);
@@ -49,6 +51,21 @@ export async function subscriptionRoutes(app: FastifyInstance) {
   });
 
   const owners = { preHandler: requireRole("owner") };
+
+  /** What a coupon would do before paying: the new amount, or why it can't be used. */
+  app.post("/subscription/coupon", owners, async (req) => {
+    const b = z.object({ code: z.string().trim().min(1).max(30), planCode: z.string(), months: z.number().int().min(1).max(36) }).parse(req.body);
+    const plan = (await app.db.query(`SELECT price_minor FROM plans WHERE code = $1 AND active`, [b.planCode])).rows[0];
+    if (!plan) throw new HttpError(400, "الباقة غير موجودة");
+    const c = await findCoupon(app.db, b.code, req.user.tid, b.planCode, b.months);
+    return { code: c.code, label: couponLabel(c), ...applyCoupon(c, Number(plan.price_minor), b.months) };
+  });
+
+  /** One subscription invoice, to print or save as PDF. */
+  app.get("/subscription/invoices/:id", { preHandler: requireRole("owner", "manager") }, async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    return subscriptionInvoice(app, id, req.user.tid);
+  });
 
   /** Which online methods this server offers, and the plans to pick from. */
   app.get("/subscription/pay/options", owners, async () => {
@@ -69,14 +86,15 @@ export async function subscriptionRoutes(app: FastifyInstance) {
     if (t.status === "suspended" || t.status === "cancelled") throw new HttpError(403, "الحساب موقوف. تواصل معانا باش نرجعوه");
     const plan = (await app.db.query(`SELECT price_minor FROM plans WHERE code = $1 AND active`, [b.planCode])).rows[0];
     if (!plan) throw new HttpError(400, "الباقة غير موجودة");
-    const amountMinor = Number(plan.price_minor) * b.months;
+    const coupon = b.couponCode ? await findCoupon(app.db, b.couponCode, req.user.tid, b.planCode, b.months) : null;
+    const amountMinor = coupon ? applyCoupon(coupon, Number(plan.price_minor), b.months).amountMinor : Number(plan.price_minor) * b.months;
     const amount = lyd(amountMinor);
     const invoiceNo = `S7${Date.now().toString(36).toUpperCase()}${Array.from(globalThis.crypto.getRandomValues(new Uint8Array(3)), (x) => x.toString(16).padStart(2, "0")).join("").toUpperCase()}`;
     if (b.method !== "localbankcards" && !b.mobile) throw new HttpError(400, "اكتب رقم الهاتف");
     if (b.method === "sadad" && !b.birthYear) throw new HttpError(400, "اكتب سنة الميلاد");
     const id = (await app.db.query(
-      `INSERT INTO payment_intents (tenant_id, plan_code, months, amount_minor, provider, method, invoice_no, user_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
-      [req.user.tid, b.planCode, b.months, amountMinor, g.name, b.method, invoiceNo, req.user.sub],
+      `INSERT INTO payment_intents (tenant_id, plan_code, months, amount_minor, provider, method, invoice_no, user_id, coupon_code) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+      [req.user.tid, b.planCode, b.months, amountMinor, g.name, b.method, invoiceNo, req.user.sub, coupon?.code ?? null],
     )).rows[0].id as string;
     try {
       if (b.method === "localbankcards") {
@@ -153,12 +171,28 @@ async function settle(app: FastifyInstance, intentId: string, transactionId: str
   return inTx(app.db, async (tx) => {
     const i = (await tx.query(`SELECT * FROM payment_intents WHERE id = $1 FOR UPDATE`, [intentId])).rows[0];
     if (i.status === "paid") return { ok: true, already: true };
+    // The money is in: a coupon that stopped being valid meanwhile only loses its free months.
+    const coupon = i.coupon_code ? await findCoupon(tx, i.coupon_code, i.tenant_id, i.plan_code, i.months).catch(() => null) : null;
     const p = await recordSubscriptionPayment(tx, i.tenant_id, {
       planCode: i.plan_code, months: i.months, amountMinor: Number(i.amount_minor), method: "online",
-      reference: `${i.provider}:${i.method}:${transactionId}`, recordedBy: null,
+      reference: `${i.provider}:${i.method}:${transactionId}`, recordedBy: null, couponCode: coupon?.code ?? null,
     });
     await tx.query(`UPDATE payment_intents SET status = 'paid', transaction_id = $2, payment_id = $3, error = NULL, updated_at = now() WHERE id = $1`, [intentId, transactionId, p.id]);
     await audit(tx, { tenantId: i.tenant_id, userId: i.user_id, action: "subscription.paid_online", entity: "payment", entityId: p.id, data: { method: i.method, amountMinor: Number(i.amount_minor), months: i.months } });
     return { ok: true, paidUntil: p.paidUntil.toISOString() };
   });
+}
+
+/** What an invoice shows: the seller (the platform's company details), the shop, and the payment. */
+export async function subscriptionInvoice(app: FastifyInstance, paymentId: string, tenantId?: string) {
+  const p = (await app.db.query(
+    `SELECT sp.id, sp.invoice_no, sp.months, sp.amount_minor, sp.discount_minor, sp.bonus_months, sp.coupon_code, sp.method, sp.reference, sp.period_from, sp.period_to, sp.created_at,
+            pl.name AS plan_name, pl.price_minor, t.id AS tenant_id, t.name AS tenant_name, t.phone AS tenant_phone, t.settings->>'city' AS tenant_city
+     FROM subscription_payments sp JOIN plans pl ON pl.code = sp.plan_code JOIN tenants t ON t.id = sp.tenant_id
+     WHERE sp.id = $1 AND ($2::uuid IS NULL OR sp.tenant_id = $2)`,
+    [paymentId, tenantId ?? null],
+  )).rows[0];
+  if (!p) throw new HttpError(404, "الفاتورة غير موجودة");
+  const company = (await app.db.query(`SELECT value FROM platform_settings WHERE key = 'company'`)).rows[0]?.value ?? {};
+  return { ...p, invoice_no: Number(p.invoice_no), amount_minor: Number(p.amount_minor), discount_minor: Number(p.discount_minor), price_minor: Number(p.price_minor), company };
 }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, ApiError } from "../api";
-import { session } from "../session";
+import { session, supportMode } from "../session";
 import type { Screen } from "../App";
 import { Products } from "./Products";
 import { Reports } from "./Reports";
@@ -29,11 +29,12 @@ import { Zakat } from "./Zakat";
 import { AuditLog } from "./AuditLog";
 import { SecurityCard } from "./Security";
 import { FromPaper } from "./FromPaper";
-import { ROLE_NAMES, type Permission } from "@pos/shared";
+import { ROLE_NAMES, type Feature, type Permission } from "@pos/shared";
+import { Announcements, Support } from "./Support";
 
 export interface Me {
   user: { id: string; name: string; role: string; job_title?: string | null; permissions: Permission[] };
-  tenant: { id: string; name: string; currency: string };
+  tenant: { id: string; name: string; currency: string; features?: Record<Feature, boolean> };
   stores: { id: string; name: string; address: string | null; receipt_footer: string | null; active: boolean }[];
 }
 
@@ -46,7 +47,7 @@ const NAV = [
   { group: "المبيعات", items: { invoices: ["🧾", "المبيعات والفواتير"], customers: ["👥", "العملاء والديون"], offers: ["🎁", "العروض"] } },
   { group: "المال", items: { money: ["🏦", "الخزينة والأرصدة"], expenses: ["💸", "المصروفات"], zakat: ["🕌", "الزكاة"] } },
   { group: "الموظفين", items: { staff: ["🧑‍💼", "الموظفين والصلاحيات"], payroll: ["💰", "الرواتب"], mypay: ["💼", "راتبي"] } },
-  { group: "الإدارة", items: { settings: ["⚙️", "الإعدادات"], devices: ["🖥️", "الأجهزة"], audit: ["🕵️", "سجل العمليات"], backup: ["💾", "النسخ الاحتياطي"], subscription: ["⭐", "الاشتراك"] } },
+  { group: "الإدارة", items: { settings: ["⚙️", "الإعدادات"], devices: ["🖥️", "الأجهزة"], audit: ["🕵️", "سجل العمليات"], backup: ["💾", "النسخ الاحتياطي"], subscription: ["⭐", "الاشتراك"], support: ["🛟", "الدعم الفني"] } },
 ] as const;
 type ItemKeys<T> = T extends { items: infer I } ? keyof I : never;
 type Tab = ItemKeys<(typeof NAV)[number]>;
@@ -56,8 +57,10 @@ const TABS = Object.assign({}, ...NAV.map((g) => g.items)) as Record<Tab, readon
 const NEEDS: Record<Tab, Permission | "owner" | null> = {
   home: "reports", paper: "owner", reports: "reports", alerts: "alerts", products: "products", purchasing: "purchasing", branches: "branches", counts: "products", labels: "products", quick: "products",
   invoices: "sales", settings: "settings", customers: "customers", offers: "offers", expenses: "expenses", money: "money", staff: "staff", payroll: "payroll", mypay: null, devices: "devices",
-  backup: "owner", subscription: "owner", audit: "owner", zakat: "owner",
+  backup: "owner", subscription: "owner", audit: "owner", zakat: "owner", support: "settings",
 };
+/** Screens the platform can close for a plan or a shop. */
+const FEATURE_OF: Partial<Record<Tab, Feature>> = { zakat: "zakat", quick: "quick_keys", payroll: "payroll", offers: "offers", counts: "counts" };
 
 export function Admin({ go }: { go: (s: Screen) => void }) {
   const [me, setMe] = useState<Me | null>(null);
@@ -123,6 +126,8 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
 
   const isOwner = me.user.role === "owner";
   const can = (t: Tab) => {
+    const f = FEATURE_OF[t];
+    if (f && me.tenant.features && me.tenant.features[f] === false) return false;
     const n = NEEDS[t];
     return n === null || isOwner || (n !== "owner" && me.user.permissions.includes(n));
   };
@@ -167,13 +172,14 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
           <h1>{TABS[shown][0]} {TABS[shown][1]}</h1>
           <span className="spacer" />
           {can("reports") && <button onClick={() => { setPreferredView("owner"); go("owner"); }}>📱 عرض التلفون</button>}
-          {session.deviceToken && <button className="primary" onClick={() => go("pin")}>🛒 شاشة الكاشير</button>}
+          {session.deviceToken && !supportMode() && <button className="primary" onClick={() => go("pin")}>🛒 شاشة الكاشير</button>}
         </header>
         {notice && isOwner && shown !== "subscription" && (
           <div className={notice.bad ? "error" : "notice"} onClick={() => setTab("subscription")} style={{ cursor: "pointer" }}>
             {notice.text} <u>التفاصيل</u>
           </div>
         )}
+        <Announcements call={call} />
         <div className="stack" key={store.id}>
           {shown === "home" && <Home call={call} storeId={store.id} userName={me.user.name} open={setTab} />}
           {shown === "reports" && <Reports call={call} storeId={store.id} stores={open} />}
@@ -189,7 +195,7 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
           {shown === "offers" && <Offers call={call} storeId={store.id} stores={me.stores} />}
           {shown === "customers" && <Customers call={call} isOwner={me.user.role === "owner"} />}
           {shown === "invoices" && <Invoices call={call} storeId={store.id} stores={open} />}
-          {shown === "settings" && <><ShopSettings call={call} storeName={store.name} onSaved={loadMe} openAlerts={() => setTab("alerts")} /><LoyaltyCard call={call} isOwner={me.user.role === "owner"} /><SecurityCard call={call} /></>}
+          {shown === "settings" && <><ShopSettings call={call} storeName={store.name} onSaved={loadMe} openAlerts={() => setTab("alerts")} />{me.tenant.features?.loyalty !== false && <LoyaltyCard call={call} isOwner={me.user.role === "owner"} />}<SecurityCard call={call} /></>}
           {shown === "mypay" && !can("settings") && <SecurityCard call={call} />}
           {shown === "alerts" && <><Alerts call={call} /><AlertSettings call={call} isOwner={isOwner} /></>}
           {shown === "expenses" && <Expenses call={call} storeId={store.id} stores={open} />}
@@ -199,6 +205,7 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
           {shown === "money" && <Money call={call} />}
           {shown === "mypay" && <MyPay token={session.adminToken} />}
           {shown === "subscription" && <Subscription call={call} />}
+          {shown === "support" && <Support call={call} isOwner={isOwner} />}
           {shown === "devices" && <Devices call={call} storeId={store.id} storeName={store.name} go={go} isOwner={isOwner} />}
         </div>
       </main>
