@@ -3,7 +3,7 @@ import type { Call } from "../admin/Admin";
 
 export interface Alert { id: number; kind: string; title: string; body: string; created_at: string; read_at: string | null; store_name: string | null }
 
-const ICON: Record<string, string> = { low_stock: "📦", out_of_stock: "⛔", big_return: "↩️", big_discount: "🏷️", cash_diff: "💵", over_credit_limit: "📒", zakat_due: "🕌" };
+const ICON: Record<string, string> = { low_stock: "📦", out_of_stock: "⛔", big_return: "↩️", big_discount: "🏷️", cash_diff: "💵", over_credit_limit: "📒", zakat_due: "🕌", subscription_due: "⭐", support_reply: "🛟", announcement: "📢" };
 
 export function ago(iso: string): string {
   const min = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
