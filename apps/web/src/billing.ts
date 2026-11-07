@@ -24,6 +24,7 @@ export interface Plan {
   max_users: number;
   active?: boolean;
   sort?: number;
+  features?: Partial<Record<string, boolean>>;
 }
 
 export const date = (d: string | Date) => new Date(d).toLocaleDateString("en-GB");

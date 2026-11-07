@@ -5,7 +5,7 @@ import jwt from "@fastify/jwt";
 import rateLimit from "@fastify/rate-limit";
 import { ZodError } from "zod";
 import type { Db } from "./db";
-import { HttpError } from "./auth";
+import { HttpError, type TokenPayload } from "./auth";
 import { authRoutes } from "./routes/auth";
 import { adminRoutes } from "./routes/admin";
 import { catalogRoutes } from "./routes/catalog";
@@ -33,6 +33,9 @@ import { loyaltyRoutes } from "./routes/loyalty";
 import { quickRoutes } from "./routes/quick";
 import { importRoutes } from "./routes/import";
 import { subscriptionGuard } from "./billing";
+import { checkTokenRules } from "./features";
+import { platformProRoutes, runReminders } from "./routes/platform-pro";
+import { supportRoutes } from "./routes/support";
 import { setGateway, type Gateway } from "./payments/gateway";
 import { plutuFromEnv } from "./payments/plutu";
 import { fakeGateway } from "./payments/fake";
@@ -93,6 +96,23 @@ export async function buildApp(opts: AppOptions) {
     }
   });
   subscriptionGuard(app);
+  // Renewal reminders, about once an hour, carried by whatever request comes in (serverless has no timer).
+  let remindCheckedAt = 0;
+  app.addHook("onRequest", async () => {
+    if (Date.now() - remindCheckedAt < 10 * 60_000) return;
+    remindCheckedAt = Date.now();
+    const due = await opts.db.query(
+      `INSERT INTO platform_settings (key, value) VALUES ('reminders_last_run', to_jsonb(now()))
+       ON CONFLICT (key) DO UPDATE SET value = to_jsonb(now()) WHERE (platform_settings.value #>> '{}')::timestamptz < now() - interval '1 hour'
+       RETURNING 1`,
+    ).catch(() => ({ rowCount: 0 }));
+    if (due.rowCount) await runReminders(opts.db).catch((e) => app.log.error(e, "reminders"));
+  });
+  // A support session only looks; features the platform closed stay closed.
+  app.addHook("preHandler", async (req) => {
+    if (!req.headers.authorization) return;
+    await checkTokenRules(opts.db, req.method, req.url, () => req.jwtVerify<TokenPayload>());
+  });
   await app.register(authRoutes);
   await app.register(adminRoutes);
   await app.register(catalogRoutes);
@@ -104,6 +124,8 @@ export async function buildApp(opts: AppOptions) {
   await app.register(returnRoutes);
   await app.register(deviceRoutes);
   await app.register(platformRoutes);
+  await app.register(platformProRoutes);
+  await app.register(supportRoutes);
   await app.register(purchasingRoutes);
   await app.register(branchRoutes);
   await app.register(offerRoutes);
@@ -121,3 +143,4 @@ export async function buildApp(opts: AppOptions) {
   await app.register(importRoutes);
   return app;
 }
+

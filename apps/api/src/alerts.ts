@@ -1,7 +1,7 @@
 import { formatHijri, formatMoney, formatQty, nextHawl, readZakatSettings } from "@pos/shared";
 import type { Db, Tx } from "./db";
 
-export type AlertKind = "low_stock" | "out_of_stock" | "big_return" | "big_discount" | "cash_diff" | "over_credit_limit" | "zakat_due";
+export type AlertKind = "low_stock" | "out_of_stock" | "big_return" | "big_discount" | "cash_diff" | "over_credit_limit" | "zakat_due" | "subscription_due" | "support_reply" | "announcement";
 
 /** What a shop wants to hear about. Amounts in dirham; 0 turns that alert off. */
 export interface AlertSettings {
