@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatMoney, toMinor } from "@pos/shared";
 import type { Call } from "./Admin";
 import { SHEETS, mapSheet, readSheetFile, readNumber, templateCsv, type Mapped, type SheetKind } from "./sheet";
@@ -79,6 +79,7 @@ export function FromPaper({ call, storeId, open }: { call: Call; storeId: string
 }
 
 function ImportStep({ kind, call, storeId, onDone }: { kind: SheetKind; call: Call; storeId: string; onDone: () => void }) {
+  const [mode, setMode] = useState<"hand" | "file">("hand");
   const [file, setFile] = useState<string | null>(null);
   const [mapped, setMapped] = useState<Mapped<Record<string, unknown>> | null>(null);
   const [result, setResult] = useState<(Result & { lines: number[] }) | null>(null);
@@ -97,13 +98,14 @@ function ImportStep({ kind, call, storeId, onDone }: { kind: SheetKind; call: Ca
       setError("ما قدرناش نقراو الملف. احفظه Excel (‎.xlsx) أو CSV وجرّب مرة ثانية.");
     }
   }
-  async function send() {
-    if (!mapped?.rows.length) return;
-    setBusy(true); setError(null);
+  async function send(m = mapped, after?: () => void) {
+    if (!m?.rows.length) return;
+    setBusy(true); setError(null); setResult(null);
     try {
-      const r = await call<Result>(ENDPOINT[kind], { body: kind === "products" ? { storeId, rows: mapped.rows } : { rows: mapped.rows } });
-      setResult({ ...r, lines: mapped.lines });
+      const r = await call<Result>(ENDPOINT[kind], { body: kind === "products" ? { storeId, rows: m.rows } : { rows: m.rows } });
+      setResult({ ...r, lines: m.lines });
       setMapped(null);
+      after?.();
       onDone();
     } catch (e) {
       setError((e as Error).message);
@@ -122,6 +124,12 @@ function ImportStep({ kind, call, storeId, onDone }: { kind: SheetKind; call: Ca
     <div className="card stack">
       <h3 style={{ margin: 0 }}>{sheet.title}</h3>
       <p className="muted" style={{ margin: 0 }}>{STEP_HINT[kind]}</p>
+      <div className="seg" role="group" aria-label="طريقة الإدخال" style={{ alignSelf: "start" }}>
+        <button type="button" className={mode === "hand" ? "active" : ""} onClick={() => { setMode("hand"); setResult(null); }}>✍️ اكتب بيدك</button>
+        <button type="button" className={mode === "file" ? "active" : ""} onClick={() => { setMode("file"); setResult(null); }}>📄 من ملف Excel</button>
+      </div>
+      {mode === "hand" && <HandEntry kind={kind} call={call} busy={busy} onSend={(m, clear) => void send(m, clear)} />}
+      {mode === "file" && <>
       <div className="row wrap">
         <button onClick={() => download(`sale7-${kind}-template.csv`, templateCsv(kind))}>⬇️ نزّل القالب</button>
         <label className="file-pick">
@@ -151,6 +159,7 @@ function ImportStep({ kind, call, storeId, onDone }: { kind: SheetKind; call: Ca
           <div><button className="primary" disabled={busy || !mapped.rows.length} onClick={() => void send()}>{busy ? "جاري الإدخال…" : `أدخل ${mapped.rows.length} سطر`}</button></div>
         </div>
       )}
+      </>}
       {result && (
         <div className="stack">
           <div className="badge ok">
@@ -159,12 +168,122 @@ function ImportStep({ kind, call, storeId, onDone }: { kind: SheetKind; call: Ca
           {result.skipped.length > 0 && (
             <div className="notice">
               ما دخلوش {result.skipped.length} (موجودين من قبل):
-              <ul style={{ margin: "4px 0 0" }}>{result.skipped.slice(0, 10).map((x) => <li key={x.row}>سطر {result.lines[x.row - 1] ?? x.row}: {x.reason}</li>)}</ul>
+              <ul style={{ margin: "4px 0 0" }}>{result.skipped.slice(0, 10).map((x) => <li key={x.row}>سطر {(result.lines[x.row - 1] ?? x.row) - (mode === "hand" ? 1 : 0)}: {x.reason}</li>)}</ul>
             </div>
           )}
         </div>
       )}
       {error && <div className="error">{error}</div>}
+    </div>
+  );
+}
+
+/** The columns typed by hand, per step: which template column each one fills, and how. */
+const HAND: Record<SheetKind, { key: string; label: string; kind?: "num" | "money" | "check" | "list"; w?: number }[]> = {
+  products: [
+    { key: "name", label: "اسم الصنف *", w: 200 }, { key: "barcode", label: "الباركود", kind: "num", w: 140 }, { key: "category", label: "القسم", kind: "list", w: 140 },
+    { key: "unit", label: "الوحدة", kind: "list", w: 80 }, { key: "price", label: "سعر البيع", kind: "money", w: 90 }, { key: "cost", label: "التكلفة", kind: "money", w: 90 },
+    { key: "qty", label: "الكمية", kind: "num", w: 80 }, { key: "weighted", label: "بالوزن", kind: "check", w: 56 },
+  ],
+  customers: [{ key: "name", label: "اسم العميل *", w: 200 }, { key: "phone", label: "الهاتف", kind: "num", w: 130 }, { key: "balance", label: "الدين القديم", kind: "money", w: 110 }, { key: "limit", label: "حد الدين", kind: "money", w: 100 }],
+  suppliers: [{ key: "name", label: "اسم المورد *", w: 220 }, { key: "phone", label: "الهاتف", kind: "num", w: 130 }, { key: "balance", label: "المستحق له", kind: "money", w: 120 }],
+};
+const UNITS = ["حبة", "علبة", "قنينة", "كيس", "كيلو", "لتر", "رغيف", "باكو"];
+const blank = (n: number) => Array.from({ length: n }, () => "");
+const draftKey = (k: SheetKind) => `pos.paperDraft.${k}`;
+
+/**
+ * Typing items, customers or suppliers straight in, one line each, no file needed.
+ * Enter (or a barcode scanner) moves to the next box; a new line opens by itself.
+ */
+function HandEntry({ kind, call, busy, onSend }: { kind: SheetKind; call: Call; busy: boolean; onSend: (m: Mapped<Record<string, unknown>>, clear: () => void) => void }) {
+  const cols = HAND[kind];
+  const [grid, setGrid] = useState<string[][]>(() => {
+    try {
+      const d = JSON.parse(localStorage.getItem(draftKey(kind)) ?? "null") as string[][] | null;
+      if (Array.isArray(d) && d.length) return d;
+    } catch { /* no saved draft */ }
+    return Array.from({ length: 5 }, () => blank(cols.length));
+  });
+  const [cats, setCats] = useState<string[]>([]);
+  const box = useRef<HTMLTableSectionElement>(null);
+  useEffect(() => {
+    if (kind === "products") void call<{ name: string }[]>("/categories").then((c) => setCats(c.map((x) => x.name))).catch(() => {});
+  }, [call, kind]);
+  useEffect(() => {
+    try { localStorage.setItem(draftKey(kind), JSON.stringify(grid)); } catch { /* private mode */ }
+  }, [grid, kind]);
+
+  const set = (r: number, c: number, v: string) =>
+    setGrid((g) => {
+      const next = g.map((row, i) => (i === r ? row.map((x, j) => (j === c ? v : x)) : row));
+      // Always keep an empty line at the end to type into.
+      if (next[next.length - 1].some((x) => x.trim())) next.push(blank(cols.length));
+      return next;
+    });
+  // Focus moves at once (a scanner types the next code right away); a line not drawn yet gets it after the render.
+  const focus = (r: number, c: number) => {
+    const find = () => box.current?.querySelector(`[data-cell="${r}-${c}"]`) as HTMLInputElement | null;
+    const el = find();
+    if (el) el.focus();
+    else setTimeout(() => find()?.focus(), 0);
+  };
+  const onKey = (e: React.KeyboardEvent, r: number, c: number) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    let nc = c + 1;
+    while (nc < cols.length && cols[nc].kind === "check") nc++;
+    if (nc < cols.length) focus(r, nc);
+    else { if (r + 1 >= grid.length) setGrid((g) => [...g, blank(cols.length)]); focus(r + 1, 0); }
+  };
+  const mapped = useMemo(() => {
+    const head = cols.map((c) => (SHEETS[kind].cols as Record<string, readonly string[]>)[c.key][0]);
+    return mapSheet(kind, [head, ...grid.map((row) => row.map((v, j) => (cols[j].kind === "check" ? (v ? "نعم" : "") : v)))]);
+  }, [grid, cols, kind]);
+  const clear = () => {
+    setGrid(Array.from({ length: 5 }, () => blank(cols.length)));
+    try { localStorage.removeItem(draftKey(kind)); } catch { /* ignore */ }
+  };
+  const filled = grid.filter((r) => r.some((x) => x.trim())).length;
+
+  return (
+    <div className="stack">
+      <div className="hand-grid">
+        <table>
+          <thead><tr><th style={{ width: 28 }}>#</th>{cols.map((c) => <th key={c.key} style={{ minWidth: c.w }}>{c.label}</th>)}<th /></tr></thead>
+          <tbody ref={box}>
+            {grid.map((row, r) => (
+              <tr key={r}>
+                <td className="muted num">{r + 1}</td>
+                {cols.map((c, j) => (
+                  <td key={c.key}>
+                    {c.kind === "check" ? (
+                      <input type="checkbox" checked={!!row[j]} onChange={(e) => set(r, j, e.target.checked ? "1" : "")} aria-label={`${c.label} سطر ${r + 1}`} />
+                    ) : (
+                      <input data-cell={`${r}-${j}`} value={row[j]} className={c.kind === "num" || c.kind === "money" ? "num" : ""}
+                        inputMode={c.key === "barcode" || c.key === "phone" ? "numeric" : c.kind === "num" || c.kind === "money" ? "decimal" : undefined}
+                        list={c.kind === "list" ? `hand-${c.key}` : undefined} placeholder={r === 0 && c.key === "barcode" ? "امسح أو فاضي" : undefined}
+                        onChange={(e) => set(r, j, e.target.value)} onKeyDown={(e) => onKey(e, r, j)} aria-label={`${c.label} سطر ${r + 1}`} />
+                    )}
+                  </td>
+                ))}
+                <td>{row.some((x) => x.trim()) && <button className="ghost" aria-label={`امسح سطر ${r + 1}`} onClick={() => setGrid((g) => (g.length > 1 ? g.filter((_, i) => i !== r) : [blank(cols.length)]))}>✕</button>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <datalist id="hand-category">{cats.map((c) => <option key={c} value={c} />)}</datalist>
+        <datalist id="hand-unit">{UNITS.map((u) => <option key={u} value={u} />)}</datalist>
+      </div>
+      <small className="muted">Enter ينقلك للخانة اللي بعدها، والسطر الجديد يتفتح وحده. اللي تكتبه يتحفظ في الجهاز لين تدخله، حتى لو قفلت الصفحة.</small>
+      <div className="row wrap">
+        {mapped.rows.length > 0 && <span className="badge ok">{mapped.rows.length} سطر جاهز</span>}
+        {mapped.errors.length > 0 && <span className="badge bad">{mapped.errors.length} فيه غلط</span>}
+        <span className="spacer" />
+        {filled > 0 && <button className="ghost" onClick={() => confirm("نمسح كل اللي كتبته؟") && clear()}>مسح الكل</button>}
+        <button className="primary" disabled={busy || !mapped.rows.length || mapped.errors.length > 0} onClick={() => onSend(mapped, clear)}>{busy ? "جاري الإدخال…" : `أدخل ${mapped.rows.length || ""} سطر`}</button>
+      </div>
+      {mapped.errors.length > 0 && <ul className="error" style={{ margin: 0, paddingInlineStart: 24 }}>{mapped.errors.slice(0, 8).map((e, i) => <li key={i}>سطر {e.row - 1}: {e.message}</li>)}</ul>}
     </div>
   );
 }
