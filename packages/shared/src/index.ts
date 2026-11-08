@@ -11,3 +11,4 @@ export * from "./permissions";
 export * from "./settings";
 export * from "./whatsapp";
 export * from "./totp";
+export * from "./zakat";
