@@ -256,6 +256,28 @@ describe("customers, credit and returns", () => {
     expect(rep.returns_minor).toBe(2800);
     expect(rep.customerPayments.cash).toBe(3000);
   });
+
+  it("takes Libyan ways of paying, and money in and out of the drawer with a reason", async () => {
+    const before = (await call("GET", "/money/summary", owner)).body.accounts;
+    const s = sale("P1-L1", [{ method: "sadad", amountMinor: 3000 }, { method: "cash", amountMinor: 3000 }]);
+    expect((await call("POST", "/sales/batch", cashierToken, { sales: [s] })).body.results[0].status).toBe("accepted");
+    const t = sale("P1-L2", [{ method: "transfer", amountMinor: 5600 }]);
+    expect((await call("POST", "/sales/batch", cashierToken, { sales: [t] })).body.results[0].status).toBe("accepted");
+    expect((await call("POST", "/sales/batch", cashierToken, { sales: [sale("P1-L3", [{ method: "mobicash", amountMinor: 6000 }])] })).body.results[0].status).toBe("rejected"); // change only from cash
+    const e0 = Number((await call("GET", "/shifts/current", cashierToken)).body.shift.expected);
+    const out = { id: randomUUID(), shiftId: shift2, kind: "out", amountMinor: 1000, reason: "دفع لمورد" };
+    expect((await call("POST", "/shifts/drawer", cashierToken, out)).status).toBe(200);
+    expect((await call("POST", "/shifts/drawer", cashierToken, out)).status).toBe(200); // sent twice, counted once
+    await call("POST", "/shifts/drawer", cashierToken, { id: randomUUID(), shiftId: shift2, kind: "in", amountMinor: 500, reason: "فكة للدرج" });
+    expect((await call("POST", "/shifts/drawer", cashierToken, { id: randomUUID(), shiftId: shift2, kind: "out", amountMinor: 1, reason: "" })).status).toBe(400);
+    expect(Number((await call("GET", "/shifts/current", cashierToken)).body.shift.expected)).toBe(e0 - 500);
+    const after = (await call("GET", "/money/summary", owner)).body.accounts;
+    expect(after.card.balanceMinor - before.card.balanceMinor).toBe(3000);
+    expect(after.transfer.balanceMinor - before.transfer.balanceMinor).toBe(5600);
+    expect(after.cash.balanceMinor - before.cash.balanceMinor).toBe(3000 - 400 - 500);
+    expect(after.cash.bySource.map((x: { source: string }) => x.source)).toEqual(expect.arrayContaining(["drawer_in", "drawer_out"]));
+    expect((await call("GET", "/audit", owner)).body.map((a: { action: string }) => a.action)).toContain("drawer.out");
+  });
 });
 
 describe("price checker and till events", () => {

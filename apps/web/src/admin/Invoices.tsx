@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { formatMoney, formatQty, readShopSettings, type RefundMethod, type SaleInput, type ShopSettings } from "@pos/shared";
+import { METHOD_LABELS, formatMoney, formatQty, readShopSettings, type RefundMethod, type SaleInput, type ShopSettings } from "@pos/shared";
 import type { Call } from "./Admin";
 import { sendInvoice } from "../whatsapp";
 import { downloadCsv } from "./charts";
@@ -42,7 +42,7 @@ const PRESETS: Record<string, () => [string, string]> = {
   "آخر 7 أيام": () => [addDays(local(), -6), local()],
   "هذا الشهر": () => [`${local().slice(0, 7)}-01`, local()],
 };
-const PAY: Record<string, string> = { cash: "نقدي", card: "بطاقة", credit: "آجل", payroll: "على الراتب" };
+const PAY: Record<string, string> = { ...METHOD_LABELS, cash: "نقدي" };
 const fmt = new Intl.DateTimeFormat("en-GB", { timeZone: "Africa/Tripoli", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
 const fmtTime = new Intl.DateTimeFormat("en-GB", { timeZone: "Africa/Tripoli", hour: "2-digit", minute: "2-digit", hour12: false });
 const at = (s: string) => fmt.format(new Date(s));

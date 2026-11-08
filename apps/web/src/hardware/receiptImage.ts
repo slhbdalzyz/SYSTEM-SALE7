@@ -1,6 +1,6 @@
 // Draws a receipt on a canvas the width of the paper. The browser does the Arabic shaping,
 // so the printer only ever gets black and white dots.
-import { computeLine, computeTotals, formatMoney, formatQty } from "@pos/shared";
+import { METHOD_LABELS, computeLine, computeTotals, formatMoney, formatQty } from "@pos/shared";
 import type { ReceiptData } from "../pos/Receipt";
 
 export type Row =
@@ -11,7 +11,7 @@ export type Row =
   | { kind: "rule" }
   | { kind: "space"; h: number };
 
-const METHOD = { cash: "كاش", card: "بطاقة", credit: "آجل", payroll: "على الراتب" } as const;
+const METHOD = METHOD_LABELS;
 const when = (iso: string) => new Date(iso).toLocaleString("en-GB", { dateStyle: "short", timeStyle: "short" });
 
 export function receiptRows(d: ReceiptData): Row[] {
@@ -81,6 +81,7 @@ export function receiptRows(d: ReceiptData): Row[] {
       ...(z.promoMinor > 0 ? [{ kind: "pair", right: "العروض", left: m(z.promoMinor) } as Row] : []),
       ...(z.returns ? [{ kind: "pair", right: `المرتجعات (${z.returns})`, left: `−${m(z.returnsMinor)}` } as Row] : []),
       ...(z.debtPaidCashMinor ? [{ kind: "pair", right: "تسديد ديون (كاش)", left: m(z.debtPaidCashMinor) } as Row] : []),
+      ...(z.drawerMoves ?? []).map((v): Row => ({ kind: "pair", right: `${v.kind === "in" ? "إيداع" : "سحب"}: ${v.reason}`, left: `${v.kind === "in" ? "+" : "−"}${m(v.amountMinor)}` })),
       { kind: "rule" },
       { kind: "pair", right: "كاش أول الوردية", left: m(z.openingCashMinor) },
       { kind: "pair", right: "الكاش المتوقع", left: m(z.expectedCashMinor), bold: true },

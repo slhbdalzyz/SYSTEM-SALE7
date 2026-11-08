@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { formatMoney, formatQty, readShopSettings, type CatalogCustomer, type CatalogProduct, type Offer, type PaymentMethod, type ShopSettings } from "@pos/shared";
+import { creditRoom, formatMoney, formatQty, readShopSettings, type CatalogCustomer, type CatalogProduct, type Offer, type PaymentMethod, type ShopSettings } from "@pos/shared";
 import { api } from "../api";
 import { db, getMeta, nextInvoiceNumber, setMeta, type HeldCart, type LocalShift } from "../localdb";
 import { findByCode, searchProducts } from "../lookup";
@@ -8,7 +8,8 @@ import { loadOffers, onSync, refreshCounts, startSyncLoop, syncNow, type SyncSta
 import { autoBackupIfDue } from "../owner/backup";
 import type { Screen } from "../App";
 import { addLine, cartTotals, lineFor, lineTotal, priceCart, switchUnit, toSaleInput, type CartLine } from "./cart";
-import { AmountDialog, Modal, PayDialog, type Employee } from "./dialogs";
+import { AmountDialog, DrawerDialog, Modal, PayDialog, type Employee } from "./dialogs";
+import { applyPrefs, loadPrefs, savePrefs, sound, type TillPrefs } from "./feel";
 import { MyPay } from "../admin/MyPay";
 import { Receipt, type ReceiptData } from "./Receipt";
 import { CustomerDialog } from "./CustomerDialog";
@@ -37,7 +38,15 @@ type Dialog =
   | { kind: "wa" }
   | { kind: "zreport"; data: ReceiptData }
   | { kind: "camera" }
+  | { kind: "drawer" }
+  | { kind: "prefs" }
   | null;
+
+/** A customer being served. Several can be open at once, one tab each. */
+interface Tab { id: string; n: number; lines: CartLine[]; invoiceDiscount: number; customer: CatalogCustomer | null; selected: string | null }
+const emptyTab = (n: number): Tab => ({ id: crypto.randomUUID(), n, lines: [], invoiceDiscount: 0, customer: null, selected: null });
+const today = () => new Date().toLocaleDateString("en-CA");
+const hhmm = (d: Date) => d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
 
 type Shop = { name: string; settings: ShopSettings };
 
@@ -48,6 +57,7 @@ const KEYS: [string, string][] = [
   ["F9", "الفواتير المعلقة"], ["F10", "مرتجع"], ["F11", "فتح الدرج"], ["F12 / Ctrl+Enter", "الدفع"],
   ["↑ ↓", "التنقل بين أصناف الفاتورة"], ["+ / −", "زيادة أو نقص كمية الصنف المختار"], ["Delete", "حذف الصنف المختار"],
   ["Ctrl+Delete", "إلغاء الفاتورة كلها"], ["3*باركود", "يبيع 3 من نفس الصنف"], ["Esc", "يقفل النافذة أو يمسح البحث"],
+  ["Alt+N", "زبون جديد في تبويب ثاني"], ["Alt+1 … Alt+9", "التنقل بين الزبائن المفتوحين"], ["Alt+D", "إيداع أو سحب من الدرج"],
 ];
 
 export function Cashier({ go }: { go: (s: Screen) => void }) {
@@ -70,6 +80,18 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   const till = (shop?.settings ?? readShopSettings({})).till;
   const scanRef = useRef<HTMLInputElement>(null);
   const device = session.device;
+  const [prefs, setPrefs] = useState<TillPrefs>(loadPrefs);
+  useEffect(() => applyPrefs(prefs), [prefs]);
+  const [tabs, setTabs] = useState<Tab[]>(() => [emptyTab(1)]);
+  const [activeTab, setActiveTab] = useState(() => tabs[0].id);
+  const [mine, setMine] = useState({ count: 0, totalMinor: 0 });
+  /** The last sale's change, shown big until the next item goes in (even on another customer's tab). */
+  const [lastPaid, setLastPaid] = useState<{ number: string; changeMinor: number } | null>(null);
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 30_000);
+    return () => clearInterval(t);
+  }, []);
   const role = tokenClaims(session.staffToken)?.role;
 
   const [offers, setOffers] = useState<Offer[]>([]);
@@ -85,6 +107,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
 
   const focusScan = useCallback(() => setTimeout(() => scanRef.current?.focus(), 0), []);
   const flash = (text: string, bad = false) => {
+    if (bad) sound("bad", prefs.sound);
     setMessage({ text, bad });
     setTimeout(() => setMessage(null), 2500);
   };
@@ -99,6 +122,15 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
       if (!open) setDialog({ kind: "openShift" });
       setCatalogSize(await db.products.count());
       setShop((await getMeta<Shop>("shop")) ?? null);
+      // Customers left open when the till was closed or the power went: still there.
+      const saved = await getMeta<{ active: string; tabs: Tab[] }>("tabs");
+      if (saved?.tabs?.length && saved.tabs.some((t) => t.lines.length)) {
+        const act = saved.tabs.find((t) => t.id === saved.active) ?? saved.tabs[0];
+        setTabs(saved.tabs);
+        setActiveTab(act.id);
+        loadTab(act);
+      }
+      void countMine();
       try {
         const me = await api<{ tenant: { name: string; settings: unknown }; stores: { id: string; receipt_footer: string | null }[]; storeId: string }>("/me", { token: session.staffToken });
         await setMeta("store", { footer: me.stores.find((s) => s.id === me.storeId)?.receipt_footer });
@@ -213,6 +245,8 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     const r = addLine(lines, line);
     setLines(r.lines);
     setSelected(r.key);
+    sound("ok", prefs.sound);
+    setLastPaid(null);
   }
 
   async function scan(raw: string) {
@@ -274,7 +308,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   function voidCart() {
     if (!lines.length) return;
     if (till.confirmClear && !confirm(`نلغي الفاتورة (${lines.length} أصناف · ${formatMoney(totals.total)})؟`)) return;
-    clearCart();
+    finishCart();
     flash("تم إلغاء الفاتورة");
     focusScan();
   }
@@ -284,6 +318,83 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     setInvoiceDiscount(0);
     setSelected(null);
     setCustomer(null);
+  }
+
+  // ---- Several customers at once, one tab each ----
+  function loadTab(t: Tab) {
+    setLines(t.lines);
+    setInvoiceDiscount(t.invoiceDiscount);
+    setCustomer(t.customer);
+    setSelected(t.selected);
+  }
+  const current = (): Tab => ({ ...(tabs.find((t) => t.id === activeTab) ?? emptyTab(1)), lines, invoiceDiscount, customer, selected });
+  function switchTab(id: string) {
+    if (id === activeTab) return;
+    const next = tabs.find((t) => t.id === id);
+    if (!next) return;
+    const cur = current();
+    setTabs((ts) => ts.map((t) => (t.id === activeTab ? cur : t)));
+    loadTab(next);
+    setActiveTab(id);
+    setResults([]);
+    setCode("");
+    focusScan();
+  }
+  function newTab() {
+    if (tabs.length >= 9) return flash("أقصى حد 9 زبائن مفتوحين", true);
+    const cur = current();
+    const t = emptyTab(Math.max(...tabs.map((x) => x.n)) + 1);
+    setTabs((ts) => [...ts.map((x) => (x.id === activeTab ? cur : x)), t]);
+    loadTab(t);
+    setActiveTab(t.id);
+    focusScan();
+  }
+  /** After a sale, a hold or a cancel: that customer's tab closes if others are open. */
+  function finishCart() {
+    if (tabs.length > 1) {
+      const rest = tabs.filter((t) => t.id !== activeTab);
+      setTabs(rest);
+      loadTab(rest[0]);
+      setActiveTab(rest[0].id);
+    } else {
+      clearCart();
+    }
+  }
+  // Kept on the device as they change, so a crash or a power cut loses no open customer.
+  useEffect(() => {
+    const t = setTimeout(() => void setMeta("tabs", { active: activeTab, tabs: tabs.map((x) => (x.id === activeTab ? current() : x)) }), 400);
+    return () => clearTimeout(t);
+  }, [tabs, activeTab, lines, invoiceDiscount, customer]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** This cashier's sales today on this till: shown in the status bar. */
+  async function countMine() {
+    const d = today();
+    const name = (await getMeta<string>("staffName")) ?? "";
+    const list = await db.sales.filter((x) => (x.kind ?? "sale") === "sale" && x.cashierName === name && new Date(x.createdAt).toLocaleDateString("en-CA") === d).toArray();
+    setMine({ count: list.length, totalMinor: list.reduce((a, x) => a + x.totalMinor, 0) });
+  }
+
+  /** Money into or out of the drawer, with its reason: counted in the shift and sent to the owner. */
+  async function drawerMove(kind: "in" | "out", amountMinor: number, reason: string) {
+    const id = crypto.randomUUID();
+    const at = new Date().toISOString();
+    await db.transaction("rw", db.sales, db.outbox, async () => {
+      await db.sales.put({ id, number: kind === "in" ? "إيداع" : "سحب", shiftId: shift?.id ?? null, createdAt: at, totalMinor: 0, cashInMinor: kind === "in" ? amountMinor : -amountMinor, changeMinor: 0, cashierName, input: null, kind: "drawer", reason });
+      await db.outbox.add({ kind: "drawer", refId: id, payload: { id, shiftId: shift?.id ?? null, kind, amountMinor, reason, at }, createdAt: at });
+    });
+    setDialog(null);
+    flash(`${kind === "in" ? "تم إيداع" : "تم سحب"} ${formatMoney(amountMinor)}: ${reason}`);
+    void openDrawer().catch(() => undefined);
+    await refreshCounts();
+    void syncNow();
+    focusScan();
+  }
+
+  function pickCustomer(c: CatalogCustomer | null) {
+    setCustomer(c);
+    if (c && c.creditLimitMinor !== null && c.creditLimitMinor > 0 && c.balanceMinor >= c.creditLimitMinor * 0.8) {
+      flash(c.balanceMinor >= c.creditLimitMinor ? `⛔ ${c.name} وصل حد الدين` : `⚠️ ${c.name} قرّب من حد الدين`, true);
+    }
   }
 
   async function pay(payments: { method: PaymentMethod; amountMinor: number }[], employeeId: string | null = null) {
@@ -304,9 +415,11 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     if (customer && credit > 0) await db.customers.update(customer.id, { balanceMinor: customer.balanceMinor + credit });
     const store = await getMeta<{ footer?: string }>("store");
     setReceipt({ storeName: device.storeName, shop, footer: store?.footer, deviceName: device.name, cashierName, sale, changeMinor: change, customerName: customer?.name, customerPhone: customer?.phone, employeeName: employees.find((e) => e.id === employeeId)?.name });
-    clearCart();
+    finishCart();
     setDialog(null);
-    flash(change > 0 ? `الباقي ${formatMoney(change)}` : "تم البيع");
+    sound("cash", prefs.sound);
+    setLastPaid({ number, changeMinor: change });
+    void countMine();
     await refreshCounts();
     void syncNow();
     focusScan();
@@ -344,7 +457,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   async function hold() {
     if (!lines.length) return;
     await db.held.put({ id: crypto.randomUUID(), createdAt: new Date().toISOString(), label: `${lines.length} أصناف · ${formatMoney(totals.total)}`, lines });
-    clearCart();
+    finishCart();
     flash("تم تعليق الفاتورة");
     focusScan();
   }
@@ -418,7 +531,17 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
         F11: () => void drawer(),
         F12: () => lines.length && shift && setDialog({ kind: "pay" }),
       };
-      if (fn[e.key]) {
+      if (e.altKey && /^Digit[1-9]$/.test(e.code)) {
+        e.preventDefault();
+        const t = tabs[Number(e.code.slice(5)) - 1];
+        if (t) switchTab(t.id);
+      } else if (e.altKey && e.code === "KeyN") {
+        e.preventDefault();
+        newTab();
+      } else if (e.altKey && e.code === "KeyD") {
+        e.preventDefault();
+        if (shift) setDialog({ kind: "drawer" });
+      } else if (fn[e.key]) {
         e.preventDefault();
         fn[e.key]();
       } else if (e.key === "Enter" && e.ctrlKey) {
@@ -464,14 +587,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
         <span>{device?.name}</span>
         <span>· {cashierName}</span>
         <span className="spacer" />
-        {sync && (
-          <span className={`badge ${sync.failed ? "bad" : sync.online ? "ok" : "off"}`}>
-            {sync.online ? "متصل" : "بدون إنترنت"}
-            {sync.pending > 0 && ` · ${sync.pending} بانتظار الإرسال`}
-            {sync.failed > 0 && ` · ${sync.failed} مرفوضة`}
-          </span>
-        )}
-        <span className="muted">{catalogSize} صنف</span>
+        <button onClick={() => setDialog({ kind: "prefs" })} title="حجم الخط والوضع الليلي والصوت">🎨 العرض</button>
         <button onClick={() => void openCustomerDisplay()} title="افتحها على الشاشة الثانية">شاشة الزبون</button>
         <button onClick={() => setDialog({ kind: "printer" })}>الطابعة والميزان</button>
         <button onClick={() => void syncNow()}>مزامنة</button>
@@ -479,6 +595,18 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
         <button onClick={askCloseShift} disabled={!shift}>قفل الوردية</button>
         <button onClick={logout}>خروج</button>
       </header>
+      <div className="pos-status" role="status">
+        {sync ? (
+          <span className={`st ${sync.online ? "ok" : "off"}`}><i />{sync.online ? "متصل" : "بدون إنترنت، البيع شغال عادي"}</span>
+        ) : <span className="st"><i />…</span>}
+        <span className={sync && sync.pending > 0 ? "st warn" : "st"}>{sync && sync.pending > 0 ? `⏳ ${sync.pending} تستنى المزامنة` : "✓ كل شي متزامن"}</span>
+        {sync && sync.failed > 0 && <span className="st bad">⚠️ {sync.failed} مرفوضة</span>}
+        <span className="st">🧾 مبيعاتك اليوم: <b className="num">{mine.count}</b> فاتورة · <b className="num">{formatMoney(mine.totalMinor)}</b></span>
+        {shift && <span className="st">⏱ الوردية من {hhmm(new Date(shift.openedAt))}</span>}
+        <span className="spacer" />
+        <span className="st muted">{catalogSize} صنف</span>
+        <span className="st num">{hhmm(now)}</span>
+      </div>
 
       <main className="pos-main">
         <section className="pos-left">
@@ -529,6 +657,21 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
               ))}
             </div>
           )}
+
+          <div className="till-tabs" role="tablist" aria-label="الزبائن المفتوحين">
+            {tabs.map((t, i) => {
+              const live = t.id === activeTab;
+              const n = live ? lines.length : t.lines.length;
+              const total = live ? totals.total : cartTotals(priceCart(t.lines, offers, new Date()).lines, t.invoiceDiscount).total;
+              return (
+                <button key={t.id} role="tab" aria-selected={live} className={live ? "active" : ""} onClick={() => switchTab(t.id)} title={`Alt+${i + 1}`}>
+                  <span>{(live ? customer : t.customer)?.name ?? `زبون ${t.n}`}</span>
+                  {n > 0 && <small className="num">{n} · {formatMoney(total, "")}</small>}
+                </button>
+              );
+            })}
+            <button className="ghost" onClick={newTab} title="Alt+N">+ زبون جديد</button>
+          </div>
 
           <div className="cart">
             {lines.length === 0 ? (
@@ -601,12 +744,13 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
             {totals.discount > 0 && <div className="line"><span>الخصم</span><span className="num">−{formatMoney(totals.discount)}</span></div>}
             {totals.tax > 0 && <div className="line muted"><span>منها ضريبة</span><span className="num">{formatMoney(totals.tax)}</span></div>}
             <div className="grand num">{formatMoney(totals.total)}</div>
-            {customer && (
-              <div className="line" style={{ background: "var(--brand-soft)", padding: "6px 10px", borderRadius: 8 }}>
-                <span>👤 {customer.name}</span>
-                <span className="num">الرصيد {formatMoney(customer.balanceMinor)}</span>
+            {lastPaid && (
+              <div className={`change-big ${lastPaid.changeMinor ? "" : "done"}`} onClick={() => setLastPaid(null)}>
+                <span>{lastPaid.changeMinor ? `الباقي للزبون · ${lastPaid.number}` : `✓ تم البيع · ${lastPaid.number}`}</span>
+                {!!lastPaid.changeMinor && <b className="num">{formatMoney(lastPaid.changeMinor)}</b>}
               </div>
             )}
+            {customer && <CustomerBox c={customer} onClear={() => setCustomer(null)} />}
             {message && lines.length > 0 && <div className={message.bad ? "error" : "badge ok"} style={{ textAlign: "center" }}>{message.text}</div>}
             {receipt?.sale && !lines.length && (shop?.settings.whatsapp.offerAfterSale ?? true) && (
               <button className="wa-offer" onClick={() => setDialog({ kind: "wa" })}>
@@ -625,6 +769,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
             <button onClick={() => setDialog({ kind: "return" })} disabled={!shift}>مرتجع <kbd>F10</kbd></button>
             <button onClick={() => receipt && void print({ ...receipt, copy: true }, false)} disabled={!receipt}>إعادة طباعة <kbd>F7</kbd></button>
             <button onClick={() => void drawer()}>فتح الدرج <kbd>F11</kbd></button>
+            <button onClick={() => setDialog({ kind: "drawer" })} disabled={!shift}>💵 إيداع / سحب <kbd>Alt+D</kbd></button>
             <button onClick={voidCart} disabled={!lines.length} className="danger">إلغاء الفاتورة</button>
             <button onClick={() => setDialog({ kind: "keys" })} className="ghost">⌨️ الاختصارات <kbd>F1</kbd></button>
             <button className="primary pay" disabled={!lines.length || !shift} onClick={() => setDialog({ kind: "pay" })}>
@@ -743,6 +888,32 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
           </div>
         </Modal>
       )}
+      {dialog?.kind === "drawer" && <DrawerDialog onDone={(k, m, r) => void drawerMove(k, m, r)} onClose={() => { setDialog(null); focusScan(); }} />}
+      {dialog?.kind === "prefs" && (
+        <Modal title="🎨 شكل الشاشة" onClose={() => { setDialog(null); focusScan(); }}>
+          <span className="muted">يتحفظ لك أنت ({cashierName}) على هذا الجهاز، وكل كاشير يختار اللي يريحه.</span>
+          <label>حجم الخط
+            <div className="seg">
+              {([["md", "عادي"], ["lg", "كبير"], ["xl", "كبير جداً"]] as const).map(([k, t]) => (
+                <button key={k} className={prefs.size === k ? "active" : ""} onClick={() => { const p = { ...prefs, size: k }; setPrefs(p); savePrefs(p); }}>{t}</button>
+              ))}
+            </div>
+          </label>
+          <label>الألوان
+            <div className="seg">
+              <button className={!prefs.dark ? "active" : ""} onClick={() => { const p = { ...prefs, dark: false }; setPrefs(p); savePrefs(p); }}>☀️ نهاري</button>
+              <button className={prefs.dark ? "active" : ""} onClick={() => { const p = { ...prefs, dark: true }; setPrefs(p); savePrefs(p); }}>🌙 ليلي</button>
+            </div>
+          </label>
+          <label>الصوت
+            <div className="seg">
+              <button className={prefs.sound ? "active" : ""} onClick={() => { const p = { ...prefs, sound: true }; setPrefs(p); savePrefs(p); sound("ok"); }}>🔊 بيب مع كل مسحة</button>
+              <button className={!prefs.sound ? "active" : ""} onClick={() => { const p = { ...prefs, sound: false }; setPrefs(p); savePrefs(p); }}>🔇 بدون صوت</button>
+            </div>
+          </label>
+          <div className="row"><button onClick={() => sound("bad")}>جرّب صوت الخطأ</button><span className="spacer" /><button className="primary" onClick={() => { setDialog(null); focusScan(); }}>تمام</button></div>
+        </Modal>
+      )}
       {dialog?.kind === "camera" && (
         <CameraScanner onClose={() => { setDialog(null); focusScan(); }} onCode={(c) => { setDialog(null); void scan(c); focusScan(); }} />
       )}
@@ -758,7 +929,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
         <CustomerDialog
           current={customer}
           shiftId={shift?.id ?? null}
-          onPick={(c) => { setCustomer(c); setDialog(null); focusScan(); }}
+          onPick={(c) => { pickCustomer(c); setDialog(null); focusScan(); }}
           onPaid={customerPaid}
           onClose={() => { setDialog(null); focusScan(); }}
         />
@@ -777,8 +948,14 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
               <button
                 className="primary"
                 onClick={async () => {
-                  if (lines.length) await hold();
-                  setLines(c.lines as CartLine[]);
+                  // A customer is already being served: the held bill opens in its own tab.
+                  if (lines.length) {
+                    const cur = current();
+                    const t = { ...emptyTab(Math.max(...tabs.map((x) => x.n)) + 1), lines: c.lines as CartLine[] };
+                    setTabs((ts) => [...ts.map((x) => (x.id === activeTab ? cur : x)), t]);
+                    setActiveTab(t.id);
+                    loadTab(t);
+                  } else setLines(c.lines as CartLine[]);
                   await db.held.delete(c.id);
                   setDialog(null);
                   focusScan();
@@ -795,6 +972,25 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   );
 }
 
+
+/** The customer on the bill: what they owe, their limit, and a warning as they get close to it. */
+function CustomerBox({ c, onClear }: { c: CatalogCustomer; onClear: () => void }) {
+  const room = creditRoom(c);
+  const limit = c.creditLimitMinor;
+  const pct = limit ? Math.min(100, Math.round((c.balanceMinor / limit) * 100)) : 0;
+  const level = limit === null || limit <= 0 ? "" : c.balanceMinor >= limit ? "over" : pct >= 80 ? "near" : "";
+  return (
+    <div className={`cust-box ${level}`}>
+      <div className="cust-head"><b>👤 {c.name}</b>{c.phone && <span className="muted num">{c.phone}</span>}<button className="ghost" onClick={onClear} aria-label="شيل العميل">✕</button></div>
+      <div className="line"><span>عليه دين</span><b className="num">{formatMoney(c.balanceMinor)}</b></div>
+      {limit !== null && limit > 0 && <>
+        <div className="line"><span>حد الدين</span><span className="num">{formatMoney(limit)}</span></div>
+        <div className="cust-bar"><i style={{ width: `${pct}%` }} /></div>
+        <div className="line"><span>{level === "over" ? "⛔ وصل الحد، ما يقدرش يشري بالآجل" : level === "near" ? "⚠️ قرّب من الحد" : "يقدر ياخذ بالآجل"}</span><b className="num">{formatMoney(room ?? 0)}</b></div>
+      </>}
+    </div>
+  );
+}
 
 /** Asks the customer's WhatsApp number (or leaves it empty to pick the chat in WhatsApp). */
 function WaDialog({ initial, onSend, onClose }: { initial: string; onSend: (phone: string) => void; onClose: () => void }) {
