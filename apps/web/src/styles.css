@@ -645,3 +645,9 @@ html.till-dark .pos-top button { border-color: #1e293b; }
 .cust-head button { margin-inline-start: auto; padding: 0 6px; }
 .change-big { cursor: pointer; }
 .modal:has(.pay-total) { max-height: 94vh; overflow: auto; }
+.hand-grid { overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); max-height: 60vh; }
+.hand-grid table { border-collapse: collapse; width: 100%; }
+.hand-grid th { position: sticky; top: 0; background: var(--bg); font-size: .82rem; z-index: 1; white-space: nowrap; }
+.hand-grid td, .hand-grid th { padding: 3px 4px; border-bottom: 1px solid var(--line); }
+.hand-grid td input:not([type=checkbox]) { width: 100%; padding: 6px 8px; border-radius: 6px; }
+.hand-grid td input[type=checkbox] { width: 20px; height: 20px; margin: 0 auto; display: block; }
