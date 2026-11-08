@@ -22,6 +22,8 @@ export interface ReceiptData {
   employeeName?: string | null;
   ret?: ReturnDone;
   payment?: { customerName: string; amountMinor: number; method: "cash" | "card"; balanceMinor: number; at: string };
+  /** Loyalty points on this sale, worked out on the till. */
+  points?: { earned: number; spent: number; balance: number };
   /** The shift-close (Z) report. */
   shift?: ShiftReport;
 }

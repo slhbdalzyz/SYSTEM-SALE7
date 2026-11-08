@@ -94,8 +94,23 @@ describe("receipt rows for the thermal printer", async () => {
     for (const s of ["المحل", "P1-0007", "مياه شد 6", "8.500", "10.000", "1.500"]) expect(t).toContain(s);
   });
 
+  it("shows points spent, earned and the new balance, and points given back on a return", () => {
+    const t = text(receiptRows({
+      ...base,
+      points: { spent: 200, earned: 8, balance: 33 },
+      sale: {
+        id: water.id, number: "P1-0009", createdAt: "2026-10-24T10:00:00Z", invoiceDiscountMinor: 0, totalMinor: 10000,
+        lines: [{ productId: water.id, unitId: water.units[1].id, name: "مياه شد 6", qtyMilli: 1000, priceMinor: 10000, discountMinor: 0, promoMinor: 0, taxBp: 0 }],
+        payments: [{ method: "points", amountMinor: 2000 }, { method: "cash", amountMinor: 8000 }],
+      },
+    }));
+    for (const s of ["نقاط", "2.000", "نقاط مصروفة", "200", "+8", "رصيد نقاطك", "33"]) expect(t).toContain(s);
+    const r = text(receiptRows({ ...base, ret: { number: "P1-0010", originalNumber: "P1-0009", customerName: "زبون", method: "cash", totalMinor: 10000, refundMinor: 8000, pointsMinor: 2000, pointsBack: 200, pointsTaken: 8, reason: "تالف", lines: [] } }));
+    for (const s of ["8.000", "نقاط رجعت", "200 (2.000", "نقاط انسحبت"]) expect(r).toContain(s);
+  });
+
   it("prints a refund and a debt payment", () => {
-    const r = text(receiptRows({ ...base, ret: { number: "P1-0008", originalNumber: "P1-0007", customerName: null, method: "cash", totalMinor: 1500, reason: "تالف", lines: [{ name: "مياه", qtyMilli: 2000, totalMinor: 1500 }] } }));
+    const r = text(receiptRows({ ...base, ret: { number: "P1-0008", originalNumber: "P1-0007", customerName: null, method: "cash", totalMinor: 1500, refundMinor: 1500, pointsMinor: 0, pointsBack: 0, pointsTaken: 0, reason: "تالف", lines: [{ name: "مياه", qtyMilli: 2000, totalMinor: 1500 }] } }));
     expect(r).toContain("P1-0007");
     expect(r).toContain("1.500");
     const p = text(receiptRows({ ...base, payment: { customerName: "محمد", amountMinor: 50000, method: "cash", balanceMinor: 20000, at: "2026-10-24T10:00:00Z" } }));
