@@ -686,3 +686,9 @@ a.btn.primary { background: var(--brand); color: var(--brand-ink); border-color:
 .announce.promo { background: #dcfce7; border-color: #9ad9b0; }
 .announce .body { flex: 1; white-space: pre-wrap; }
 .support-banner { position: sticky; top: 0; z-index: 50; background: #7c2d12; color: #fff; padding: 8px 14px; text-align: center; font-weight: 700; }
+.hand-grid { overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); max-height: 60vh; }
+.hand-grid table { border-collapse: collapse; width: 100%; }
+.hand-grid th { position: sticky; top: 0; background: var(--bg); font-size: .82rem; z-index: 1; white-space: nowrap; }
+.hand-grid td, .hand-grid th { padding: 3px 4px; border-bottom: 1px solid var(--line); }
+.hand-grid td input:not([type=checkbox]) { width: 100%; padding: 6px 8px; border-radius: 6px; }
+.hand-grid td input[type=checkbox] { width: 20px; height: 20px; margin: 0 auto; display: block; }
