@@ -677,6 +677,15 @@ html.till-dark .pos-top button { border-color: #1e293b; }
 .points-box { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; background: var(--warn-soft); padding: 8px 12px; border-radius: var(--radius); }
 .pos-left > .cart { flex: 1 1 0; min-height: 120px; }
 .pos-left > .quick-pad { flex: 0 0 auto; }
+
+/* Platform back office */
+a.btn { display: inline-block; text-decoration: none; padding: 8px 14px; border-radius: 10px; border: 1px solid var(--line, #d0d5dd); color: inherit; }
+a.btn.primary { background: var(--brand); color: var(--brand-ink); border-color: var(--brand); }
+.announce { display: flex; gap: 10px; align-items: flex-start; padding: 10px 14px; border-radius: 12px; margin-bottom: 10px; background: #e8f1fd; border: 1px solid #c5dbf7; }
+.announce.warn { background: var(--warn-soft); border-color: var(--warn); }
+.announce.promo { background: #dcfce7; border-color: #9ad9b0; }
+.announce .body { flex: 1; white-space: pre-wrap; }
+.support-banner { position: sticky; top: 0; z-index: 50; background: #7c2d12; color: #fff; padding: 8px 14px; text-align: center; font-weight: 700; }
 .hand-grid { overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); max-height: 60vh; }
 .hand-grid table { border-collapse: collapse; width: 100%; }
 .hand-grid th { position: sticky; top: 0; background: var(--bg); font-size: .82rem; z-index: 1; white-space: nowrap; }

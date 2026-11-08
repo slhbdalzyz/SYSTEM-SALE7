@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState } from "react";
-import { session, tokenValid } from "./session";
+import { endSupport, session, startSupport, supportMode, tokenValid } from "./session";
 import { Setup } from "./Setup";
 import { PinScreen } from "./pos/PinScreen";
 import { Cashier } from "./pos/Cashier";
@@ -17,10 +17,22 @@ import { PublicReceipt } from "./public/PublicReceipt";
 
 export type Screen = "setup" | "pin" | "pos" | "admin" | "price" | "owner";
 
+// Opened from the platform's support desk: this tab looks at the shop, read only.
+{
+  const q = new URLSearchParams(location.search);
+  const t = q.get("support");
+  if (t) {
+    startSupport(t);
+    q.delete("support");
+    history.replaceState(null, "", `${location.pathname}${q.toString() ? `?${q}` : ""}`);
+  }
+}
+
 // The demo shop has a ready-made cashier device, so the demo opens on the PIN screen.
 if (DEMO && !session.deviceToken) session.deviceToken = "d".repeat(64);
 
 function initial(): Screen {
+  if (supportMode()) return "admin";
   // ?welcome shows the landing page even on a till (the demo's way to see it).
   if (new URLSearchParams(location.search).has("welcome")) return "setup";
   // Coming back from the card payment page: straight to the owner's subscription screen.
@@ -56,8 +68,18 @@ function Main() {
     screen === "price" ? <PriceChecker go={setScreen} /> : screen === "owner" ? <Owner go={setScreen} /> : screen === "admin" ? <Admin go={setScreen} /> : screen === "pin" ? <PinScreen go={setScreen} /> : screen === "pos" ? <Cashier go={setScreen} /> : <Setup go={setScreen} />;
   return (
     <>
-      <DemoBar />
+      {supportMode() ? <SupportBanner /> : <DemoBar />}
       {page}
     </>
+  );
+}
+
+function SupportBanner() {
+  const valid = tokenValid(session.adminToken);
+  return (
+    <div className="support-banner">
+      {valid ? "👁 وضع الدعم الفني: تشوف حساب المحل بإذن صاحبه، قراءة بس. أي تعديل مقفول." : "انتهت مدة دخول الدعم."}{" "}
+      <button onClick={() => { endSupport(); window.close(); location.href = `${location.pathname}?app=platform`; }}>إنهاء</button>
+    </div>
   );
 }

@@ -3,6 +3,7 @@ import { formatMoney } from "@pos/shared";
 import { api } from "../api";
 import { METHOD_LABEL, STATE_BADGE, STATE_LABEL, date, type Plan, type SubState } from "../billing";
 import type { Call } from "./Admin";
+import { openInvoice } from "../platform/Pro";
 
 export interface Sub {
   state: SubState;
@@ -12,7 +13,7 @@ export interface Sub {
   graceDays: number;
   plan: Plan;
   usage: { stores: number; devices: number; users: number };
-  payments: { months: number; amount_minor: number; method: string; period_from: string; period_to: string; created_at: string; plan_code: string }[];
+  payments: { id: string; invoice_no: number; months: number; bonus_months: number; discount_minor: number; coupon_code: string | null; amount_minor: number; method: string; period_from: string; period_to: string; created_at: string; plan_code: string }[];
   paymentInstructions: string;
 }
 
@@ -98,15 +99,17 @@ export function Subscription({ call }: { call: Call }) {
           <p className="muted">ما فيش دفعات لتوا.</p>
         ) : (
           <table>
-            <thead><tr><th>التاريخ</th><th>المدة</th><th>الفترة</th><th>الطريقة</th><th>المبلغ</th></tr></thead>
+            <thead><tr><th>الفاتورة</th><th>التاريخ</th><th>المدة</th><th>الفترة</th><th>الطريقة</th><th>المبلغ</th><th /></tr></thead>
             <tbody>
               {s.payments.map((p, i) => (
                 <tr key={i}>
+                  <td className="num">{p.invoice_no}</td>
                   <td className="num">{date(p.created_at)}</td>
-                  <td>{p.months} شهر</td>
+                  <td>{p.months} شهر{p.bonus_months ? ` + ${p.bonus_months} مجاناً` : ""}</td>
                   <td className="num">{date(p.period_from)} ← {date(p.period_to)}</td>
                   <td>{METHOD_LABEL[p.method] ?? p.method}</td>
-                  <td className="num">{formatMoney(p.amount_minor)}</td>
+                  <td className="num">{formatMoney(p.amount_minor)}{p.discount_minor ? <div className="muted">خصم {formatMoney(p.discount_minor)}</div> : null}</td>
+                  <td><button onClick={() => void openInvoice(call, `/subscription/invoices/${p.id}`)}>🧾 فاتورة PDF</button></td>
                 </tr>
               ))}
             </tbody>
@@ -132,6 +135,10 @@ function PayOnline({ call, current, onPaid }: { call: Call; current: string; onP
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ text: string; bad?: boolean } | null>(null);
+  const [coupon, setCoupon] = useState("");
+  const [applied, setApplied] = useState<{ code: string; label: string; amountMinor: number; bonusMonths: number } | null>(null);
+  const [couponErr, setCouponErr] = useState<string | null>(null);
+  useEffect(() => setApplied(null), [plan, months]);
   useEffect(() => {
     call<NonNullable<typeof opts>>("/subscription/pay/options")
       .then((o) => {
@@ -142,7 +149,16 @@ function PayOnline({ call, current, onPaid }: { call: Call; current: string; onP
   }, [call]);
   if (!opts || !opts.methods.length || !method) return null;
   const price = opts.plans.find((p) => p.code === plan)?.price_minor ?? 0;
-  const total = price * months;
+  const total = applied ? applied.amountMinor : price * months;
+  async function check() {
+    setCouponErr(null);
+    try {
+      setApplied(await call<NonNullable<typeof applied>>("/subscription/coupon", { body: { code: coupon, planCode: plan, months } }));
+    } catch (e) {
+      setApplied(null);
+      setCouponErr((e as Error).message);
+    }
+  }
   const wallet = method !== "localbankcards";
   const ready = !wallet || (/^09\d{8}$/.test(mobile) && (method !== "sadad" || /^(19|20)\d{2}$/.test(birthYear)));
 
@@ -151,7 +167,7 @@ function PayOnline({ call, current, onPaid }: { call: Call; current: string; onP
     setMsg(null);
     try {
       const r = await call<{ id: string; redirectUrl?: string; needsCode?: boolean }>("/subscription/pay/start", {
-        body: { planCode: plan, months, method, mobile: wallet ? mobile : undefined, birthYear: method === "sadad" ? birthYear : undefined },
+        body: { planCode: plan, months, method, mobile: wallet ? mobile : undefined, birthYear: method === "sadad" ? birthYear : undefined, couponCode: applied?.code },
       });
       if (r.redirectUrl) {
         location.href = r.redirectUrl;
@@ -201,7 +217,13 @@ function PayOnline({ call, current, onPaid }: { call: Call; current: string; onP
                 {[1, 3, 6, 12].map((m) => <option key={m} value={m}>{m} شهر</option>)}
               </select>
             </label>
-            <div className="kpi"><span className="muted">المبلغ</span><b className="num">{formatMoney(total)}</b></div>
+            <div className="kpi"><span className="muted">المبلغ</span><b className="num">{formatMoney(total)}</b>{applied && <span className="muted">{applied.label}{applied.bonusMonths ? "" : ` · بدل ${formatMoney(price * months)}`}</span>}</div>
+          </div>
+          <div className="row">
+            <label>عندك كوبون؟<input value={coupon} onChange={(e) => { setCoupon(e.target.value.toUpperCase()); setApplied(null); }} style={{ width: 140, direction: "ltr" }} /></label>
+            <button disabled={!coupon.trim()} onClick={() => void check()}>تطبيق</button>
+            {applied && <span className="badge ok">✓ {applied.label}</span>}
+            {couponErr && <span className="error">{couponErr}</span>}
           </div>
           <div className="row">
             {opts.methods.map((m) => (

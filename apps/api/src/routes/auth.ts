@@ -1,4 +1,4 @@
-import { effectivePermissions, newTotpSecret, readShopSettings, totpUri, verifyTotp } from "@pos/shared";
+import { effectivePermissions, newTotpSecret, readShopSettings, resolveFeatures, totpUri, verifyTotp } from "@pos/shared";
 import type { FastifyInstance } from "fastify";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
@@ -16,6 +16,8 @@ const registerSchema = z.object({
   ownerName: z.string().min(2).max(120),
   email: z.string().email().max(200),
   password: z.string().min(8).max(200),
+  /** An agent's code, from their link: the shop becomes theirs. */
+  agentCode: z.string().trim().max(12).optional(),
 });
 
 const loginSchema = z.object({ email: z.string().email(), password: z.string().min(1), code: z.string().regex(/^\d{6}$/).optional() });
@@ -40,6 +42,9 @@ export async function authRoutes(app: FastifyInstance) {
         [b.businessName, b.phone ?? null, plan, b.businessType, JSON.stringify({ phone: b.phone ?? "", city: b.city ?? "" })],
       );
       const tid = t.rows[0].id as string;
+      if (b.agentCode) {
+        await tx.query(`UPDATE tenants SET agent_id = (SELECT id FROM agents WHERE code = upper($2) AND active) WHERE id = $1`, [tid, b.agentCode]);
+      }
       const s = await tx.query(`INSERT INTO stores (tenant_id, name) VALUES ($1,$2) RETURNING id`, [tid, b.storeName]);
       const u = await tx.query(
         `INSERT INTO users (tenant_id, name, email, password_hash, role) VALUES ($1,$2,$3,$4,'owner') RETURNING id`,
@@ -106,10 +111,14 @@ export async function authRoutes(app: FastifyInstance) {
     const row = (await app.db.query(`SELECT id, name, email, role, job_title, permissions, COALESCE(totp_enabled, false) AS totp_enabled FROM users WHERE id = $1 AND tenant_id = $2`, [req.user.sub, req.user.tid])).rows[0];
     const { permissions, ...u } = row;
     u.permissions = effectivePermissions(row.role, permissions);
-    const t = (await app.db.query(`SELECT id, name, currency, business_type, settings, loyalty FROM tenants WHERE id = $1`, [req.user.tid])).rows[0];
+    const t = (await app.db.query(
+      `SELECT t.id, t.name, t.currency, t.business_type, t.settings, t.loyalty, t.features, p.features AS plan_features, t.support_until
+       FROM tenants t JOIN plans p ON p.code = t.plan_code WHERE t.id = $1`, [req.user.tid])).rows[0];
     t.settings = readShopSettings(t.settings);
+    t.features = resolveFeatures(t.plan_features, t.features);
+    delete t.plan_features;
     const stores = await app.db.query(`SELECT id, name, address, phone, receipt_footer, active FROM stores WHERE tenant_id = $1 ORDER BY created_at`, [req.user.tid]);
-    return { user: u, tenant: t, stores: stores.rows, deviceId: req.user.did ?? null, storeId: req.user.sid ?? null };
+    return { user: u, tenant: t, stores: stores.rows, deviceId: req.user.did ?? null, storeId: req.user.sid ?? null, support: req.user.ro ? { readOnly: true } : null };
   });
 
   /** Two-step sign-in with an authenticator app (Google Authenticator, Microsoft Authenticator…). */

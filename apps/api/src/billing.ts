@@ -2,6 +2,7 @@
 // stops a shop that stopped paying from doing new work. Sales already made at the till
 // still sync while locked, so a shop never loses its records.
 import type { FastifyInstance, FastifyRequest } from "fastify";
+import { applyCoupon, type CouponRule } from "@pos/shared";
 import { HttpError, type TokenPayload } from "./auth";
 import type { Db, Tx } from "./db";
 
@@ -113,7 +114,7 @@ export async function assertWithinPlan(q: Db | Tx, tid: string, what: "devices" 
 export async function recordSubscriptionPayment(
   tx: Tx,
   tenantId: string,
-  p: { planCode?: string; months: number; amountMinor?: number; method: "cash" | "bank" | "card" | "other" | "online"; reference?: string | null; recordedBy: string | null },
+  p: { planCode?: string; months: number; amountMinor?: number; method: "cash" | "bank" | "card" | "other" | "online"; reference?: string | null; recordedBy: string | null; couponCode?: string | null },
 ) {
   const t = (await tx.query(`SELECT id, plan_code, paid_until FROM tenants WHERE id = $1 FOR UPDATE`, [tenantId])).rows[0];
   if (!t) throw new HttpError(404, "المحل غير موجود");
@@ -123,16 +124,36 @@ export async function recordSubscriptionPayment(
   // Days used during the grace period are paid for; a shop that was locked starts from today.
   const end = new Date(t.paid_until).getTime();
   const inGrace = Date.now() - end <= (await graceDays(tx)) * 86_400_000;
+  // A coupon takes a share off the price, or adds free months; each shop uses a coupon once.
+  const coupon = p.couponCode ? await findCoupon(tx, p.couponCode, tenantId, planCode, p.months) : null;
+  const deal = coupon ? applyCoupon(coupon, Number(plan.price_minor), p.months) : { amountMinor: Number(plan.price_minor) * p.months, discountMinor: 0, bonusMonths: 0 };
   const from = new Date(inGrace ? end : Date.now());
   const to = new Date(from);
-  to.setMonth(to.getMonth() + p.months);
-  const amount = p.amountMinor ?? plan.price_minor * p.months;
+  to.setMonth(to.getMonth() + p.months + deal.bonusMonths);
+  const amount = p.amountMinor ?? deal.amountMinor;
   const r = await tx.query(
-    `INSERT INTO subscription_payments (tenant_id, plan_code, months, amount_minor, method, reference, period_from, period_to, recorded_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
-    [tenantId, planCode, p.months, amount, p.method, p.reference ?? null, from, to, p.recordedBy],
+    `INSERT INTO subscription_payments (tenant_id, plan_code, months, amount_minor, method, reference, period_from, period_to, recorded_by, coupon_code, discount_minor, bonus_months)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id, invoice_no`,
+    [tenantId, planCode, p.months, amount, p.method, p.reference ?? null, from, to, p.recordedBy, coupon?.code ?? null, deal.discountMinor, deal.bonusMonths],
   );
+  if (coupon) {
+    await tx.query(`INSERT INTO coupon_redemptions (coupon_id, tenant_id, payment_id) VALUES ($1,$2,$3)`, [coupon.id, tenantId, r.rows[0].id]);
+    await tx.query(`UPDATE coupons SET used = used + 1 WHERE id = $1`, [coupon.id]);
+  }
   await tx.query(`UPDATE tenants SET status = 'active', status_reason = NULL, plan_code = $2, paid_until = $3 WHERE id = $1`, [tenantId, planCode, to]);
   forgetTenant(tenantId);
-  return { id: r.rows[0].id as string, paidUntil: to, amountMinor: amount, planCode };
+  return { id: r.rows[0].id as string, invoiceNo: Number(r.rows[0].invoice_no), paidUntil: to, amountMinor: amount, planCode, bonusMonths: deal.bonusMonths, discountMinor: deal.discountMinor };
+}
+
+/** A coupon this shop may use now on this plan and length, or a clear reason why not. */
+export async function findCoupon(q: Db | Tx, raw: string, tenantId: string, planCode: string, months: number): Promise<CouponRule & { id: string; code: string }> {
+  const code = raw.trim().toUpperCase();
+  const c = (await q.query(`SELECT * FROM coupons WHERE code = $1`, [code])).rows[0];
+  if (!c || !c.active) throw new HttpError(400, "الكوبون غير موجود");
+  if (c.valid_until && new Date(c.valid_until).getTime() < Date.now()) throw new HttpError(400, "الكوبون انتهت صلاحيته");
+  if (c.max_uses !== null && c.used >= c.max_uses) throw new HttpError(400, "الكوبون خلص عدد استعماله");
+  if (c.plan_code && c.plan_code !== planCode) throw new HttpError(400, "الكوبون مش لهالباقة");
+  if (months < c.min_months) throw new HttpError(400, `الكوبون يحتاج اشتراك ${c.min_months} شهر على الأقل`);
+  if ((await q.query(`SELECT 1 FROM coupon_redemptions WHERE coupon_id = $1 AND tenant_id = $2`, [c.id, tenantId])).rowCount) throw new HttpError(400, "استعملت هالكوبون من قبل");
+  return { id: c.id, code: c.code, kind: c.kind, value: Number(c.value) };
 }

@@ -25,6 +25,32 @@ function set(k: string, v: string | null) {
   }
 }
 
+// A platform support session (the owner allowed it): kept to this tab only, read only, and never
+// written over the owner's own sign-in on this browser.
+const SUPPORT = "pos.supportToken";
+function supportToken(): string | null {
+  try {
+    return sessionStorage.getItem(SUPPORT);
+  } catch {
+    return null;
+  }
+}
+export function startSupport(token: string) {
+  try {
+    sessionStorage.setItem(SUPPORT, token);
+  } catch {
+    /* no session storage: support mode can't start */
+  }
+}
+export function endSupport() {
+  try {
+    sessionStorage.removeItem(SUPPORT);
+  } catch {
+    /* nothing to clear */
+  }
+}
+export const supportMode = () => supportToken() !== null;
+
 export const session = {
   get deviceToken() {
     return get(KEYS.deviceToken);
@@ -62,9 +88,13 @@ export const session = {
   },
   /** Owner/manager session for the admin screens (from email + password). */
   get adminToken() {
-    return get(KEYS.admin);
+    return supportToken() ?? get(KEYS.admin);
   },
   set adminToken(v: string | null) {
+    if (supportMode()) {
+      if (v === null) endSupport();
+      return;
+    }
     set(KEYS.admin, v);
   },
 };

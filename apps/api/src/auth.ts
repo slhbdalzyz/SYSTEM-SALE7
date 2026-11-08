@@ -1,7 +1,7 @@
 import bcrypt from "bcryptjs";
 import { createHash, randomBytes } from "node:crypto";
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { effectivePermissions, type Permission, type Role } from "@pos/shared";
+import { effectivePermissions, platformCan, type Permission, type PlatformPerm, type PlatformRole, type Role } from "@pos/shared";
 
 export interface TokenPayload {
   sub: string; // user id
@@ -9,6 +9,15 @@ export interface TokenPayload {
   role: Role | "platform"; // "platform" = staff running the service, with no shop (tid is "")
   did?: string; // device id, present for cashier sessions on a registered device
   sid?: string; // store id of that device
+  ro?: boolean; // read-only: platform support looking at a shop, with the owner's consent
+  imp?: string; // the platform staff member behind a support session
+}
+
+declare module "fastify" {
+  interface FastifyRequest {
+    /** Set by platformGuard: the platform staff member making the call. */
+    platform?: { id: string; role: PlatformRole; agentId: string | null; name: string };
+  }
 }
 
 declare module "@fastify/jwt" {
@@ -39,16 +48,29 @@ export async function authenticate(req: FastifyRequest) {
     throw new HttpError(401, "غير مصرح");
   }
   if (req.user.role === "platform") throw new HttpError(403, "هذا حساب إدارة المنصة، مش حساب محل");
+  if (req.user.ro && req.method !== "GET" && req.method !== "HEAD") throw new HttpError(403, "وضع الدعم: قراءة بس، ما يقدرش يغيّر شي");
 }
 
-export async function requirePlatform(req: FastifyRequest) {
-  try {
-    await req.jwtVerify();
-  } catch {
-    throw new HttpError(401, "غير مصرح");
-  }
-  if (req.user.role !== "platform") throw new HttpError(403, "ليس لديك صلاحية");
+/**
+ * Platform staff only, and only what their role allows. The row is read on every call, so a staff
+ * member switched off or moved to another role is cut off at once, not when their token runs out.
+ */
+export function platformGuard(perm?: PlatformPerm) {
+  return async (req: FastifyRequest) => {
+    try {
+      await req.jwtVerify();
+    } catch {
+      throw new HttpError(401, "غير مصرح");
+    }
+    if (req.user.role !== "platform") throw new HttpError(403, "ليس لديك صلاحية");
+    const a = (await req.server.db.query(`SELECT id, name, role, agent_id, active FROM platform_admins WHERE id = $1`, [req.user.sub])).rows[0];
+    if (!a?.active) throw new HttpError(401, "الحساب موقوف");
+    req.platform = { id: a.id, role: a.role, agentId: a.agent_id, name: a.name };
+    if (perm && !platformCan(a.role, perm)) throw new HttpError(403, "ليس لديك صلاحية");
+  };
 }
+
+export const requirePlatform = platformGuard();
 
 export function requireRole(...roles: Role[]) {
   return async (req: FastifyRequest, _reply: FastifyReply) => {

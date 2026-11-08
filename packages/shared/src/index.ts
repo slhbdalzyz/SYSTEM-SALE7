@@ -14,3 +14,4 @@ export * from "./totp";
 export * from "./zakat";
 export * from "./loyalty";
 export * from "./quick";
+export * from "./platform";

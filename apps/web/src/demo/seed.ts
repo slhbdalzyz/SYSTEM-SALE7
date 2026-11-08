@@ -13,6 +13,7 @@ export async function seedDemo(db: Q) {
   if ((await db.query(`SELECT 1 FROM users LIMIT 1`)).rows.length) {
     await addPriceChecker(db);
     await addPlatform(db);
+    await addPlatformPro(db);
     await addSuppliers(db);
     await addBranch(db);
     await addOffers(db);
@@ -34,6 +35,7 @@ export async function seedDemo(db: Q) {
   await db.query(`INSERT INTO devices (tenant_id, store_id, name, prefix, token_hash) VALUES ($1,$2,'كاشير 1','P1',$3)`, [tid, sid, hashToken(DEMO_DEVICE_TOKEN)]);
   await addPriceChecker(db);
   await addPlatform(db);
+  await addPlatformPro(db);
   await db.query(`INSERT INTO customers (tenant_id, name, phone, credit_limit_minor) VALUES ($1,'محمد الطرابلسي','0912345678',200000), ($1,'مطعم الواحة','0923456789',NULL)`, [tid]);
   // Points are on, and a regular customer already has some to spend.
   await db.query(`UPDATE tenants SET loyalty = '{"enabled": true, "earnMinorPerPoint": 1000, "pointValueMinor": 10, "minRedeemPoints": 100}' WHERE id = $1`, [tid]);
@@ -322,6 +324,58 @@ async function addPlatform(db: Q) {
     if (name === "ملحمة الأصيل") await pay(tid, "basic", 2, 150000, 2, "cash");
     if (name === "أسواق الواحة") await pay(tid, "chain", 3, 700000, 0, "bank");
   }
+}
+
+/** The grown back office: a city agent, coupons, an announcement, a support ticket, a team member, a year of payments. */
+async function addPlatformPro(db: Q) {
+  if ((await db.query(`SELECT 1 FROM agents LIMIT 1`)).rows.length) return;
+  const aid = (await db.query(`SELECT id FROM platform_admins ORDER BY created_at LIMIT 1`)).rows[0]?.id as string | undefined;
+  if (!aid) return;
+  const agent = (await db.query(
+    `INSERT INTO agents (name, phone, city, code, commission_bp) VALUES ('علي المصراتي', '0913334455', 'مصراتة', 'MISR1', 1500) RETURNING id`,
+  )).rows[0].id as string;
+  await db.query(`UPDATE tenants SET agent_id = $1 WHERE name IN ('ملحمة الأصيل', 'بقالة النور')`, [agent]);
+  await db.query(`INSERT INTO agent_payouts (agent_id, amount_minor, note, paid_by) VALUES ($1, 20000, 'دفعة أكتوبر', $2)`, [agent, aid]);
+  await db.query(
+    `INSERT INTO platform_admins (name, email, password_hash, role) VALUES ('منى (دعم فني)', 'support@sale7.ly', $1, 'support')`,
+    [await bcrypt.hash("support12345", 8)],
+  );
+  await db.query(`INSERT INTO platform_admins (name, email, password_hash, role, agent_id) VALUES ('علي المصراتي', 'ali@agents.ly', $1, 'agent', $2)`, [await bcrypt.hash("agent12345", 8), agent]);
+  await db.query(
+    `INSERT INTO coupons (code, kind, value, min_months, max_uses, valid_until, note) VALUES
+       ('EID20', 'percent', 20, 3, 100, now() + interval '30 days', 'عرض العيد'),
+       ('WELCOME', 'months', 1, 6, NULL, NULL, 'شهر مجاني لمن يدفع 6 أشهر')`,
+  );
+  // A year of payments from the other shops, so the revenue charts have a shape.
+  const shops = (await db.query(`SELECT id, plan_code FROM tenants WHERE name IN ('ملحمة الأصيل', 'أسواق الواحة', 'صيدلية الشفاء') ORDER BY name`)).rows;
+  const price: Record<string, number> = { basic: 150000, pro: 300000, chain: 700000 };
+  for (let m = 3; m <= 11; m++) {
+    for (const [i, t] of shops.entries()) {
+      if ((m + i) % 3 === 0) continue;
+      await db.query(
+        `INSERT INTO subscription_payments (tenant_id, plan_code, months, amount_minor, method, period_from, period_to, recorded_by, created_at)
+         VALUES ($1,$2,1,$3,'bank', now() - make_interval(months => $4), now() - make_interval(months => $4 - 1), $5, now() - make_interval(months => $4) + make_interval(days => $6))`,
+        [t.id, t.plan_code, price[t.plan_code] ?? 150000, m, aid, i * 5],
+      );
+    }
+  }
+  await db.query(`UPDATE tenants SET created_at = now() - make_interval(months => 11) WHERE name IN ('ملحمة الأصيل', 'أسواق الواحة', 'صيدلية الشفاء')`);
+  await db.query(
+    `INSERT INTO announcements (title, body, level, created_by) VALUES ('ميزة جديدة: أزرار الكاشير', 'تقدر توا تحط أزرار للخبز والمياه والأكياس في شاشة الكاشير من «أزرار الكاشير». جرّبها!', 'promo', $1)`,
+    [aid],
+  );
+  const demo = (await db.query(`SELECT id FROM tenants WHERE name = 'سوبرماركت التجربة'`)).rows[0].id as string;
+  const owner = (await db.query(`SELECT id FROM users WHERE tenant_id = $1 AND role = 'owner' LIMIT 1`, [demo])).rows[0]?.id;
+  const k = (await db.query(`INSERT INTO support_tickets (tenant_id, user_id, subject, status, assigned_to) VALUES ($1,$2,'كيف نطبع ملصقات الباركود؟','answered',$3) RETURNING id`, [demo, owner, aid])).rows[0].id;
+  await db.query(
+    `INSERT INTO support_messages (ticket_id, author, user_id, admin_id, body, created_at) VALUES
+       ($1, 'shop', $2, NULL, 'عندي طابعة ملصقات صغيرة، كيف نطبع الباركود للأصناف الجديدة؟', now() - interval '2 hours'),
+       ($1, 'platform', NULL, $3, 'من «ملصقات الباركود» اختار الأصناف وحجم الملصق واضغط طباعة. لو الطابعة 40×30 اختار المقاس هذا من القائمة.', now() - interval '1 hour')`,
+    [k, owner, aid],
+  );
+  const other = (await db.query(`SELECT id FROM tenants WHERE name = 'ملحمة الأصيل'`)).rows[0].id;
+  const k2 = (await db.query(`INSERT INTO support_tickets (tenant_id, subject) VALUES ($1, 'الميزان ما يقراش الوزن') RETURNING id`, [other])).rows[0].id;
+  await db.query(`INSERT INTO support_messages (ticket_id, author, body) VALUES ($1, 'shop', 'ركبنا ميزان جديد والكاشير ما يقراش منه الوزن')`, [k2]);
 }
 
 /** A month and a half of pay for the demo cashier, so "my salary" and the payroll have something to show. */

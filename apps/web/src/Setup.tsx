@@ -161,6 +161,8 @@ function Register({ go, plans, onLogin, onBack }: { go: (s: Screen) => void; pla
     businessType: "grocery", businessName: "", storeName: "الفرع الرئيسي", city: "", phone: "",
     planCode: (() => { try { return sessionStorage.getItem("pos.plan") ?? "basic"; } catch { return "basic"; } })(),
     ownerName: "", email: "", password: "",
+    // A city agent's sign-up link (?ref=CODE) or the code they gave the owner.
+    agentCode: (() => { try { const r = new URLSearchParams(location.search).get("ref"); if (r) sessionStorage.setItem("pos.ref", r); return (r ?? sessionStorage.getItem("pos.ref") ?? "").toUpperCase(); } catch { return ""; } })(),
   }));
   const [show, setShow] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -182,7 +184,7 @@ function Register({ go, plans, onLogin, onBack }: { go: (s: Screen) => void; pla
     setBusy(true);
     setError(null);
     try {
-      const r = await api<{ token: string }>("/auth/register", { body: { ...f, phone: f.phone || undefined, city: f.city || undefined } });
+      const r = await api<{ token: string }>("/auth/register", { body: { ...f, phone: f.phone || undefined, city: f.city || undefined, agentCode: f.agentCode.trim() || undefined } });
       session.adminToken = r.token;
       go("admin");
     } catch (err) {
@@ -233,6 +235,7 @@ function Register({ go, plans, onLogin, onBack }: { go: (s: Screen) => void; pla
               ))}
             </div>
             <div className="muted">تقدر تغيّر الباقة بعدين من صفحة «الاشتراك». ما فيش دفع توا.</div>
+            <label>كود الوكيل (لو سجّلك وكيل، اختياري)<input value={f.agentCode} onChange={(e) => set({ agentCode: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "") })} maxLength={12} style={{ width: 160, direction: "ltr" }} /></label>
           </>
         )}
 
