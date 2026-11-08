@@ -4,8 +4,8 @@ import { tokenClaims, session } from "../session";
  * How the till looks and sounds for the cashier signed in: text size, a dark screen for long
  * evening shifts, and the scan beep. Kept on this device, per cashier.
  */
-export interface TillPrefs { size: "md" | "lg" | "xl"; dark: boolean; sound: boolean }
-export const DEFAULT_PREFS: TillPrefs = { size: "md", dark: false, sound: true };
+export interface TillPrefs { size: "md" | "lg" | "xl"; dark: boolean; sound: boolean; quickSize: "sm" | "md" | "lg"; quickPlace: "top" | "bottom" }
+export const DEFAULT_PREFS: TillPrefs = { size: "md", dark: false, sound: true, quickSize: "md", quickPlace: "top" };
 
 const key = () => `pos.prefs.${tokenClaims(session.staffToken)?.sub ?? "anon"}`;
 
