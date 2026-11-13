@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { creditRoom, formatMoney, formatQty, pointsEarned, pointsFor, readShopSettings, type CatalogCustomer, type CatalogProduct, type LoyaltySettings, type Offer, type PaymentMethod, type QuickGroup, type QuickKey, type ShopSettings, variantBaseName } from "@pos/shared";
+import { creditRoom, formatMoney, formatQty, pointsEarned, pointsFor, readShopSettings, type CatalogCustomer, type CatalogProduct, type LoyaltySettings, type Offer, type PaymentMethod, type QuickGroup, type QuickKey, type ShopSettings, expiryState, variantBaseName, type Prescription } from "@pos/shared";
 import { api } from "../api";
 import { db, getMeta, nextInvoiceNumber, setMeta, type HeldCart, type LocalShift } from "../localdb";
-import { findByCode, searchProducts, type Found } from "../lookup";
+import { alternatives, findByCode, searchProducts, type Found } from "../lookup";
 import { VariantPicker } from "./VariantPicker";
+import { RxDialog } from "./RxDialog";
 import { session, tokenClaims } from "../session";
-import { loadOffers, onSync, refreshCounts, startSyncLoop, syncNow, type SyncState } from "../sync";
+import { loadExpiry, loadOffers, onSync, refreshCounts, startSyncLoop, syncNow, type SyncState } from "../sync";
 import { autoBackupIfDue } from "../owner/backup";
 import type { Screen } from "../App";
 import { addLine, cartTotals, lineFor, lineTotal, priceCart, switchUnit, toSaleInput, type CartLine } from "./cart";
@@ -43,11 +44,12 @@ type Dialog =
   | { kind: "drawer" }
   | { kind: "prefs" }
   | { kind: "variant"; groupId: string; times: number }
+  | { kind: "rx" }
   | null;
 
 /** A customer being served. Several can be open at once, one tab each. */
-interface Tab { id: string; n: number; lines: CartLine[]; invoiceDiscount: number; customer: CatalogCustomer | null; selected: string | null }
-const emptyTab = (n: number): Tab => ({ id: crypto.randomUUID(), n, lines: [], invoiceDiscount: 0, customer: null, selected: null });
+interface Tab { id: string; n: number; lines: CartLine[]; invoiceDiscount: number; customer: CatalogCustomer | null; selected: string | null; prescription?: Prescription | null }
+const emptyTab = (n: number): Tab => ({ id: crypto.randomUUID(), n, lines: [], invoiceDiscount: 0, customer: null, selected: null, prescription: null });
 const today = () => new Date().toLocaleDateString("en-CA");
 const hhmm = (d: Date) => d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
 
@@ -78,6 +80,10 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   const [receipt, setReceipt] = useState<ReceiptData | null>(null);
   const [catalogSize, setCatalogSize] = useState(0);
   const [customer, setCustomer] = useState<CatalogCustomer | null>(null);
+  /** The prescription seen for this customer's prescription-only medicines. */
+  const [prescription, setPrescription] = useState<Prescription | null>(null);
+  /** The soonest expiry date on the shelf for each dated item, to warn before selling it. */
+  const [expiry, setExpiry] = useState<Map<string, string>>(new Map());
   /** The shop's points rules, kept on the device so points work offline too. */
   const [rules, setRules] = useState<LoyaltySettings | null>(null);
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -109,6 +115,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     return () => clearInterval(t);
   }, []);
   useEffect(() => void loadOffers().then(setOffers), [sync?.lastSync]);
+  useEffect(() => void loadExpiry().then(setExpiry), [sync?.lastSync]);
   const priced = useMemo(() => priceCart(lines, offers, new Date()), [lines, offers, minute]); // eslint-disable-line react-hooks/exhaustive-deps
   const totals = useMemo(() => cartTotals(priced.lines, invoiceDiscount), [priced, invoiceDiscount]);
 
@@ -279,6 +286,16 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   }, [lines, priced, totals, customer, receipt, display, device?.storeName]);
 
   function put(line: CartLine) {
+    // Dated goods: the batch on the shelf may be past its date. Asked once, when the item first goes in.
+    const exp = expiry.get(line.productId);
+    const isNew = !lines.some((l) => l.productId === line.productId);
+    if (exp && isNew) {
+      const st = expiryState(exp, today(), 30);
+      const date = exp.split("-").reverse().join("/");
+      if (st === "expired" && !confirm(`⚠️ «${line.name}» اللي في الرف منتهي الصلاحية (${date}).\nتأكد من التاريخ على العلبة. تبيعه؟`)) return flash("ما تباعش: منتهي الصلاحية", true);
+      if (st === "soon") flash(`⏳ «${line.name}» صلاحيته تخلص ${date}`);
+    }
+    if (line.rx && !prescription) setTimeout(() => setDialog({ kind: "rx" }), 0);
     // An item with no price yet: ask for one (if the settings allow), never sell it at zero.
     if (line.priceMinor <= 0) {
       if (!till.askPriceWhenZero) return flash(`«${line.name}» ما عندهش سعر بيع. حطله سعر من فاتورة التوريد أو الأصناف`, true);
@@ -366,6 +383,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     setInvoiceDiscount(0);
     setSelected(null);
     setCustomer(null);
+    setPrescription(null);
   }
 
   // ---- Several customers at once, one tab each ----
@@ -374,8 +392,9 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     setInvoiceDiscount(t.invoiceDiscount);
     setCustomer(t.customer);
     setSelected(t.selected);
+    setPrescription(t.prescription ?? null);
   }
-  const current = (): Tab => ({ ...(tabs.find((t) => t.id === activeTab) ?? emptyTab(1)), lines, invoiceDiscount, customer, selected });
+  const current = (): Tab => ({ ...(tabs.find((t) => t.id === activeTab) ?? emptyTab(1)), lines, invoiceDiscount, customer, selected, prescription });
   function switchTab(id: string) {
     if (id === activeTab) return;
     if (exchange) return flash("كمّل التبديل أول، أو ألغيه", true);
@@ -451,7 +470,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     if (!device) return;
     const id = crypto.randomUUID();
     const number = await nextInvoiceNumber(device.prefix);
-    const sale = toSaleInput({ id, number, shiftId: shift?.id ?? null, lines, offers, invoiceDiscountMinor: invoiceDiscount, payments, customerId: customer?.id, employeeId });
+    const sale = toSaleInput({ id, number, shiftId: shift?.id ?? null, lines, offers, invoiceDiscountMinor: invoiceDiscount, payments, customerId: customer?.id, employeeId, prescription: lines.some((l) => l.rx) ? prescription : null });
     const credit = payments.filter((p) => p.method === "credit").reduce((a, p) => a + p.amountMinor, 0);
     const paid = payments.reduce((a, p) => a + p.amountMinor, 0);
     // In an exchange, what the returned piece was worth and the new one does not use goes back in cash.
@@ -508,9 +527,23 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     focusScan();
   }
 
+  /** Other brands with the same scientific name, shown in the search list to pick from. */
+  async function showAlternatives() {
+    const l = lines.find((x) => x.key === selected);
+    const p = l && (await db.products.get(l.productId));
+    if (!p?.genericName) return flash("الصنف هذا ما عندهش اسم علمي", true);
+    const alts = await alternatives(p);
+    if (!alts.length) return flash(`ما فيش بدائل لـ«${p.genericName}»`, true);
+    setResults(alts);
+    setActiveResult(0);
+    flash(`بدائل ${p.genericName}: ${alts.length}`);
+    focusScan();
+  }
+
   /** Pay: in an exchange the returned piece's value pays first, and only the difference is asked for. */
   function startPay() {
     if (!lines.length || !shift) return;
+    if (lines.some((l) => l.rx) && !prescription) return setDialog({ kind: "rx" });
     if (exchange && totals.total <= exchange.creditMinor) return void pay([{ method: "cash", amountMinor: totals.total }]);
     setDialog({ kind: "pay" });
   }
@@ -665,6 +698,9 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   });
 
   const selectedLine = lines.find((l) => l.key === selected);
+  // Only shops with medicines (scientific names) get the alternatives key.
+  const [hasGeneric, setHasGeneric] = useState(false);
+  useEffect(() => void db.products.filter((p) => !!p.genericName).first().then((p) => setHasGeneric(!!p)), [catalogSize, sync?.lastSync]);
   const boss = role === "owner" || role === "manager";
   const canOverride = boss || till.cashierPriceChange;
   /** The biggest invoice discount this person may give, in percent of the bill. */
@@ -729,7 +765,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
               <div className="results">
                 {results.map((p, i) => (
                   <button key={p.id} className={i === activeResult ? "active" : ""} onClick={() => pick(p)}>
-                    <span>{p.variants ? <>{variantBaseName(p)} <small className="muted">👕 {p.variants} مقاس ولون</small></> : p.name}{p.isWeighted && " ⚖️"}</span>
+                    <span>{p.variants ? <>{variantBaseName(p)} <small className="muted">👕 {p.variants} مقاس ولون</small></> : p.name}{p.rx && " 💊"}{p.genericName && <small className="muted"> · {p.genericName}</small>}{p.isWeighted && " ⚖️"}</span>
                     <span className="num">{formatMoney((p.units.find((u) => u.isBase) ?? p.units[0]).priceMinor)}</span>
                   </button>
                 ))}
@@ -843,6 +879,11 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
                 {!!lastPaid.changeMinor && <b className="num">{formatMoney(lastPaid.changeMinor)}</b>}
               </div>
             )}
+            {lines.some((l) => l.rx) && (
+              <button className="ghost rx-box" onClick={() => setDialog({ kind: "rx" })}>
+                💊 {prescription ? `الوصفة: ${[prescription.doctor && `د. ${prescription.doctor}`, prescription.number && `رقم ${prescription.number}`].filter(Boolean).join(" · ") || "تم التأكيد"}` : "فيه دواء بوصفة: سجّل الوصفة"}
+              </button>
+            )}
             {customer && <CustomerBox c={customer} rules={rules} onClear={() => setCustomer(null)} />}
             {message && lines.length > 0 && <div className={message.bad ? "error" : "badge ok"} style={{ textAlign: "center" }}>{message.text}</div>}
             {receipt?.sale && !lines.length && (shop?.settings.whatsapp.offerAfterSale ?? true) && (
@@ -856,6 +897,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
             <button onClick={() => selected && setDialog({ kind: "price", key: selected })} disabled={!selected || !canOverride}>تعديل السعر <kbd>F5</kbd></button>
             <button onClick={() => setDialog({ kind: "discount" })} disabled={!lines.length || maxDiscount <= 0}>خصم على الفاتورة <kbd>F6</kbd></button>
             <button onClick={() => selectedLine && removeLine(selectedLine.key)} disabled={!selected} className="danger">حذف الصنف <kbd>Del</kbd></button>
+            {hasGeneric && <button onClick={() => void showAlternatives()} disabled={!selected}>💊 البدائل</button>}
             <button onClick={hold} disabled={!lines.length}>تعليق <kbd>F8</kbd></button>
             <button onClick={async () => setDialog({ kind: "held", carts: await db.held.toArray() })}>الفواتير المعلقة <kbd>F9</kbd></button>
             <button onClick={() => setDialog({ kind: "customer" })}>{customer ? `العميل: ${customer.name}` : "العميل / تسديد"} <kbd>F3</kbd></button>
@@ -982,6 +1024,12 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
         </Modal>
       )}
       {dialog?.kind === "drawer" && <DrawerDialog onDone={(k, m, r) => void drawerMove(k, m, r)} onClose={() => { setDialog(null); focusScan(); }} />}
+      {dialog?.kind === "rx" && (
+        <RxDialog initial={prescription} items={lines.filter((l) => l.rx).map((l) => l.name)}
+          onSave={(p) => { setPrescription(p); setDialog(null); focusScan(); }}
+          onRemove={() => { setLines((ls) => ls.filter((l) => !l.rx)); setSelected(null); setDialog(null); flash("شلنا الأدوية اللي تحتاج وصفة"); focusScan(); }}
+          onClose={() => { setDialog(null); focusScan(); }} />
+      )}
       {dialog?.kind === "variant" && (
         <VariantPicker groupId={dialog.groupId} onClose={() => { setDialog(null); focusScan(); }}
           onPick={(p) => { const times = dialog.times; setDialog(null); pick(p, times); }} />

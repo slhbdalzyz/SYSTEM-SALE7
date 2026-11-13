@@ -23,13 +23,15 @@ interface Form {
   active: boolean;
   trackExpiry: boolean;
   quick: boolean;
+  genericName: string;
+  rx: boolean;
   units: UnitForm[];
 }
 
 function toForm(p: CatalogProduct): Form {
   return {
     id: p.id, name: p.name, sku: p.sku ?? "", categoryId: p.categoryId ?? "", isWeighted: p.isWeighted, scaleCode: p.scaleCode ?? "",
-    cost: String(p.costMinor / 1000), minStock: String(p.minStockMilli / 1000), active: p.active, trackExpiry: !!p.trackExpiry, quick: !!p.quick,
+    cost: String(p.costMinor / 1000), minStock: String(p.minStockMilli / 1000), active: p.active, trackExpiry: !!p.trackExpiry, quick: !!p.quick, genericName: p.genericName ?? "", rx: !!p.rx,
     units: p.units.map((u) => ({ id: u.id, name: u.name, factor: String(u.factorMilli / 1000), price: String(u.priceMinor / 1000), barcodes: u.barcodes.join(", "), isBase: u.isBase })),
   };
 }
@@ -56,7 +58,7 @@ export function Products({ call, storeId, onLabels }: { call: Call; storeId: str
     const s = q.trim().toLowerCase();
     const inDept = dept === "all" ? rows : rows.filter((r) => (r.categoryId ?? "none") === dept);
     if (!s) return inDept;
-    return inDept.filter((r) => r.name.toLowerCase().includes(s) || r.units.some((u) => u.barcodes.some((b) => b.includes(s))));
+    return inDept.filter((r) => r.name.toLowerCase().includes(s) || r.genericName?.toLowerCase().includes(s) || r.units.some((u) => u.barcodes.some((b) => b.includes(s))));
   }, [rows, q, dept]);
   // Clothes: each model shows once, its sizes and colours on its own sheet.
   const folded = useMemo(() => foldVariants(shown), [shown]);
@@ -81,6 +83,8 @@ export function Products({ call, storeId, onLabels }: { call: Call; storeId: str
       active: form.active,
       trackExpiry: form.trackExpiry,
       quick: form.quick,
+      genericName: form.genericName.trim() || null,
+      rx: form.rx,
       units: form.units.map((u) => ({
         id: u.id,
         name: u.name,
@@ -125,6 +129,7 @@ export function Products({ call, storeId, onLabels }: { call: Call; storeId: str
               <button type="button" onClick={addCategory}>+</button>
             </div>
           </label>
+          <label>الاسم العلمي (للأدوية)<input value={form.genericName} onChange={(e) => setForm({ ...form, genericName: e.target.value })} placeholder="باراسيتامول…" /></label>
           <label>كود داخلي (SKU)<input value={form.sku} onChange={(e) => setForm({ ...form, sku: e.target.value })} /></label>
           <label>التكلفة للوحدة الأساسية<input className="num" value={form.cost} onChange={(e) => setForm({ ...form, cost: e.target.value })} title="تتحدث تلقائياً من فواتير التوريد" /></label>
           <label>حد التنبيه بالنقص<input className="num" value={form.minStock} onChange={(e) => setForm({ ...form, minStock: e.target.value })} /></label>
@@ -144,6 +149,10 @@ export function Products({ call, storeId, onLabels }: { call: Call; storeId: str
           <label className="row" style={{ color: "var(--ink)" }}>
             <input type="checkbox" style={{ width: "auto" }} checked={form.trackExpiry} onChange={(e) => setForm({ ...form, trackExpiry: e.target.checked })} />
             خاضع للصلاحية
+          </label>
+          <label className="row" style={{ color: "var(--ink)" }}>
+            <input type="checkbox" style={{ width: "auto" }} checked={form.rx} onChange={(e) => setForm({ ...form, rx: e.target.checked })} />
+            💊 بوصفة طبية
           </label>
           <label className="row" style={{ color: "var(--ink)" }} title="يطلع زر في شاشة الكاشير، للأصناف اللي ما عندهاش باركود">
             <input type="checkbox" style={{ width: "auto" }} checked={form.quick} onChange={(e) => setForm({ ...form, quick: e.target.checked })} />
@@ -212,7 +221,7 @@ export function Products({ call, storeId, onLabels }: { call: Call; storeId: str
               const low = p.stockMilli !== null && p.minStockMilli > 0 && p.stockMilli <= p.minStockMilli;
               return (
                 <tr key={p.id} style={{ opacity: p.active ? 1 : 0.5 }}>
-                  <td>{p.name}{p.isWeighted && <span className="muted"> ⚖️ {p.scaleCode}</span>}{p.trackExpiry && <span className="muted" title="خاضع للصلاحية"> ⏳</span>}{p.quick && <span title="زر سريع في الكاشير"> ⭐</span>}
+                  <td>{p.name}{p.isWeighted && <span className="muted"> ⚖️ {p.scaleCode}</span>}{p.trackExpiry && <span className="muted" title="خاضع للصلاحية"> ⏳</span>}{p.rx && <span title="بوصفة طبية"> 💊</span>}{p.genericName && <div className="muted" style={{ fontSize: ".85rem" }}>{p.genericName}</div>}{p.quick && <span title="زر سريع في الكاشير"> ⭐</span>}
                     {p.attrs && (p.attrs.color || p.attrs.size) && <div className="row" style={{ gap: 4 }}>{p.attrs.color && <span className="badge">🎨 {p.attrs.color}</span>}{p.attrs.size && <span className="badge">📏 {p.attrs.size}</span>}</div>}</td>
                   <td className="muted">{catName(p.categoryId) || "—"}</td>
                   <td>{p.units.map((u) => <div key={u.id}>{u.name}{!u.isBase && <span className="muted"> ({formatQty(u.factorMilli, false)})</span>}: {u.priceMinor ? <span className="num">{formatMoney(u.priceMinor)}</span> : <span className="muted">بدون سعر</span>}</div>)}</td>

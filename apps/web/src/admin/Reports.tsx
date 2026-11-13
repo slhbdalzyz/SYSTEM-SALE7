@@ -24,7 +24,7 @@ interface Inventory {
   byCategory: { name: string; icon: string | null; items: number; inStock: number; costValueMinor: number; retailValueMinor: number }[];
   slowMovers: { id: string; name: string; stockMilli: number; weighted: boolean; costValueMinor: number }[];
 }
-interface Expiring { product_id: string; name: string; is_weighted: boolean; expiry_date: string; days_left: number; received_milli: number; stock_milli: number; supplier_name: string | null }
+interface Expiring { product_id: string; name: string; is_weighted: boolean; expiry_date: string; days_left: number; received_milli: number; left_milli: number; stock_milli: number; supplier_name: string | null }
 
 const REPORTS = {
   overview: { icon: "📈", name: "المبيعات والأرباح", hint: "المبيعات والربح يوم بيوم وطرق الدفع" },
@@ -36,7 +36,8 @@ const REPORTS = {
   purchases: { icon: "🚚", name: "المشتريات والموردين", hint: "التوريد حسب المورد وطريقة الدفع" },
   sizes: { icon: "👕", name: "المقاسات والألوان", hint: "أي مقاس ولون يتباع، وكم باقي منه" },
   inventory: { icon: "📦", name: "قيمة المخزون", hint: "قيمة البضاعة بالتكلفة والبيع والراكد" },
-  expiry: { icon: "⏳", name: "قرب انتهاء الصلاحية", hint: "من تواريخ الصلاحية في فواتير التوريد" },
+  expiry: { icon: "⏳", name: "قرب انتهاء الصلاحية", hint: "الدفعات اللي في الرف وتواريخها" },
+  prescriptions: { icon: "💊", name: "سجل الوصفات", hint: "مبيعات الأدوية اللي بوصفة طبية" },
   daily: { icon: "📅", name: "تقرير يوم (إقفال)", hint: "تفاصيل يوم واحد للفرع" },
 } as const;
 type Kind = keyof typeof REPORTS;
@@ -103,7 +104,7 @@ export function Reports({ call, storeId, stores, initial }: { call: Call; storeI
             </div>
           )}
         </div>
-        {(NEEDS_PERIOD.includes(kind) || kind === "sizes") && (
+        {(NEEDS_PERIOD.includes(kind) || kind === "sizes" || kind === "prescriptions") && (
           <div className="row">
             <div className="chips">
               {Object.keys(PRESETS).map((p) => <button key={p} className={preset === p ? "active" : ""} onClick={() => { setPreset(p); setRange(PRESETS[p]()); }}>{p}</button>)}
@@ -121,6 +122,7 @@ export function Reports({ call, storeId, stores, initial }: { call: Call; storeI
         {data && kind === "cashiers" && <Cashiers d={data} />}
         {data && kind === "pnl" && <Pnl d={data} />}
         {data && kind === "purchases" && <Purchases d={data} />}
+        {kind === "prescriptions" && <PrescriptionsReport call={call} storeId={sid} from={from} to={to} />}
         {kind === "sizes" && <SizesReport call={call} storeId={sid} from={from} to={to} />}
         {kind === "inventory" && <InventoryReport call={call} storeId={sid} />}
         {kind === "expiry" && <ExpiryReport call={call} storeId={storeId} />}
@@ -356,13 +358,14 @@ function ExpiryReport({ call, storeId }: { call: Call; storeId: string }) {
       <div className="chips">
         {[7, 15, 30, 60, 90].map((n) => <button key={n} className={days === n ? "active" : ""} onClick={() => setDays(n)}>خلال {n} يوم</button>)}
       </div>
-      <Panel title="أصناف قربت صلاحيتها تخلص (ولازالت في المخزون)" onCsv={rows ? () => downloadCsv(`صلاحية-${days}-يوم`, ["الصنف", "تاريخ الصلاحية", "الأيام الباقية", "الكمية الواصلة", "المخزون الحالي", "المورد"], rows.map((r) => [r.name, r.expiry_date, r.days_left, r.received_milli / 1000, r.stock_milli / 1000, r.supplier_name ?? ""])) : undefined}>
-        {!rows ? <div className="muted">جاري التحميل…</div> : rows.length === 0 ? <div className="muted">ما فيش أصناف تنتهي خلال {days} يوم. (التواريخ تتسجل من فاتورة التوريد.)</div> : (
+      <Panel title="دفعات في الرف قربت صلاحيتها تخلص" onCsv={rows ? () => downloadCsv(`صلاحية-${days}-يوم`, ["الصنف", "تاريخ الصلاحية", "الأيام الباقية", "باقي من الدفعة", "وصل", "المخزون الحالي", "المورد"], rows.map((r) => [r.name, r.expiry_date, r.days_left, r.left_milli / 1000, r.received_milli / 1000, r.stock_milli / 1000, r.supplier_name ?? ""])) : undefined}>
+        {!rows ? <div className="muted">جاري التحميل…</div> : rows.length === 0 ? <div className="muted">ما فيش دفعات في الرف تنتهي خلال {days} يوم. (التواريخ تتسجل من فاتورة التوريد، والمخزون يتحسب من أحدث الدفعات لأن الأقدم يتباع أول.)</div> : (
           <table>
-            <thead><tr><th>الصنف</th><th>تاريخ الصلاحية</th><th /><th>وصل</th><th>المخزون الحالي</th><th>المورد</th></tr></thead>
+            <thead><tr><th>الصنف</th><th>تاريخ الصلاحية</th><th /><th>باقي من الدفعة</th><th>وصل</th><th>المخزون الحالي</th><th>المورد</th></tr></thead>
             <tbody>{rows.map((r) => (
               <tr key={`${r.product_id}-${r.expiry_date}`}>
-                <td>{r.name}</td><td className="num">{r.expiry_date.split("-").reverse().join("/")}</td><td>{badge(r.days_left)}</td>
+                <td>{r.name}</td><td className="num">{r.expiry_date.split("-").reverse().join("/")}</td><td style={{ whiteSpace: "nowrap" }}>{badge(r.days_left)}</td>
+                <td className="num"><b>{formatQty(r.left_milli, r.is_weighted)}</b></td>
                 <td className="num">{formatQty(r.received_milli, r.is_weighted)}</td><td className="num">{formatQty(r.stock_milli, r.is_weighted)}</td><td>{r.supplier_name ?? "—"}</td>
               </tr>
             ))}</tbody>
@@ -437,6 +440,50 @@ function SizesReport({ call, storeId, from, to }: { call: Call; storeId?: string
           })}
           <div className="muted" style={{ fontSize: ".85rem" }}>كل خانة: المباع في الفترة / الباقي في المخزون. البرتقالي باع كويس وقرّب يخلص، والأحمر خالص.</div>
         </div>
+      </Panel>
+    </>
+  );
+}
+
+interface RxSale { id: string; number: string; created_at: string; cashier: string; store: string; prescription: { doctor?: string; number?: string; patient?: string } | null; items: { name: string; qtyMilli: number }[] }
+
+/** Pharmacies: who sold which prescription-only medicine, against whose prescription. */
+function PrescriptionsReport({ call, storeId, from, to }: { call: Call; storeId?: string; from: string; to: string }) {
+  const [rows, setRows] = useState<RxSale[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    setRows(null);
+    setError(null);
+    call<RxSale[]>(`/reports/prescriptions?from=${from}&to=${to}${storeId ? `&storeId=${storeId}` : ""}`).then(setRows).catch((e) => setError((e as Error).message));
+  }, [call, storeId, from, to]);
+  if (error) return <div className="error">{error}</div>;
+  if (!rows) return <div className="muted">جاري التحميل…</div>;
+  const missing = rows.filter((r) => !r.prescription || !Object.keys(r.prescription).length).length;
+  const items = (r: RxSale) => r.items.map((i) => `${i.name} × ${formatQty(i.qtyMilli, false)}`).join("، ");
+  return (
+    <>
+      <div className="kpis">
+        <Kpi label="فواتير فيها دواء بوصفة" value={String(rows.length)} />
+        <Kpi label="بدون بيانات وصفة" value={String(missing)} tone={missing ? "bad" : "ok"} note={missing ? "من جهاز كان مقطوع أو بكتالوج قديم" : undefined} />
+      </div>
+      <Panel title="الوصفات" onCsv={() => downloadCsv(`وصفات-${from}-${to}`, ["التاريخ", "الفاتورة", "الطبيب", "رقم الوصفة", "المريض", "الأدوية", "الكاشير"],
+        rows.map((r) => [r.created_at.slice(0, 16).replace("T", " "), r.number, r.prescription?.doctor ?? "", r.prescription?.number ?? "", r.prescription?.patient ?? "", items(r), r.cashier]))}>
+        {rows.length === 0 ? <div className="muted">ما تباعش دواء بوصفة في الفترة هذي. (الأدوية اللي بوصفة تتعلّم «💊 بوصفة طبية» في بطاقة الصنف.)</div> : (
+          <table>
+            <thead><tr><th>التاريخ</th><th>الفاتورة</th><th>الطبيب</th><th>رقم الوصفة</th><th>المريض</th><th>الأدوية</th><th>الكاشير</th></tr></thead>
+            <tbody>{rows.map((r) => (
+              <tr key={r.id}>
+                <td className="num">{new Date(r.created_at).toLocaleString("en-GB", { dateStyle: "short", timeStyle: "short" })}</td>
+                <td className="num">{r.number}</td>
+                {r.prescription && Object.keys(r.prescription).length ? (
+                  <><td>{r.prescription.doctor ?? "—"}</td><td className="num">{r.prescription.number ?? "—"}</td><td>{r.prescription.patient ?? "—"}</td></>
+                ) : <td colSpan={3}><span className="badge bad">ما تسجلتش وصفة</span></td>}
+                <td>{items(r)}</td>
+                <td>{r.cashier}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        )}
       </Panel>
     </>
   );

@@ -50,7 +50,8 @@ export async function authRoutes(app: FastifyInstance) {
         `INSERT INTO users (tenant_id, name, email, password_hash, role) VALUES ($1,$2,$3,$4,'owner') RETURNING id`,
         [tid, b.ownerName, email, hash],
       );
-      await tx.query(b.businessType === "clothing" ? `SELECT pos_clothing_departments($1)` : `SELECT pos_default_departments($1)`, [tid]);
+      const departments = { clothing: "pos_clothing_departments", pharmacy: "pos_pharmacy_departments" }[b.businessType as string] ?? "pos_default_departments";
+      await tx.query(`SELECT ${departments}($1)`, [tid]);
       await audit(tx, { tenantId: tid, userId: u.rows[0].id, action: "tenant.register" });
       return { tid, sid: s.rows[0].id as string, uid: u.rows[0].id as string };
     });

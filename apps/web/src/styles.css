@@ -705,3 +705,4 @@ a.btn.primary { background: var(--brand); color: var(--brand-ink); border-color:
 .variant-grid .vg-stock.low { color: var(--warn); }
 .modal.wide { width: min(860px, 100%); }
 .exchange-tag { color: var(--brand); font-weight: 600; }
+.rx-box { text-align: start; border: 1px dashed var(--warn); color: var(--warn); }

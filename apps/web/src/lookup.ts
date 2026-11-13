@@ -46,13 +46,25 @@ export type Found = CatalogProduct & { variants?: number };
 export async function searchProducts(text: string, limit = 12): Promise<Found[]> {
   const words = norm(text).split(/\s+/).filter(Boolean);
   if (words.join("").length < 2) return [];
-  const hits = await db.products.filter((p) => p.active && words.every((w) => norm(p.name).includes(w))).limit(limit * 8).toArray();
+  // The scientific name counts too: "باراسيتامول" finds every brand that has it.
+  const hits = await db.products.filter((p) => {
+    if (!p.active) return false;
+    const hay = p.genericName ? `${norm(p.name)} ${norm(p.genericName)}` : norm(p.name);
+    return words.every((w) => hay.includes(w));
+  }).limit(limit * 8).toArray();
   return foldVariants(hits).slice(0, limit).map(({ item, count }) => (count > 1 ? { ...item, variants: count } : item));
 }
 
 /** All the pieces of one model still on sale. */
 export async function modelPieces(groupId: string): Promise<CatalogProduct[]> {
   return db.products.filter((p) => p.active && p.groupId === groupId).toArray();
+}
+
+/** Other medicines with the same scientific name, for when this one is out or too dear. */
+export async function alternatives(p: CatalogProduct): Promise<CatalogProduct[]> {
+  if (!p.genericName) return [];
+  const g = norm(p.genericName).trim();
+  return db.products.filter((x) => x.active && x.id !== p.id && !!x.genericName && norm(x.genericName).trim() === g).toArray();
 }
 
 /** Lower case, and the Arabic letters people type in more than one way made the same. */

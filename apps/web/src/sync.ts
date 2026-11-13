@@ -57,6 +57,16 @@ export async function syncOffers(token: string) {
   await setMeta("offers", list);
 }
 
+/** The soonest expiry date on this branch's shelf for each dated item, to warn at the till. */
+export async function syncExpiry(token: string) {
+  const list = await api<{ productId: string; expiry: string }[]>("/sync/expiry", { token });
+  await setMeta("expiry", list);
+}
+
+export async function loadExpiry(): Promise<Map<string, string>> {
+  return new Map(((await getMeta<{ productId: string; expiry: string }[]>("expiry")) ?? []).map((x) => [x.productId, x.expiry]));
+}
+
 export async function loadOffers() {
   return (await getMeta<Offer[]>("offers")) ?? [];
 }
@@ -118,6 +128,7 @@ export async function syncNow() {
     await syncCatalog(token);
     await syncCustomers(token);
     await syncOffers(token);
+    await syncExpiry(token);
     update({ online: true, lastSync: new Date().toISOString(), error: null });
   } catch (e) {
     const offline = e instanceof ApiError && e.status === 0;
