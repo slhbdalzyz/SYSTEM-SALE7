@@ -90,7 +90,7 @@ export async function printReceipt(data: ReceiptData, opts: { openDrawer?: boole
     return false;
   }
   await document.fonts?.ready;
-  const copies = data.copy ? 1 : Math.max(1, data.shop?.settings.receipt.copies ?? 1);
+  const copies = data.copy || data.kitchen ? 1 : Math.max(1, data.shop?.settings.receipt.copies ?? 1);
   for (let i = 0; i < copies; i++) {
     await send(receiptJob(await receiptBitmap(i ? { ...data, copy: true } : data, s.paper), { openDrawer: !i && opts.openDrawer && s.openDrawerOnCash }), s);
   }

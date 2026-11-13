@@ -11,11 +11,12 @@ const DemoBarLazy = import.meta.env.VITE_DEMO === "1" ? lazy(() => import("./dem
 const DemoBar = () => (DemoBarLazy ? <Suspense fallback={null}><DemoBarLazy /></Suspense> : null);
 import { CustomerDisplay } from "./display/CustomerDisplay";
 import { PriceChecker } from "./pricecheck/PriceChecker";
+import { Kitchen } from "./kitchen/Kitchen";
 import { Platform } from "./platform/Platform";
 import { Owner, prefersOwnerView } from "./owner/Owner";
 import { PublicReceipt } from "./public/PublicReceipt";
 
-export type Screen = "setup" | "pin" | "pos" | "admin" | "price" | "owner";
+export type Screen = "setup" | "pin" | "pos" | "admin" | "price" | "owner" | "kitchen";
 
 // Opened from the platform's support desk: this tab looks at the shop, read only.
 {
@@ -40,6 +41,7 @@ function initial(): Screen {
   // A notification tapped on the phone opens the owner's view, even on a till.
   if (new URLSearchParams(location.search).get("view") === "owner" && tokenValid(session.adminToken)) return "owner";
   if (session.deviceToken && session.deviceKind === "price_checker") return "price";
+  if (session.deviceToken && session.deviceKind === "kitchen") return "kitchen";
   if (session.deviceToken) return tokenValid(session.staffToken) ? "pos" : "pin";
   if (!tokenValid(session.adminToken)) return "setup";
   return prefersOwnerView() ? "owner" : "admin";
@@ -65,7 +67,7 @@ export function App() {
 function Main() {
   const [screen, setScreen] = useState<Screen>(initial);
   const page =
-    screen === "price" ? <PriceChecker go={setScreen} /> : screen === "owner" ? <Owner go={setScreen} /> : screen === "admin" ? <Admin go={setScreen} /> : screen === "pin" ? <PinScreen go={setScreen} /> : screen === "pos" ? <Cashier go={setScreen} /> : <Setup go={setScreen} />;
+    screen === "price" ? <PriceChecker go={setScreen} /> : screen === "kitchen" ? <Kitchen go={setScreen} /> : screen === "owner" ? <Owner go={setScreen} /> : screen === "admin" ? <Admin go={setScreen} /> : screen === "pin" ? <PinScreen go={setScreen} /> : screen === "pos" ? <Cashier go={setScreen} /> : <Setup go={setScreen} />;
   return (
     <>
       {supportMode() ? <SupportBanner /> : <DemoBar />}

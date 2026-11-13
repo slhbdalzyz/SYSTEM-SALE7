@@ -18,3 +18,4 @@ export * from "./platform";
 export * from "./variants";
 export * from "./pharmacy";
 export * from "./butcher";
+export * from "./restaurant";

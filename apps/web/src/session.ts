@@ -66,10 +66,10 @@ export const session = {
     set(KEYS.device, v ? JSON.stringify(v) : null);
   },
   /** "price_checker" turns this browser into a shelf price checker instead of a till. */
-  get deviceKind(): "pos" | "price_checker" | null {
-    return get(KEYS.kind) as "pos" | "price_checker" | null;
+  get deviceKind(): "pos" | "price_checker" | "kitchen" | null {
+    return get(KEYS.kind) as "pos" | "price_checker" | "kitchen" | null;
   },
-  set deviceKind(v: "pos" | "price_checker" | null) {
+  set deviceKind(v: "pos" | "price_checker" | "kitchen" | null) {
     set(KEYS.kind, v);
   },
   /** Cashier session on this device (from PIN). */

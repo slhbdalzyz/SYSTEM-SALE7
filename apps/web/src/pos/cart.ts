@@ -22,6 +22,8 @@ export interface CartLine {
   offerName?: string | null;
   /** A medicine sold only against a prescription. */
   rx?: boolean;
+  /** Restaurants: how the customer wants it (no onions). */
+  note?: string | null;
 }
 
 export function lineFor(product: CatalogProduct, unit: CatalogUnit, qtyMilli: number): CartLine {
@@ -58,7 +60,7 @@ export function switchUnit(line: CartLine, unitId: string): CartLine {
 /** Adds a line, or raises the quantity of the same counted item already in the cart. */
 export function addLine(lines: CartLine[], line: CartLine): { lines: CartLine[]; key: string } {
   if (!line.isWeighted) {
-    const same = lines.find((l) => l.unitId === line.unitId && l.priceMinor === line.priceMinor && l.discountMinor === 0);
+    const same = lines.find((l) => l.unitId === line.unitId && l.priceMinor === line.priceMinor && l.discountMinor === 0 && !l.note && !line.note);
     if (same) return { lines: lines.map((l) => (l === same ? { ...l, qtyMilli: l.qtyMilli + line.qtyMilli } : l)), key: same.key };
   }
   return { lines: [...lines, line], key: line.key };
@@ -88,7 +90,7 @@ export function lineTotal(l: CartLine) {
 }
 
 export function toSaleInput(
-  a: { id: string; number: string; shiftId: string | null; lines: CartLine[]; offers: Offer[]; invoiceDiscountMinor: number; payments: SaleInput["payments"]; customerId?: string | null; employeeId?: string | null; prescription?: SaleInput["prescription"] },
+  a: { id: string; number: string; shiftId: string | null; lines: CartLine[]; offers: Offer[]; invoiceDiscountMinor: number; payments: SaleInput["payments"]; customerId?: string | null; employeeId?: string | null; prescription?: SaleInput["prescription"]; orderType?: SaleInput["orderType"]; tableName?: string | null },
 ): SaleInput {
   const at = new Date();
   const lines = priceCart(a.lines, a.offers, at).lines;
@@ -109,6 +111,7 @@ export function toSaleInput(
       offerId: l.offerId ?? null,
       offerName: l.offerName ?? null,
       taxBp: l.taxBp,
+      ...(l.note ? { note: l.note } : {}),
     })),
     invoiceDiscountMinor: a.invoiceDiscountMinor,
     payments: a.payments,
@@ -116,5 +119,6 @@ export function toSaleInput(
     employeeId: a.employeeId ?? null,
     customerId: a.customerId ?? null,
     ...(a.prescription ? { prescription: a.prescription } : {}),
+    ...(a.orderType ? { orderType: a.orderType, tableName: a.tableName ?? null } : {}),
   };
 }

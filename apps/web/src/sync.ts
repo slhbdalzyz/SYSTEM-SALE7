@@ -67,6 +67,17 @@ export async function loadExpiry(): Promise<Map<string, string>> {
   return new Map(((await getMeta<{ productId: string; expiry: string }[]>("expiry")) ?? []).map((x) => [x.productId, x.expiry]));
 }
 
+export interface DiningTable { id: string; name: string; area: string | null; seats: number }
+
+/** This branch's tables, for restaurants: kept on the till so they work offline. */
+export async function syncTables(token: string) {
+  await setMeta("tables", await api<DiningTable[]>("/sync/tables", { token }));
+}
+
+export async function loadTables(): Promise<DiningTable[]> {
+  return (await getMeta<DiningTable[]>("tables")) ?? [];
+}
+
 export async function loadOffers() {
   return (await getMeta<Offer[]>("offers")) ?? [];
 }
@@ -100,6 +111,18 @@ export async function flushOutbox(token: string) {
       else await db.outbox.delete(item.seq!);
     }
   }
+  // Kitchen tickets: the kitchen screen gets them as soon as the line is up.
+  const tickets = items.filter((i) => i.kind === "kitchen");
+  for (let i = 0; i < tickets.length; i += 50) {
+    const chunk = tickets.slice(i, i + 50);
+    try {
+      await api("/kitchen/tickets", { token, body: { tickets: chunk.map((c) => c.payload) } });
+      await db.outbox.bulkDelete(chunk.map((c) => c.seq!));
+    } catch (e) {
+      if (e instanceof ApiError && e.status > 0) for (const c of chunk) await db.outbox.update(c.seq!, { error: e.message });
+      else throw e;
+    }
+  }
   for (const item of items.filter((i) => i.kind === "drawer")) {
     try {
       await api("/shifts/drawer", { token, body: item.payload });
@@ -129,6 +152,7 @@ export async function syncNow() {
     await syncCustomers(token);
     await syncOffers(token);
     await syncExpiry(token);
+    await syncTables(token);
     update({ online: true, lastSync: new Date().toISOString(), error: null });
   } catch (e) {
     const offline = e instanceof ApiError && e.status === 0;

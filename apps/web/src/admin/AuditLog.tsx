@@ -8,7 +8,7 @@ interface Row { id: number; created_at: string; action: string; entity: string |
 export const ACTIONS: Record<string, string> = {
   "user.login": "دخول للإدارة", "user.pin_login": "دخول للكاشير", "user.pin_failed": "رقم سري غلط", "user.2fa_on": "فعّل التحقق بخطوتين",
   "user.2fa_off": "وقّف التحقق بخطوتين", "user.2fa_failed": "رمز تحقق غلط", "user.create": "أضاف موظف", "user.update": "عدّل موظف",
-  "product.create": "أضاف صنف", "product.update": "عدّل صنف", "product.price_change": "غيّر سعر", "product.variants": "أضاف مقاسات وألوان", "stock.breakdown": "قطّع ذبيحة", "sale.rx_missing": "باع دواء بوصفة بدون ما يسجلها", "category.delete": "حذف قسم",
+  "product.create": "أضاف صنف", "product.update": "عدّل صنف", "product.price_change": "غيّر سعر", "product.variants": "أضاف مقاسات وألوان", "stock.breakdown": "قطّع ذبيحة", "product.recipe": "عدّل وصفة", "sale.rx_missing": "باع دواء بوصفة بدون ما يسجلها", "category.delete": "حذف قسم",
   "sale.discount": "خصم على فاتورة", "sale.return": "مرتجع", "sale.price_mismatch": "سعر مختلف عن السيرفر", "sale.offer_mismatch": "عرض مختلف عن السيرفر",
   "shift.open": "فتح وردية", "shift.close": "قفل وردية", "drawer.open": "فتح الدرج بدون بيع",
   "stock.adjust": "تعديل مخزون", "stock.count": "طبّق جرد", "stock.purchase": "فاتورة توريد", "transfer.send": "أرسل تحويل", "transfer.receive": "استلم تحويل", "transfer.cancel": "ألغى تحويل",

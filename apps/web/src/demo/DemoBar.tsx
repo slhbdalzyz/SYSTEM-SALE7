@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { DEMO } from "../api";
 import { session } from "../session";
-import { DEMO_CHECKER_TOKEN, DEMO_DEVICE_TOKEN, DEMO_PLATFORM } from "./seed";
+import { DEMO_CHECKER_TOKEN, DEMO_DEVICE_TOKEN, DEMO_KITCHEN_TOKEN, DEMO_PLATFORM } from "./seed";
 
 /** A strip on every screen of the demo with the logins to try, and a way to start over. */
 export function DemoBar() {
@@ -20,10 +20,29 @@ export function DemoBar() {
     location.reload();
   }
   const checker = session.deviceKind === "price_checker";
-  function switchDevice() {
-    session.deviceToken = checker ? DEMO_DEVICE_TOKEN : DEMO_CHECKER_TOKEN;
-    session.deviceKind = checker ? "pos" : "price_checker";
+  const kitchen = session.deviceKind === "kitchen";
+  function switchDevice(to: "pos" | "price_checker" | "kitchen") {
+    session.deviceToken = to === "kitchen" ? DEMO_KITCHEN_TOKEN : to === "price_checker" ? DEMO_CHECKER_TOKEN : DEMO_DEVICE_TOKEN;
+    session.deviceKind = to;
     session.staffToken = null;
+    location.reload();
+  }
+  let restaurant = false;
+  try {
+    restaurant = localStorage.getItem("pos.demoType") === "restaurant";
+  } catch {
+    /* storage blocked */
+  }
+  async function switchType() {
+    const next = restaurant ? "grocery" : "restaurant";
+    const { setDemoBusiness } = await import("./server");
+    await setDemoBusiness(next);
+    try {
+      localStorage.setItem("pos.demoType", next);
+    } catch {
+      /* storage blocked */
+    }
+    if (next === "grocery" && kitchen) return switchDevice("pos");
     location.reload();
   }
   const q = new URLSearchParams(location.search);
@@ -46,7 +65,9 @@ export function DemoBar() {
       )}
       <span className="spacer" />
       <a href={platform ? location.pathname : "?app=platform"}><button type="button">{platform ? "شاشة المحل" : "لوحة المنصة"}</button></a>
-      {!platform && <button onClick={switchDevice}>{checker ? "رجوع للكاشير" : "جرّب قارئ الأسعار"}</button>}
+      {!platform && <button onClick={() => void switchType()}>{restaurant ? "🛒 رجوع للسوبرماركت" : "🍽️ جرّب كمطعم"}</button>}
+      {!platform && restaurant && <button onClick={() => switchDevice(kitchen ? "pos" : "kitchen")}>{kitchen ? "رجوع للكاشير" : "👨‍🍳 شاشة المطبخ"}</button>}
+      {!platform && !kitchen && <button onClick={() => switchDevice(checker ? "pos" : "price_checker")}>{checker ? "رجوع للكاشير" : "جرّب قارئ الأسعار"}</button>}
       <button onClick={() => setOpen(!open)}>{open ? "إخفاء" : "عرض"}</button>
       <button onClick={reset}>بيانات جديدة</button>
     </div>

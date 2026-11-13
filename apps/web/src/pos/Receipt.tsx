@@ -1,4 +1,5 @@
 import type { SaleInput, ShopSettings } from "@pos/shared";
+import type { KitchenLine, OrderType } from "@pos/shared";
 import { receiptRows } from "../hardware/receiptImage";
 import type { ReturnDone } from "./ReturnDialog";
 import type { ShiftReport } from "./shiftReport";
@@ -26,6 +27,8 @@ export interface ReceiptData {
   points?: { earned: number; spent: number; balance: number };
   /** The shift-close (Z) report. */
   shift?: ShiftReport;
+  /** A slip for the kitchen: what to make, with no prices. */
+  kitchen?: { label: string; orderType: OrderType; at: string; lines: KitchenLine[] };
 }
 
 /**
