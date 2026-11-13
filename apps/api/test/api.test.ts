@@ -2108,3 +2108,82 @@ describe("pharmacy: scientific names, prescriptions and expiry by batch", () => 
     expect(rep.find((r: { id: string }) => r.id === without.id).prescription).toEqual({});
   });
 });
+
+describe("butcher: today's prices and carcasses cut into pieces", () => {
+  let t: string;
+  let store: string;
+  const p: Record<string, { id: string; unit: string }> = {};
+  const fresh = async (url: string, body: unknown) => (await app.inject({ method: "POST", url, payload: body as object, remoteAddress: "10.0.2.96" })).json();
+  const stock = async (id: string) => (await call("GET", `/products?storeId=${store}`, t)).body.find((x: { id: string }) => x.id === id);
+
+  it("gives a new butcher its departments", async () => {
+    const r = await fresh("/auth/register", { businessName: "جزارة الخير", storeName: "الرئيسي", ownerName: "مفتاح", email: "cuts@test.ly", password: "password123", businessType: "butcher" });
+    t = r.token;
+    store = r.storeId;
+    const names = (await call("GET", "/categories", t)).body.map((c: { name: string }) => c.name);
+    expect(names).toEqual(expect.arrayContaining(["ذبائح كاملة", "لحم غنمي", "دجاج"]));
+    expect(names).not.toContain("المعلبات");
+    for (const [key, name, price, cost, plu] of [["lamb", "خروف كامل", 0, 40000, "4001"], ["leg", "فخذ", 80000, 0, "4002"], ["ribs", "ريش", 90000, 0, "4003"], ["bone", "عظم", 10000, 0, "4004"]] as const) {
+      const x = await call("POST", "/products", t, { name, isWeighted: true, scaleCode: plu, costMinor: cost, units: [{ name: "كغ", priceMinor: price, isBase: true }] });
+      p[key] = { id: x.body.id, unit: x.body.units[0].id };
+    }
+    await call("POST", "/stock/adjust", t, { storeId: store, productId: p.lamb.id, qtyMilli: 40000, reason: "شراء" });
+  });
+
+  it("cuts a carcass: stock moves, the loss is shown, and the cost follows what each cut sells for", async () => {
+    const r = await call("POST", "/butcher/breakdowns", t, {
+      storeId: store, sourceProductId: p.lamb.id, sourceQtyMilli: 20000,
+      lines: [{ productId: p.leg.id, qtyMilli: 8000 }, { productId: p.ribs.id, qtyMilli: 4000 }, { productId: p.bone.id, qtyMilli: 4000 }],
+    });
+    expect(r.status).toBe(200);
+    // 20 kg at 40 LYD; 16 kg out, 4 kg lost.
+    expect(r.body).toMatchObject({ costMinor: 800000, outMilli: 16000, wasteMilli: 4000, yieldBp: 8000 });
+    const cost = Object.fromEntries(r.body.lines.map((l: { productId: string; costMinor: number }) => [l.productId, l.costMinor]));
+    expect(cost[p.leg.id] + cost[p.ribs.id] + cost[p.bone.id]).toBe(800000);
+    // Value 640 + 360 + 40 = 1040: the leg carries 640/1040 of the cost.
+    expect(cost[p.leg.id]).toBe(Math.round((800000 * 640) / 1040));
+    expect((await stock(p.lamb.id)).stockMilli).toBe(20000);
+    const leg = await stock(p.leg.id);
+    expect(leg.stockMilli).toBe(8000);
+    expect(leg.costMinor).toBe(Math.round((cost[p.leg.id] * 1000) / 8000));
+    // Bone a kilo costs far less than the leg.
+    expect((await stock(p.bone.id)).costMinor).toBeLessThan(leg.costMinor / 5);
+    const audit = (await call("GET", "/audit", t)).body;
+    expect(JSON.stringify(audit)).toContain("stock.breakdown");
+  });
+
+  it("refuses cuts heavier than the carcass, the carcass as its own cut, or a cut twice", async () => {
+    const base = { storeId: store, sourceProductId: p.lamb.id, sourceQtyMilli: 10000 };
+    expect((await call("POST", "/butcher/breakdowns", t, { ...base, lines: [{ productId: p.leg.id, qtyMilli: 11000 }] })).status).toBe(400);
+    expect((await call("POST", "/butcher/breakdowns", t, { ...base, lines: [{ productId: p.lamb.id, qtyMilli: 1000 }] })).status).toBe(400);
+    expect((await call("POST", "/butcher/breakdowns", t, { ...base, lines: [{ productId: p.leg.id, qtyMilli: 1000 }, { productId: p.leg.id, qtyMilli: 1000 }] })).status).toBe(400);
+  });
+
+  it("averages the cost with what is already on the shelf, and takes a cost typed by hand", async () => {
+    const before = await stock(p.leg.id);
+    const r = await call("POST", "/butcher/breakdowns", t, { storeId: store, sourceProductId: p.lamb.id, sourceQtyMilli: 10000, costMinor: 300000, lines: [{ productId: p.leg.id, qtyMilli: 8000 }] });
+    expect(r.body.costMinor).toBe(300000);
+    const after = await stock(p.leg.id);
+    expect(after.stockMilli).toBe(16000);
+    expect(after.costMinor).toBe(Math.round((before.costMinor * 8 + 300000) / 16));
+  });
+
+  it("remembers the usual cuts and lists past breakdowns", async () => {
+    const u = (await call("GET", `/butcher/usual/${p.lamb.id}`, t)).body;
+    expect(u.breakdowns).toBe(2);
+    expect(u.cuts[0].productId).toBe(p.leg.id);
+    expect(u.cuts.map((c: { productId: string }) => c.productId)).toEqual(expect.arrayContaining([p.ribs.id, p.bone.id]));
+    const h = (await call("GET", `/butcher/breakdowns?storeId=${store}`, t)).body;
+    expect(h).toHaveLength(2);
+    expect(h[1]).toMatchObject({ source_qty_milli: 20000, wasteMilli: 4000 });
+  });
+
+  it("changes the day's prices in one go and logs each change", async () => {
+    const r = await call("POST", "/prices/bulk", t, { items: [{ unitId: p.leg.unit, priceMinor: 85000 }, { unitId: p.ribs.unit, priceMinor: 90000 }] });
+    expect(r.body.changed).toBe(1);
+    expect((await stock(p.leg.id)).units[0].priceMinor).toBe(85000);
+    expect((await call("POST", "/prices/bulk", t, { items: [{ unitId: randomUUID(), priceMinor: 1 }] })).status).toBe(400);
+    const audit = JSON.stringify((await call("GET", "/audit", t)).body);
+    expect(audit).toContain("product.price_change");
+  });
+});

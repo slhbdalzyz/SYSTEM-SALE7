@@ -14,6 +14,7 @@ import { Purchasing } from "./Purchasing";
 import { Branches } from "./Branches";
 import { Offers } from "./Offers";
 import { Labels, type LabelDraft } from "./Labels";
+import { Butcher } from "./Butcher";
 import { Subscription, subNotice, type Sub } from "./Subscription";
 import { Expenses } from "./Expenses";
 import { Alerts } from "../owner/Alerts";
@@ -34,7 +35,7 @@ import { Announcements, Support } from "./Support";
 
 export interface Me {
   user: { id: string; name: string; role: string; job_title?: string | null; permissions: Permission[] };
-  tenant: { id: string; name: string; currency: string; features?: Record<Feature, boolean> };
+  tenant: { id: string; name: string; currency: string; business_type?: string; features?: Record<Feature, boolean> };
   stores: { id: string; name: string; address: string | null; receipt_footer: string | null; active: boolean }[];
 }
 
@@ -43,7 +44,7 @@ export type Call = <T>(path: string, opts?: { method?: string; body?: unknown })
 /** The owner's screens, grouped as they appear in the side menu. */
 const NAV = [
   { group: "", items: { home: ["🏠", "لوحة التحكم"], paper: ["📒", "من الدفتر للنظام"], reports: ["📊", "التقارير"], alerts: ["🔔", "التنبيهات"] } },
-  { group: "المخزون", items: { products: ["📦", "الأصناف والأقسام"], purchasing: ["🚚", "المشتريات والموردين"], branches: ["🏬", "الفروع والتحويلات"], counts: ["📋", "جرد المخزون"], labels: ["🏷️", "ملصقات الباركود"], quick: ["🔘", "أزرار الكاشير"] } },
+  { group: "المخزون", items: { products: ["📦", "الأصناف والأقسام"], purchasing: ["🚚", "المشتريات والموردين"], branches: ["🏬", "الفروع والتحويلات"], counts: ["📋", "جرد المخزون"], labels: ["🏷️", "ملصقات الباركود"], quick: ["🔘", "أزرار الكاشير"], butcher: ["🔪", "أسعار اليوم والتقطيع"] } },
   { group: "المبيعات", items: { invoices: ["🧾", "المبيعات والفواتير"], customers: ["👥", "العملاء والديون"], offers: ["🎁", "العروض"] } },
   { group: "المال", items: { money: ["🏦", "الخزينة والأرصدة"], expenses: ["💸", "المصروفات"], zakat: ["🕌", "الزكاة"] } },
   { group: "الموظفين", items: { staff: ["🧑‍💼", "الموظفين والصلاحيات"], payroll: ["💰", "الرواتب"], mypay: ["💼", "راتبي"] } },
@@ -55,7 +56,7 @@ const TABS = Object.assign({}, ...NAV.map((g) => g.items)) as Record<Tab, readon
 
 /** What opens each screen. "owner" = the shop owner only; null = everyone (their own pay). */
 const NEEDS: Record<Tab, Permission | "owner" | null> = {
-  home: "reports", paper: "owner", reports: "reports", alerts: "alerts", products: "products", purchasing: "purchasing", branches: "branches", counts: "products", labels: "products", quick: "products",
+  home: "reports", paper: "owner", reports: "reports", alerts: "alerts", products: "products", purchasing: "purchasing", branches: "branches", counts: "products", labels: "products", quick: "products", butcher: "products",
   invoices: "sales", settings: "settings", customers: "customers", offers: "offers", expenses: "expenses", money: "money", staff: "staff", payroll: "payroll", mypay: null, devices: "devices",
   backup: "owner", subscription: "owner", audit: "owner", zakat: "owner", support: "settings",
 };
@@ -126,6 +127,8 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
 
   const isOwner = me.user.role === "owner";
   const can = (t: Tab) => {
+    // Daily prices and cutting carcasses: for butchers, and grocers with a meat and vegetable counter.
+    if (t === "butcher" && !["butcher", "grocery"].includes(me.tenant.business_type ?? "grocery")) return false;
     const f = FEATURE_OF[t];
     if (f && me.tenant.features && me.tenant.features[f] === false) return false;
     const n = NEEDS[t];
@@ -190,6 +193,7 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
           {shown === "audit" && <AuditLog call={call} />}
           {shown === "quick" && <QuickKeys call={call} stores={open} />}
           {shown === "zakat" && <Zakat call={call} open={setTab} />}
+          {shown === "butcher" && <Butcher call={call} storeId={store.id} />}
           {shown === "labels" && <Labels call={call} storeId={store.id} storeName={me.tenant.name} draft={labelDraft} clearDraft={() => setLabelDraft(null)} />}
           {shown === "branches" && <Branches call={call} storeId={store.id} isOwner={isOwner} onStoresChanged={loadMe} />}
           {shown === "offers" && <Offers call={call} storeId={store.id} stores={me.stores} />}
