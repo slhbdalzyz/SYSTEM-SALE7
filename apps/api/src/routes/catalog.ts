@@ -147,6 +147,30 @@ function pgConflict(e: unknown): never {
   throw e;
 }
 
+/** Every colour with every size; a model can come in colours only, or sizes only. */
+function combine(colors: string[], sizes: string[]): Record<string, string>[] {
+  if (!colors.length && !sizes.length) return [];
+  const out: Record<string, string>[] = [];
+  for (const color of colors.length ? colors : [null]) for (const size of sizes.length ? sizes : [null]) out.push({ ...(color ? { color } : {}), ...(size ? { size } : {}) });
+  return out;
+}
+
+/** Makes one card per combination, named "model - colour - size", in the model's group. */
+async function makePieces(tx: Tx, tenantId: string, group: string, combos: Record<string, string>[], t: {
+  name: string; categoryId?: string | null; unitName: string; priceMinor: number; costMinor: number; minStockMilli: number;
+}) {
+  const out: string[] = [];
+  for (const a of combos) {
+    const id = await saveProduct(tx, tenantId, null, {
+      name: [t.name, a.color, a.size].filter(Boolean).join(" - "), categoryId: t.categoryId ?? null, autoCode: true, minStockMilli: t.minStockMilli, costMinor: t.costMinor,
+      units: [{ name: t.unitName, factorMilli: 1000, priceMinor: t.priceMinor, isBase: true, barcodes: [] }],
+    });
+    await tx.query(`UPDATE products SET group_id = $2, attrs = $3 WHERE id = $1`, [id, group, JSON.stringify(a)]);
+    out.push(id);
+  }
+  return out;
+}
+
 export async function catalogRoutes(app: FastifyInstance) {
   const managers = { preHandler: requirePerm("products") };
 
@@ -261,29 +285,108 @@ export async function catalogRoutes(app: FastifyInstance) {
       priceMinor: z.number().int().nonnegative().default(0),
       costMinor: z.number().int().nonnegative().default(0),
     }).parse(req.body);
-    const sizes = [...new Set(b.sizes)];
-    const colors = [...new Set(b.colors)];
-    if (!sizes.length && !colors.length) throw new HttpError(400, "حط مقاس أو لون واحد على الأقل");
-    const combos: Record<string, string>[] = [];
-    for (const color of colors.length ? colors : [null]) for (const size of sizes.length ? sizes : [null]) combos.push({ ...(color ? { color } : {}), ...(size ? { size } : {}) });
+    const combos = combine([...new Set(b.colors)], [...new Set(b.sizes)]);
+    if (!combos.length) throw new HttpError(400, "حط مقاس أو لون واحد على الأقل");
     if (combos.length > 100) throw new HttpError(400, "أكثر من 100 نوع، قسّمهم");
     const ids = await inTx(app.db, async (tx) => {
       const group = (await tx.query(`SELECT gen_random_uuid() AS g`)).rows[0].g as string;
-      const out: string[] = [];
-      for (const a of combos) {
-        const name = [b.name, a.color, a.size].filter(Boolean).join(" - ");
-        const id = await saveProduct(tx, req.user.tid, null, {
-          name, categoryId: b.categoryId ?? null, autoCode: true, minStockMilli: b.minStockMilli, costMinor: b.costMinor,
-          units: [{ name: b.unitName, factorMilli: 1000, priceMinor: b.priceMinor, isBase: true, barcodes: [] }],
-        });
-        await tx.query(`UPDATE products SET group_id = $2, attrs = $3 WHERE id = $1`, [id, group, JSON.stringify(a)]);
-        out.push(id);
-      }
-      return out;
+      return makePieces(tx, req.user.tid, group, combos, b);
     });
     await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "product.variants", entity: "product", entityId: ids[0], data: { name: b.name, count: ids.length } });
     const made = await loadProducts(app.db, req.user.tid, { ids });
     return made.sort((x, y) => ids.indexOf(x.id) - ids.indexOf(y.id)); // colour by colour, sizes in the order given
+  });
+
+  const groupParams = z.object({ group: z.string().uuid() });
+  /** A model's pieces, each with its colour and size, and the settings they share taken from the first. */
+  async function loadModel(q: Db | Tx, tenantId: string, group: string) {
+    const rows = (await q.query(
+      `SELECT p.id, p.name, p.attrs, p.category_id, p.cost_minor, p.min_stock_milli, p.active, u.name AS unit_name, u.price_minor
+       FROM products p JOIN product_units u ON u.product_id = p.id AND u.is_base
+       WHERE p.tenant_id = $1 AND p.group_id = $2 ORDER BY p.name`,
+      [tenantId, group],
+    )).rows;
+    if (!rows.length) throw new HttpError(404, "الموديل غير موجود");
+    const first = rows[0];
+    const attrs = (r: { attrs: Record<string, string> | null }) => r.attrs ?? {};
+    let name = first.name as string;
+    for (const v of [attrs(first).size, attrs(first).color]) if (v && name.endsWith(` - ${v}`)) name = name.slice(0, -(v.length + 3));
+    return {
+      rows,
+      name,
+      colors: [...new Set(rows.map((r) => attrs(r).color).filter(Boolean))] as string[],
+      sizes: [...new Set(rows.map((r) => attrs(r).size).filter(Boolean))] as string[],
+      template: { name, categoryId: first.category_id, unitName: first.unit_name, priceMinor: Number(first.price_minor), costMinor: Number(first.cost_minor), minStockMilli: Number(first.min_stock_milli) },
+    };
+  }
+
+  /**
+   * Changes what every piece of a model shares in one go: the name, department, sale price, cost
+   * and low-stock line. A price change is logged once, for the whole model.
+   */
+  app.patch("/products/groups/:group", managers, async (req) => {
+    const { group } = groupParams.parse(req.params);
+    const b = z.object({
+      name: z.string().trim().min(2).max(160).optional(),
+      categoryId: z.string().uuid().nullable().optional(),
+      priceMinor: z.number().int().nonnegative().optional(),
+      costMinor: z.number().int().nonnegative().optional(),
+      minStockMilli: z.number().int().nonnegative().optional(),
+      active: z.boolean().optional(),
+    }).parse(req.body);
+    const tid = req.user.tid;
+    const before = await loadModel(app.db, tid, group);
+    if (b.categoryId && !(await app.db.query(`SELECT 1 FROM categories WHERE id = $1 AND tenant_id = $2`, [b.categoryId, tid])).rowCount) throw new HttpError(400, "التصنيف غير موجود");
+    await inTx(app.db, async (tx) => {
+      for (const r of before.rows) {
+        const a = (r.attrs ?? {}) as Record<string, string>;
+        const name = b.name ? [b.name, a.color, a.size].filter(Boolean).join(" - ") : null;
+        await tx.query(
+          `UPDATE products SET name = COALESCE($2, name), category_id = CASE WHEN $3::boolean THEN $4::uuid ELSE category_id END,
+             cost_minor = COALESCE($5, cost_minor), min_stock_milli = COALESCE($6, min_stock_milli), active = COALESCE($7, active), updated_at = now()
+           WHERE id = $1`,
+          [r.id, name, b.categoryId !== undefined, b.categoryId ?? null, b.costMinor ?? null, b.minStockMilli ?? null, b.active ?? null],
+        );
+        if (b.priceMinor !== undefined) await tx.query(`UPDATE product_units SET price_minor = $2 WHERE product_id = $1 AND is_base`, [r.id, b.priceMinor]);
+      }
+    });
+    const prices = [...new Set(before.rows.map((r) => Number(r.price_minor)))];
+    const priceChanged = b.priceMinor !== undefined && (prices.length > 1 || prices[0] !== b.priceMinor);
+    await audit(app.db, {
+      tenantId: tid, userId: req.user.sub, action: priceChanged ? "product.price_change" : "product.update", entity: "product", entityId: before.rows[0].id,
+      data: { model: b.name ?? before.name, pieces: before.rows.length, ...(priceChanged ? { priceChanges: [{ unit: before.template.unitName, from: prices.length === 1 ? prices[0] : null, to: b.priceMinor }] } : {}) },
+    });
+    return { ok: true, pieces: before.rows.length };
+  });
+
+  /**
+   * New colours or sizes for a model already on the shelf: makes only the combinations it does not
+   * have yet, at the model's price, each with its own barcode.
+   */
+  app.post("/products/groups/:group/add", managers, async (req) => {
+    const { group } = groupParams.parse(req.params);
+    const b = z.object({
+      sizes: z.array(z.string().trim().min(1).max(20)).max(20).default([]),
+      colors: z.array(z.string().trim().min(1).max(30)).max(20).default([]),
+    }).parse(req.body);
+    const tid = req.user.tid;
+    const ids = await inTx(app.db, async (tx) => {
+      await tx.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`model:${group}`]);
+      const m = await loadModel(tx, tid, group);
+      const colors = [...new Set([...m.colors, ...b.colors])];
+      const sizes = [...new Set([...m.sizes, ...b.sizes])];
+      // A model made without colours (or sizes) stays without them.
+      if (b.colors.length && !m.colors.length && m.rows.length) throw new HttpError(400, "الموديل هذا ما عندهش ألوان، اعمله موديل جديد");
+      if (b.sizes.length && !m.sizes.length && m.rows.length) throw new HttpError(400, "الموديل هذا ما عندهش مقاسات، اعمله موديل جديد");
+      const have = new Set(m.rows.map((r) => `${r.attrs?.color ?? ""}\u0000${r.attrs?.size ?? ""}`));
+      const missing = combine(colors, sizes).filter((a) => !have.has(`${a.color ?? ""}\u0000${a.size ?? ""}`));
+      if (!missing.length) throw new HttpError(400, "كل المقاسات والألوان هذي موجودة من قبل");
+      if (m.rows.length + missing.length > 150) throw new HttpError(400, "الموديل وصل 150 نوع، اعمل موديل جديد");
+      return makePieces(tx, tid, group, missing, m.template);
+    });
+    await audit(app.db, { tenantId: tid, userId: req.user.sub, action: "product.variants", entity: "product", entityId: ids[0], data: { added: ids.length } });
+    const made = await loadProducts(app.db, tid, { ids });
+    return made.sort((x, y) => ids.indexOf(x.id) - ids.indexOf(y.id));
   });
 
   /** Gives a unit its own in-store barcode when it came without one (loose bread, local products…). */

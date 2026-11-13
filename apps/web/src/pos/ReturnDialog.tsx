@@ -37,6 +37,8 @@ export interface ReturnDone {
   pointsTaken: number;
   reason: string;
   lines: { name: string; qtyMilli: number; totalMinor: number }[];
+  /** An exchange: the money stays with the shop as credit for the piece the customer takes instead. */
+  exchange?: boolean;
 }
 
 const METHODS: Record<RefundMethod, string> = { cash: "كاش من الدرج", card: "على البطاقة", credit: "يخصم من حساب العميل", payroll: "يرجع لراتب الموظف" };
@@ -50,7 +52,7 @@ export function ReturnDialog({ shiftId, newNumber, onDone, onClose }: {
   const [number, setNumber] = useState("");
   const [sale, setSale] = useState<Lookup | null>(null);
   const [qty, setQty] = useState<Record<string, string>>({});
-  const [method, setMethod] = useState<RefundMethod>("cash");
+  const [method, setMethod] = useState<RefundMethod | "exchange">("cash");
   const [reason, setReason] = useState("");
   const [managers, setManagers] = useState<{ id: string; name: string }[]>([]);
   const [approver, setApprover] = useState("");
@@ -97,12 +99,13 @@ export function ReturnDialog({ shiftId, newNumber, onDone, onClose }: {
           originalSaleId: sale.id,
           shiftId,
           lines: chosen.map((x) => ({ saleLineId: x.l.id, qtyMilli: x.milli })),
-          refundMethod: method,
+          // An exchange goes back as cash, and the same cash pays for the new piece: the drawer ends even.
+          refundMethod: method === "exchange" ? "cash" : method,
           reason,
           approval: isCashier ? { userId: approver, pin } : undefined,
         },
       });
-      onDone({ number: returnNumber, originalNumber: sale.number, customerName: sale.customer_name, method, totalMinor: r.totalMinor, refundMinor: r.refundMinor ?? r.totalMinor,
+      onDone({ number: returnNumber, originalNumber: sale.number, customerName: sale.customer_name, method: method === "exchange" ? "cash" : method, exchange: method === "exchange", totalMinor: r.totalMinor, refundMinor: r.refundMinor ?? r.totalMinor,
         pointsMinor: r.pointsMinor ?? 0, pointsBack: r.pointsBack ?? 0, pointsTaken: r.pointsTaken ?? 0, reason, lines: r.lines });
     } catch (e) {
       setError((e as { status?: number }).status === 0 ? "المرتجع يحتاج اتصال بالسيرفر" : (e as Error).message);
@@ -144,7 +147,12 @@ export function ReturnDialog({ shiftId, newNumber, onDone, onClose }: {
             </tbody>
           </table>
           <label>طريقة الإرجاع
-            <select value={method} onChange={(e) => setMethod(e.target.value as RefundMethod)}>
+            <select value={method} onChange={(e) => {
+              const m = e.target.value as RefundMethod | "exchange";
+              setMethod(m);
+              if (m === "exchange" && !reason) setReason("تبديل مقاس");
+            }}>
+              <option value="exchange">🔁 تبديل بقطعة ثانية (الزبون يدفع الفرق بس)</option>
               {(Object.keys(METHODS) as RefundMethod[]).filter((m) => (m !== "credit" || sale.customer_id) && (m !== "payroll" || sale.employee_id)).map((m) => <option key={m} value={m}>{METHODS[m]}</option>)}
             </select>
           </label>
@@ -166,7 +174,7 @@ export function ReturnDialog({ shiftId, newNumber, onDone, onClose }: {
             <span className="muted">المبلغ تقريباً: <span className="num">{formatMoney(chosen.reduce((a, x) => a + Math.round((x.l.total_minor * x.milli) / x.l.qty_milli), 0))}</span></span>
             <span className="spacer" />
             <button onClick={onClose}>إلغاء</button>
-            <button className="primary" disabled={busy || !chosen.length || tooMuch || reason.length < 2 || (isCashier && (!approver || pin.length < 4))} onClick={submit}>تأكيد المرتجع</button>
+            <button className="primary" disabled={busy || !chosen.length || tooMuch || reason.length < 2 || (isCashier && (!approver || pin.length < 4))} onClick={submit}>{method === "exchange" ? "رجّعها وكمّل التبديل" : "تأكيد المرتجع"}</button>
           </div>
         </>
       )}

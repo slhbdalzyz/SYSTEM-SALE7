@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { METHOD_LABELS, formatMoney, formatQty } from "@pos/shared";
+import { METHOD_LABELS, formatMoney, formatQty, sortSizes } from "@pos/shared";
 import type { Call } from "./Admin";
 import { BarChart, Donut, RankBars, TimeChart, downloadCsv } from "./charts";
 import { Report as DailyReport } from "./Report";
@@ -34,6 +34,7 @@ const REPORTS = {
   cashiers: { icon: "👤", name: "أداء الكاشيرات", hint: "مبيعات وفواتير ومرتجعات كل موظف" },
   pnl: { icon: "🧾", name: "الأرباح والمصروفات", hint: "قائمة دخل مختصرة للفترة" },
   purchases: { icon: "🚚", name: "المشتريات والموردين", hint: "التوريد حسب المورد وطريقة الدفع" },
+  sizes: { icon: "👕", name: "المقاسات والألوان", hint: "أي مقاس ولون يتباع، وكم باقي منه" },
   inventory: { icon: "📦", name: "قيمة المخزون", hint: "قيمة البضاعة بالتكلفة والبيع والراكد" },
   expiry: { icon: "⏳", name: "قرب انتهاء الصلاحية", hint: "من تواريخ الصلاحية في فواتير التوريد" },
   daily: { icon: "📅", name: "تقرير يوم (إقفال)", hint: "تفاصيل يوم واحد للفرع" },
@@ -102,7 +103,7 @@ export function Reports({ call, storeId, stores, initial }: { call: Call; storeI
             </div>
           )}
         </div>
-        {NEEDS_PERIOD.includes(kind) && (
+        {(NEEDS_PERIOD.includes(kind) || kind === "sizes") && (
           <div className="row">
             <div className="chips">
               {Object.keys(PRESETS).map((p) => <button key={p} className={preset === p ? "active" : ""} onClick={() => { setPreset(p); setRange(PRESETS[p]()); }}>{p}</button>)}
@@ -120,6 +121,7 @@ export function Reports({ call, storeId, stores, initial }: { call: Call; storeI
         {data && kind === "cashiers" && <Cashiers d={data} />}
         {data && kind === "pnl" && <Pnl d={data} />}
         {data && kind === "purchases" && <Purchases d={data} />}
+        {kind === "sizes" && <SizesReport call={call} storeId={sid} from={from} to={to} />}
         {kind === "inventory" && <InventoryReport call={call} storeId={sid} />}
         {kind === "expiry" && <ExpiryReport call={call} storeId={storeId} />}
         {kind === "daily" && <DailyReport call={call} storeId={storeId} />}
@@ -366,6 +368,75 @@ function ExpiryReport({ call, storeId }: { call: Call; storeId: string }) {
             ))}</tbody>
           </table>
         )}
+      </Panel>
+    </>
+  );
+}
+
+interface SizeModel { groupId: string; name: string; soldMilli: number; totalMinor: number; stockMilli: number; pieces: { productId: string; color: string | null; size: string | null; soldMilli: number; stockMilli: number }[] }
+
+/** Clothes: each model as colours by sizes, sold over the period and left on the shelf. */
+function SizesReport({ call, storeId, from, to }: { call: Call; storeId?: string; from: string; to: string }) {
+  const [rows, setRows] = useState<SizeModel[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    setRows(null);
+    setError(null);
+    call<SizeModel[]>(`/reports/sizes?from=${from}&to=${to}${storeId ? `&storeId=${storeId}` : ""}`).then(setRows).catch((e) => setError((e as Error).message));
+  }, [call, storeId, from, to]);
+  if (error) return <div className="error">{error}</div>;
+  if (!rows) return <div className="muted">جاري التحميل…</div>;
+  if (!rows.length) return <div className="muted">ما فيش أصناف بمقاسات وألوان. تنعمل من «بطاقة صنف جديدة» ← «👕 مقاسات وألوان».</div>;
+  // Over all models: which sizes and colours sell, so the next order brings more of them.
+  const bySize = new Map<string, number>();
+  const byColor = new Map<string, number>();
+  for (const m of rows) for (const p of m.pieces) {
+    if (p.size) bySize.set(p.size, (bySize.get(p.size) ?? 0) + p.soldMilli);
+    if (p.color) byColor.set(p.color, (byColor.get(p.color) ?? 0) + p.soldMilli);
+  }
+  const q = (n: number) => formatQty(n, false);
+  const csv = () => downloadCsv(`مقاسات-${from}-${to}`, ["الموديل", "اللون", "المقاس", "المباع", "الباقي"],
+    rows.flatMap((m) => m.pieces.map((p) => [m.name, p.color ?? "", p.size ?? "", p.soldMilli / 1000, p.stockMilli / 1000])));
+  return (
+    <>
+      <div className="kpis">
+        {bySize.size > 0 && <Panel title="المقاسات الأكثر بيعاً"><RankBars rows={sortSizes([...bySize.keys()]).map((k) => ({ key: k, label: k, value: bySize.get(k)! }))} fmt={q} /></Panel>}
+        {byColor.size > 0 && <Panel title="الألوان الأكثر بيعاً"><RankBars rows={[...byColor].sort((a, b) => b[1] - a[1]).map(([k, v]) => ({ key: k, label: k, value: v }))} fmt={q} /></Panel>}
+      </div>
+      <Panel title="كل موديل: المباع / الباقي" onCsv={csv}>
+        <div className="stack">
+          {rows.map((m) => {
+            const sizes = sortSizes(m.pieces.map((p) => p.size ?? ""));
+            const colors = [...new Set(m.pieces.map((p) => p.color ?? ""))];
+            const at = (c: string, s: string) => m.pieces.find((p) => (p.color ?? "") === c && (p.size ?? "") === s);
+            return (
+              <div key={m.groupId} className="stack" style={{ gap: 6 }}>
+                <div className="row"><b>{m.name}</b><span className="muted">باع <span className="num">{q(m.soldMilli)}</span> · بقى <span className="num">{q(m.stockMilli)}</span> · <span className="num">{formatMoney(m.totalMinor)}</span></span></div>
+                <div className="variant-grid" style={{ gridTemplateColumns: `auto repeat(${sizes.length}, minmax(64px, 1fr))` }}>
+                  <span />
+                  {sizes.map((s) => <b key={s} className="vg-head">{s || "—"}</b>)}
+                  {colors.map((c) => (
+                    <div key={c} style={{ display: "contents" }}>
+                      <b className="vg-color">{c || "—"}</b>
+                      {sizes.map((s) => {
+                        const p = at(c, s);
+                        if (!p) return <span key={s} className="vg-none">—</span>;
+                        // Sold well and nearly gone: the size to reorder.
+                        const hot = p.soldMilli > 0 && p.stockMilli <= p.soldMilli / 2;
+                        return (
+                          <span key={s} className={`vg-stock ${p.stockMilli <= 0 ? "out" : hot ? "low" : ""}`} title="المباع / الباقي">
+                            {q(p.soldMilli)} / {q(p.stockMilli)}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+          <div className="muted" style={{ fontSize: ".85rem" }}>كل خانة: المباع في الفترة / الباقي في المخزون. البرتقالي باع كويس وقرّب يخلص، والأحمر خالص.</div>
+        </div>
       </Panel>
     </>
   );

@@ -183,7 +183,7 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
         <div className="stack" key={store.id}>
           {shown === "home" && <Home call={call} storeId={store.id} userName={me.user.name} open={setTab} />}
           {shown === "reports" && <Reports call={call} storeId={store.id} stores={open} />}
-          {shown === "products" && <Products call={call} storeId={store.id} />}
+          {shown === "products" && <Products call={call} storeId={store.id} onLabels={(d) => { setLabelDraft(d); setTab("labels"); }} />}
           {shown === "purchasing" && <Purchasing call={call} storeId={store.id} onLabels={(d) => { setLabelDraft(d); setTab("labels"); }} />}
           {shown === "paper" && <FromPaper call={call} storeId={store.id} open={setTab} />}
           {shown === "counts" && <Counts call={call} storeId={store.id} canApply={isOwner || me.user.role === "manager"} />}

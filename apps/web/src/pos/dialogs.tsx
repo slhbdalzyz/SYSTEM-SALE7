@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { METHOD_LABELS, OTHER_METHODS, creditRoom, formatMoney, maxPointsPayment, pointsFor, toMinor, type CatalogCustomer, type LoyaltySettings, type PaymentMethod } from "@pos/shared";
 import { readScaleWeight, scaleSupported } from "../scale";
 
-export function Modal({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
+export function Modal({ title, children, onClose, wide }: { title: string; children: ReactNode; onClose: () => void; wide?: boolean }) {
   useEffect(() => {
     const k = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", k);
@@ -10,7 +10,7 @@ export function Modal({ title, children, onClose }: { title: string; children: R
   }, [onClose]);
   return (
     <div className="modal-bg" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal" role="dialog" aria-label={title}>
+      <div className={wide ? "modal wide" : "modal"} role="dialog" aria-label={title}>
         <h2>{title}</h2>
         {children}
       </div>
