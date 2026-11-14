@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { applyOffers, computeLine, computeTotals, pointsEarned, pointsFor, saleInputSchema, type SaleInput } from "@pos/shared";
+import { applyOffers, computeLine, computeTotals, pointsEarned, pointsFor, recipeCost, recipeUsage, saleInputSchema, type SaleInput } from "@pos/shared";
 import { addPoints, customerPoints, loyaltySettings } from "../loyalty";
 import { currentOffers } from "./offers";
 import { openPriceProducts } from "./quick";
@@ -129,6 +129,17 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
   const rxNames = [...new Set(s.lines.filter((l) => byUnit.get(l.unitId)!.rx).map((l) => byUnit.get(l.unitId)!.name as string))];
   const rxMissing = rxNames.length > 0 && !(s.prescription && (s.prescription.doctor || s.prescription.number || s.prescription.patient));
 
+  // Restaurants: a dish with a recipe takes its ingredients out of stock, and costs what they cost.
+  const recipes = new Map<string, { ingredientId: string; qtyMilli: number }[]>();
+  const rl = await app.db.query(
+    `SELECT r.product_id, r.ingredient_id, r.qty_milli FROM recipe_lines r WHERE r.tenant_id = $1 AND r.product_id = ANY($2::uuid[])`,
+    [tid, [...new Set(s.lines.map((l) => l.productId))]],
+  );
+  for (const r of rl.rows) recipes.set(r.product_id, [...(recipes.get(r.product_id) ?? []), { ingredientId: r.ingredient_id, qtyMilli: Number(r.qty_milli) }]);
+  const ingredientCost = recipes.size
+    ? new Map((await app.db.query(`SELECT id, cost_minor FROM products WHERE tenant_id = $1 AND id = ANY($2::uuid[])`, [tid, [...new Set(rl.rows.map((r) => r.ingredient_id))]])).rows.map((r) => [r.id as string, Number(r.cost_minor)]))
+    : new Map<string, number>();
+
   if (s.shiftId) {
     const sh = await app.db.query(`SELECT 1 FROM shifts WHERE id = $1 AND tenant_id = $2 AND device_id = $3`, [s.shiftId, tid, who.did]);
     if (!sh.rowCount) throw new Reject("الوردية غير موجودة على هذا الجهاز");
@@ -137,10 +148,10 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
   try {
     await inTx(app.db, async (tx) => {
       await tx.query(
-        `INSERT INTO sales (id, tenant_id, store_id, device_id, shift_id, user_id, number, subtotal_minor, discount_minor, tax_minor, total_minor, paid_minor, change_minor, created_at, customer_id, employee_id, prescription)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+        `INSERT INTO sales (id, tenant_id, store_id, device_id, shift_id, user_id, number, subtotal_minor, discount_minor, tax_minor, total_minor, paid_minor, change_minor, created_at, customer_id, employee_id, prescription, order_type, table_name)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
         [s.id, tid, who.sid, who.did, s.shiftId ?? null, who.sub, s.number, totals.subtotal, totals.discount, totals.tax, totals.total, paid, change, s.createdAt, s.customerId ?? null, onSalary > 0 ? s.employeeId : null,
-          rxNames.length ? JSON.stringify(s.prescription ?? {}) : null],
+          rxNames.length ? JSON.stringify(s.prescription ?? {}) : null, s.orderType ?? null, s.tableName || null],
       );
       const overrides: { name: string; catalog: number; sold: number }[] = [];
       const taken = new Map<string, number>();
@@ -150,20 +161,24 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
         const u = byUnit.get(l.unitId)!;
         const t = computeLine(l);
         const baseQty = Math.round((l.qtyMilli * u.factor_milli) / 1000);
-        const cost = Math.round((u.cost_minor * baseQty) / 1000);
+        const recipe = recipes.get(l.productId);
+        const unitCost = recipe ? recipeCost(recipe, ingredientCost) : Number(u.cost_minor);
+        const cost = Math.round((unitCost * baseQty) / 1000);
         await tx.query(
-          `INSERT INTO sale_lines (tenant_id, sale_id, product_id, unit_id, name, qty_milli, price_minor, discount_minor, tax_minor, total_minor, cost_minor, promo_minor, offer_id)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+          `INSERT INTO sale_lines (tenant_id, sale_id, product_id, unit_id, name, qty_milli, price_minor, discount_minor, tax_minor, total_minor, cost_minor, promo_minor, offer_id, note)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
           [tid, s.id, l.productId, l.unitId, l.name, l.qtyMilli, l.priceMinor, t.discount, t.tax, t.total, cost, Math.min(l.promoMinor, t.discount),
-            l.offerId && knownOffers.has(l.offerId) ? l.offerId : null],
+            l.offerId && knownOffers.has(l.offerId) ? l.offerId : null, l.note || null],
         );
-        await tx.query(
-          // Dated when the sale was made, not when an offline till sent it, so a stock count
-          // taken in between compares with the right figure.
-          `INSERT INTO stock_movements (tenant_id, store_id, product_id, qty_milli, kind, ref_id, user_id, created_at) VALUES ($1,$2,$3,$4,'sale',$5,$6,LEAST($7::timestamptz, now()))`,
-          [tid, who.sid, l.productId, -baseQty, s.id, who.sub, s.createdAt],
-        );
-        taken.set(l.productId, (taken.get(l.productId) ?? 0) + baseQty);
+        for (const [productId, qty] of recipeUsage([{ productId: l.productId, baseMilli: baseQty }], recipes)) {
+          await tx.query(
+            // Dated when the sale was made, not when an offline till sent it, so a stock count
+            // taken in between compares with the right figure.
+            `INSERT INTO stock_movements (tenant_id, store_id, product_id, qty_milli, kind, ref_id, user_id, created_at) VALUES ($1,$2,$3,$4,'sale',$5,$6,LEAST($7::timestamptz, now()))`,
+            [tid, who.sid, productId, -qty, s.id, who.sub, s.createdAt],
+          );
+          taken.set(productId, (taken.get(productId) ?? 0) + qty);
+        }
         if (l.priceMinor !== u.price_minor && !openPrice.has(l.productId)) overrides.push({ name: l.name, catalog: u.price_minor, sold: l.priceMinor });
       }
       for (const p of s.payments) {

@@ -147,7 +147,7 @@ export async function adminRoutes(app: FastifyInstance) {
 
   /** Registers a cashier device. The token is returned once and only its hash is stored. */
   app.post("/devices", owners, async (req) => {
-    const b = z.object({ storeId: z.string().uuid(), name: z.string().min(1).max(60), kind: z.enum(["pos", "price_checker"]).default("pos") }).parse(req.body);
+    const b = z.object({ storeId: z.string().uuid(), name: z.string().min(1).max(60), kind: z.enum(["pos", "price_checker", "kitchen"]).default("pos") }).parse(req.body);
     const store = await app.db.query(`SELECT 1 FROM stores WHERE id = $1 AND tenant_id = $2`, [b.storeId, req.user.tid]);
     if (!store.rowCount) throw new HttpError(404, "الفرع غير موجود");
     await assertWithinPlan(app.db, req.user.tid, "devices");

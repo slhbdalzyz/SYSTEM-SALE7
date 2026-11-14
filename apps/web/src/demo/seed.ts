@@ -5,6 +5,7 @@ import { hashToken } from "../../../api/src/auth";
 
 export const DEMO_DEVICE_TOKEN = "d".repeat(64);
 export const DEMO_CHECKER_TOKEN = "c".repeat(64);
+export const DEMO_KITCHEN_TOKEN = "e".repeat(64);
 
 interface Q {
   query(sql: string, params?: unknown[]): Promise<{ rows: any[] }>; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -21,7 +22,8 @@ export async function seedDemo(db: Q) {
     await addOwnerDemo(db);
     await addClothing(db);
     await addPharmacy(db);
-    return addButcher(db);
+    await addButcher(db);
+    return addRestaurant(db);
   }
   const one = async (sql: string, params: unknown[] = []) => (await db.query(sql, params)).rows[0]?.id as string;
   const hash = (s: string) => bcrypt.hash(s, 8);
@@ -106,6 +108,76 @@ export async function seedDemo(db: Q) {
   await addClothing(db);
   await addPharmacy(db);
   await addButcher(db);
+  await addRestaurant(db);
+}
+
+/**
+ * A café corner for trying the shop as a restaurant (the demo bar switches the shop's type): drinks
+ * and dishes with quick keys, recipes on the raw stock, tables, a kitchen screen and two orders on it.
+ */
+async function addRestaurant(db: Q) {
+  if ((await db.query(`SELECT 1 FROM dining_tables LIMIT 1`)).rows.length) return;
+  const dev = (await db.query(`SELECT tenant_id AS tid, store_id AS sid FROM devices WHERE kind = 'pos' ORDER BY created_at LIMIT 1`)).rows[0];
+  if (!dev) return;
+  const { tid, sid } = dev;
+  await db.query(`INSERT INTO devices (tenant_id, store_id, name, prefix, token_hash, kind) VALUES ($1,$2,'شاشة المطبخ','K1',$3,'kitchen')`, [tid, sid, hashToken(DEMO_KITCHEN_TOKEN)]);
+  const cat = async (name: string, icon: string, sort: number) =>
+    (await db.query(`INSERT INTO categories (tenant_id, name, icon, sort) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING RETURNING id`, [tid, name, icon, sort])).rows[0]?.id
+      ?? (await db.query(`SELECT id FROM categories WHERE tenant_id = $1 AND name = $2`, [tid, name])).rows[0].id;
+  const hot = await cat("مشروبات ساخنة", "☕", 90);
+  const cold = await cat("عصائر ومشروبات باردة", "🥤", 91);
+  const food = await cat("سندويتشات", "🥪", 92);
+  const raw = await cat("مواد خام", "📦", 93);
+  const ids: Record<string, string> = {};
+  // name, department, unit, price, cost per unit, stock
+  const items: [string, string, string, number, number, number][] = [
+    ["حليب طازج", raw, "مل", 0, 4, 20_000],
+    ["بن إسبريسو", raw, "غرام", 0, 60, 3_000],
+    ["خبز تنور", raw, "حبة", 0, 250, 80],
+    ["دجاج شاورما", raw, "غرام", 0, 22, 8_000],
+    ["إسبريسو", hot, "كوب", 3000, 0, 0],
+    ["كابتشينو", hot, "كوب", 5000, 0, 0],
+    ["شاي بالنعناع", hot, "كوب", 2000, 400, 0],
+    ["عصير برتقال طازج", cold, "كوب", 6000, 2500, 0],
+    ["شاورما دجاج", food, "سندويتش", 8000, 0, 0],
+  ];
+  for (const [name, category, unit, price, cost, stock] of items) {
+    const pid = (await db.query(`INSERT INTO products (tenant_id, name, category_id, cost_minor) VALUES ($1,$2,$3,$4) RETURNING id`, [tid, name, category, cost])).rows[0].id;
+    await db.query(`INSERT INTO product_units (tenant_id, product_id, name, factor_milli, price_minor, is_base) VALUES ($1,$2,$3,1000,$4,true)`, [tid, pid, unit, price]);
+    if (stock) await db.query(`INSERT INTO stock_movements (tenant_id, store_id, product_id, qty_milli, kind) VALUES ($1,$2,$3,$4,'adjust')`, [tid, sid, pid, stock * 1000]);
+    ids[name] = pid;
+  }
+  const recipes: [string, [string, number][]][] = [
+    ["إسبريسو", [["بن إسبريسو", 18]]],
+    ["كابتشينو", [["بن إسبريسو", 18], ["حليب طازج", 180]]],
+    ["شاورما دجاج", [["دجاج شاورما", 150], ["خبز تنور", 1]]],
+  ];
+  for (const [dish, parts] of recipes) {
+    let cost = 0;
+    for (const [ing, q] of parts) {
+      await db.query(`INSERT INTO recipe_lines (tenant_id, product_id, ingredient_id, qty_milli) VALUES ($1,$2,$3,$4)`, [tid, ids[dish], ids[ing], q * 1000]);
+      cost += (items.find((i) => i[0] === ing)![4]) * q;
+    }
+    await db.query(`UPDATE products SET cost_minor = $2 WHERE id = $1`, [ids[dish], cost]);
+  }
+  const g = (await db.query(`INSERT INTO quick_groups (tenant_id, name, color, sort) VALUES ($1,'المقهى','#7c3aed',3) RETURNING id`, [tid])).rows[0].id;
+  let n = 0;
+  for (const [name, color] of [["إسبريسو", "#78350f"], ["كابتشينو", "#92400e"], ["شاي بالنعناع", "#15803d"], ["عصير برتقال طازج", "#ea580c"], ["شاورما دجاج", "#b91c1c"]] as const) {
+    await db.query(`INSERT INTO quick_keys (tenant_id, group_id, product_id, qty_milli, color, sort) VALUES ($1,$2,$3,1000,$4,$5)`, [tid, g, ids[name], color, ++n]);
+  }
+  await db.query(`UPDATE products SET quick = true WHERE id = ANY($1::uuid[])`, [Object.values(ids)]);
+  for (let i = 1; i <= 8; i++) await db.query(`INSERT INTO dining_tables (tenant_id, store_id, name, area, seats, sort) VALUES ($1,$2,$3,'الصالة',4,$4)`, [tid, sid, `طاولة ${i}`, i]);
+  for (let i = 1; i <= 3; i++) await db.query(`INSERT INTO dining_tables (tenant_id, store_id, name, area, seats, sort) VALUES ($1,$2,$3,'التراس',2,$4)`, [tid, sid, `تراس ${i}`, 10 + i]);
+  // Two orders already in the kitchen, and a few from this morning for the report.
+  const ticket = async (label: string, type: string, table: string | null, lines: object[], status: string, ago: number, took: number | null) =>
+    db.query(
+      `INSERT INTO kitchen_tickets (id, tenant_id, store_id, label, order_type, table_name, lines, status, created_at, ready_at)
+       VALUES (gen_random_uuid(),$1,$2,$3,$4,$5,$6,$7, now() - make_interval(mins => $8::int), CASE WHEN $9::int IS NULL THEN NULL ELSE now() - make_interval(mins => $8::int - $9::int) END)`,
+      [tid, sid, label, type, table, JSON.stringify(lines), status, ago, took],
+    );
+  await ticket("طاولة 4", "dine_in", "طاولة 4", [{ name: "شاورما دجاج", qtyMilli: 2000, note: "بدون ثوم" }, { name: "عصير برتقال طازج", qtyMilli: 2000 }], "preparing", 7, null);
+  await ticket("سفري 9", "takeaway", null, [{ name: "كابتشينو", qtyMilli: 1000, note: "سكر قليل" }, { name: "إسبريسو", qtyMilli: 1000 }], "new", 2, null);
+  for (const [t, ago, took] of [[1, 180, 9], [2, 150, 12], [5, 120, 6], [6, 95, 15]]) await ticket(`طاولة ${t}`, "dine_in", `طاولة ${t}`, [{ name: "شاورما دجاج", qtyMilli: 1000 }], "served", ago, took);
 }
 
 /**

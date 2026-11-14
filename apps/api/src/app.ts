@@ -37,6 +37,7 @@ import { checkTokenRules } from "./features";
 import { platformProRoutes, runReminders } from "./routes/platform-pro";
 import { supportRoutes } from "./routes/support";
 import { butcherRoutes } from "./routes/butcher";
+import { restaurantRoutes } from "./routes/restaurant";
 import { setGateway, type Gateway } from "./payments/gateway";
 import { plutuFromEnv } from "./payments/plutu";
 import { fakeGateway } from "./payments/fake";
@@ -128,6 +129,7 @@ export async function buildApp(opts: AppOptions) {
   await app.register(platformProRoutes);
   await app.register(supportRoutes);
   await app.register(butcherRoutes);
+  await app.register(restaurantRoutes);
   await app.register(purchasingRoutes);
   await app.register(branchRoutes);
   await app.register(offerRoutes);

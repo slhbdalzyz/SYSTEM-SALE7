@@ -1,6 +1,6 @@
 // Draws a receipt on a canvas the width of the paper. The browser does the Arabic shaping,
 // so the printer only ever gets black and white dots.
-import { METHOD_LABELS, computeLine, computeTotals, formatMoney, formatQty } from "@pos/shared";
+import { METHOD_LABELS, ORDER_TYPE_LABELS, computeLine, computeTotals, formatMoney, formatQty } from "@pos/shared";
 import type { ReceiptData } from "../pos/Receipt";
 
 export type Row =
@@ -50,6 +50,28 @@ export function receiptRows(d: ReceiptData): Row[] {
     { kind: "space", h: 6 },
     { kind: "center", text: d.footer || r?.footer || "شكراً لزيارتكم" },
   ];
+  // The kitchen's slip: big, no prices, the notes under each dish, and what was taken off.
+  if (d.kitchen) {
+    const k = d.kitchen;
+    const add = k.lines.filter((l) => !l.cancelled);
+    const off = k.lines.filter((l) => l.cancelled);
+    const dish = (l: (typeof k.lines)[number], sign: string): Row[] => [
+      { kind: "pair", right: `${sign}${l.name}`, left: `× ${formatQty(l.qtyMilli, l.qtyMilli % 1000 !== 0)}`, size: 26, bold: true },
+      ...(l.note ? [{ kind: "center", text: `«${l.note}»`, size: 22 } as Row] : []),
+    ];
+    return [
+      { kind: "center", text: "👨‍🍳 المطبخ", size: 22 },
+      { kind: "center", text: k.label, size: 36, bold: true },
+      { kind: "center", text: `${ORDER_TYPE_LABELS[k.orderType]} · ${when(k.at)}` },
+      ...center(d.copy ? "*** نسخة ***" : null, 22, true),
+      { kind: "rule" },
+      ...add.flatMap((l) => dish(l, "")),
+      ...(off.length ? [{ kind: "rule" } as Row, { kind: "center", text: "✖ إلغاء", size: 26, bold: true } as Row, ...off.flatMap((l) => dish(l, "✖ "))] : []),
+      { kind: "rule" },
+      { kind: "center", text: d.cashierName },
+      { kind: "space", h: 20 },
+    ];
+  }
   if (d.ret) {
     const r = d.ret;
     return [
@@ -118,9 +140,10 @@ export function receiptRows(d: ReceiptData): Row[] {
     ...head(`فاتورة ${s.number}`, s.createdAt),
     ...(d.customerName ? [{ kind: "pair", right: "العميل", left: d.customerName } as Row, { kind: "rule" } as Row] : []),
     ...(d.employeeName ? [{ kind: "pair", right: "على راتب", left: d.employeeName } as Row, { kind: "rule" } as Row] : []),
+    ...(s.orderType ? [{ kind: "pair", right: ORDER_TYPE_LABELS[s.orderType], left: s.tableName ?? "", bold: true } as Row, { kind: "rule" } as Row] : []),
     ...s.lines.map((l): Row => ({
       kind: "item",
-      name: l.name,
+      name: l.note ? `${l.name} («${l.note}»)` : l.name,
       detail: `${formatQty(l.qtyMilli, l.qtyMilli % 1000 !== 0)} × ${formatMoney(l.priceMinor, "")}${l.discountMinor ? ` (خصم ${formatMoney(l.discountMinor, "")})` : ""}${l.promoMinor ? ` (${l.offerName ?? "عرض"} −${formatMoney(l.promoMinor, "")})` : ""}`,
       amount: formatMoney(computeLine(l).total, ""),
     })),

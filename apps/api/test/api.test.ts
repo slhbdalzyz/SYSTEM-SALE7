@@ -2187,3 +2187,109 @@ describe("butcher: today's prices and carcasses cut into pieces", () => {
     expect(audit).toContain("product.price_change");
   });
 });
+
+describe("restaurant: tables, notes, the kitchen screen and recipes", () => {
+  let t: string;
+  let till: string;
+  let shift: string;
+  let store: string;
+  let kitchen: string;
+  const p: Record<string, { id: string; unit: string }> = {};
+  const fresh = async (url: string, body: unknown) => (await app.inject({ method: "POST", url, payload: body as object, remoteAddress: "10.0.2.97" })).json();
+  const stockOf = async (id: string) => (await call("GET", `/products?storeId=${store}`, t)).body.find((x: { id: string }) => x.id === id);
+
+  it("gives a new restaurant its departments, and a kitchen screen with no one signed in", async () => {
+    const r = await fresh("/auth/register", { businessName: "مطعم البحر", storeName: "الرئيسي", ownerName: "حمزة", email: "food@test.ly", password: "password123", businessType: "restaurant" });
+    t = r.token;
+    store = r.storeId;
+    const names = (await call("GET", "/categories", t)).body.map((c: { name: string }) => c.name);
+    expect(names).toEqual(expect.arrayContaining(["وجبات", "مشروبات ساخنة", "مواد خام"]));
+    const d = await call("POST", "/devices", t, { storeId: store, name: "كاشير" });
+    const k = await call("POST", "/devices", t, { storeId: store, name: "المطبخ", kind: "kitchen" });
+    kitchen = k.body.deviceToken;
+    // A kitchen screen cannot sign a cashier in.
+    const u = await call("POST", "/users", t, { name: "ريم", role: "cashier", pin: "5555" });
+    expect((await app.inject({ method: "POST", url: "/auth/pin", remoteAddress: "10.0.2.97", payload: { deviceToken: kitchen, userId: u.body.id, pin: "5555" } })).statusCode).toBe(401);
+    till = (await fresh("/auth/pin", { deviceToken: d.body.deviceToken, userId: u.body.id, pin: "5555" })).token;
+    shift = randomUUID();
+    await call("POST", "/shifts/open", till, { id: shift, openingCashMinor: 0 });
+  });
+
+  it("sets up tables, many at once, and the till gets the ones in use", async () => {
+    expect((await call("POST", "/restaurant/tables/bulk", t, { storeId: store, count: 6, area: "الصالة" })).body.added).toBe(6);
+    expect((await call("POST", "/restaurant/tables/bulk", t, { storeId: store, count: 8 })).body.added).toBe(2);
+    const terrace = await call("POST", "/restaurant/tables", t, { storeId: store, name: "تراس 1", area: "التراس", seats: 2 });
+    expect((await call("POST", "/restaurant/tables", t, { storeId: store, name: "تراس 1" })).status).toBe(409);
+    await call("PUT", `/restaurant/tables/${terrace.body.id}`, t, { name: "تراس 1", area: "التراس", seats: 2, active: false });
+    const all = (await call("GET", `/restaurant/tables?storeId=${store}`, t)).body;
+    expect(all).toHaveLength(9);
+    const synced = (await call("GET", "/sync/tables", till)).body.map((x: { name: string }) => x.name);
+    expect(synced).toHaveLength(8);
+    expect(synced.slice(0, 3)).toEqual(["طاولة 1", "طاولة 2", "طاولة 3"]);
+  });
+
+  it("sends tickets to the kitchen once, and the screen moves them along", async () => {
+    const id = randomUUID();
+    const ticket = { id, label: "طاولة 3", orderType: "dine_in", tableName: "طاولة 3", createdAt: new Date().toISOString(), lines: [{ name: "شاورما", qtyMilli: 2000, note: "بدون ثوم" }] };
+    await call("POST", "/kitchen/tickets", till, { tickets: [ticket] });
+    await call("POST", "/kitchen/tickets", till, { tickets: [ticket, { ...ticket, id: randomUUID(), label: "سفري", orderType: "takeaway", tableName: null, lines: [{ name: "قهوة", qtyMilli: 1000 }] }] });
+    const screen = async () => (await app.inject({ method: "POST", url: "/kitchen/screen", payload: { deviceToken: kitchen } })).json();
+    let s = await screen();
+    expect(s.tickets).toHaveLength(2);
+    expect(s.tickets[0]).toMatchObject({ label: "طاولة 3", status: "new", lines: [{ name: "شاورما", note: "بدون ثوم" }] });
+    const move = (status: string) => app.inject({ method: "POST", url: "/kitchen/screen/status", payload: { deviceToken: kitchen, id, status } });
+    await move("preparing");
+    await move("ready");
+    expect((await call("GET", "/kitchen/ready", till)).body.map((x: { label: string }) => x.label)).toEqual(["طاولة 3"]);
+    await move("served");
+    s = await screen();
+    expect(s.tickets.find((x: { id: string }) => x.id === id).status).toBe("served");
+    // A till's token is not a kitchen screen.
+    expect((await app.inject({ method: "POST", url: "/kitchen/screen", payload: { deviceToken: "0".repeat(64) } })).statusCode).toBe(401);
+  });
+
+  it("costs a dish from its recipe and takes the ingredients out of stock when it sells", async () => {
+    for (const [key, name, price, cost, unit] of [["milk", "حليب", 0, 4, "مل"], ["coffee", "بن", 0, 60, "غرام"], ["latte", "لاتيه", 6000, 0, "كوب"], ["water", "مياه", 1000, 400, "قارورة"]] as const) {
+      const x = await call("POST", "/products", t, { name, costMinor: cost, units: [{ name: unit, priceMinor: price, isBase: true }] });
+      p[key] = { id: x.body.id, unit: x.body.units[0].id };
+    }
+    await call("POST", "/stock/adjust", t, { storeId: store, productId: p.milk.id, qtyMilli: 5_000_000, reason: "شراء" });
+    await call("POST", "/stock/adjust", t, { storeId: store, productId: p.coffee.id, qtyMilli: 1_000_000, reason: "شراء" });
+    expect((await call("PUT", `/recipes/${p.latte.id}`, t, { lines: [{ ingredientId: p.latte.id, qtyMilli: 1000 }] })).status).toBe(400);
+    const set = await call("PUT", `/recipes/${p.latte.id}`, t, { lines: [{ ingredientId: p.milk.id, qtyMilli: 200_000 }, { ingredientId: p.coffee.id, qtyMilli: 18_000 }] });
+    expect(set.status).toBe(200);
+    // Two levels are not allowed: latte is now a dish, so it cannot go into another recipe.
+    expect((await call("PUT", `/recipes/${p.water.id}`, t, { lines: [{ ingredientId: p.latte.id, qtyMilli: 1000 }] })).status).toBe(400);
+    const r = (await call("GET", `/recipes/${p.latte.id}`, t)).body;
+    expect(r.costMinor).toBe(800 + 1080);
+    expect((await stockOf(p.latte.id)).costMinor).toBe(1880);
+    expect((await call("GET", "/recipes", t)).body[0]).toMatchObject({ name: "لاتيه", priceMinor: 6000, costMinor: 1880, ingredients: 2 });
+
+    const sale = {
+      id: randomUUID(), number: "R-LATTE1", shiftId: shift, createdAt: new Date().toISOString(), orderType: "dine_in", tableName: "طاولة 2",
+      lines: [{ productId: p.latte.id, unitId: p.latte.unit, name: "لاتيه", qtyMilli: 2000, priceMinor: 6000, note: "سكر قليل" }, { productId: p.water.id, unitId: p.water.unit, name: "مياه", qtyMilli: 1000, priceMinor: 1000 }],
+      payments: [{ method: "cash", amountMinor: 13000 }], totalMinor: 13000,
+    };
+    expect((await call("POST", "/sales/batch", till, { sales: [sale] })).body.results[0].status).toBe("accepted");
+    expect((await stockOf(p.milk.id)).stockMilli).toBe(5_000_000 - 400_000);
+    expect((await stockOf(p.coffee.id)).stockMilli).toBe(1_000_000 - 36_000);
+    expect((await stockOf(p.latte.id)).stockMilli).toBe(0);
+    expect((await stockOf(p.water.id)).stockMilli).toBe(-1000);
+    const row = (await db.query(`SELECT order_type, table_name FROM sales WHERE id = $1`, [sale.id])).rows[0];
+    expect(row).toEqual({ order_type: "dine_in", table_name: "طاولة 2" });
+    const line = (await db.query(`SELECT note, cost_minor FROM sale_lines WHERE sale_id = $1 AND product_id = $2`, [sale.id, p.latte.id])).rows[0];
+    expect(line).toEqual({ note: "سكر قليل", cost_minor: 3760 });
+    // Taking the recipe away leaves the dish as an item of its own.
+    await call("PUT", `/recipes/${p.latte.id}`, t, { lines: [] });
+    expect((await call("GET", "/recipes", t)).body).toHaveLength(0);
+  });
+
+  it("reports sales by order type and table, and how long the kitchen takes", async () => {
+    const d = new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Tripoli" });
+    const r = (await call("GET", `/reports/restaurant?from=${d}&to=${d}`, t)).body;
+    expect(r.byType).toEqual([{ orderType: "dine_in", count: 1, totalMinor: 13000 }]);
+    expect(r.byTable[0]).toMatchObject({ table: "طاولة 2", count: 1 });
+    expect(r.kitchen.tickets).toBe(1);
+    expect(r.kitchen.avgMinutes).toBe(0);
+  });
+});

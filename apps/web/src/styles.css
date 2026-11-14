@@ -706,3 +706,32 @@ a.btn.primary { background: var(--brand); color: var(--brand-ink); border-color:
 .modal.wide { width: min(860px, 100%); }
 .exchange-tag { color: var(--brand); font-weight: 600; }
 .rx-box { text-align: start; border: 1px dashed var(--warn); color: var(--warn); }
+
+/* Restaurants: order type and table above the cart, the floor of tables, notes on a dish. */
+.order-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.order-bar .seg button { padding: 6px 12px; }
+.table-pick.picked { background: var(--brand-soft, #e6f4f1); border-color: var(--brand); font-weight: 700; }
+.line-note { color: var(--warn); font-size: .85rem; font-weight: 600; }
+.table-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.table-tile { display: grid; gap: 4px; padding: 14px 10px; border-radius: 12px; text-align: center; min-height: 76px; }
+.table-tile b { font-size: 1.05rem; }
+.table-tile.busy { background: var(--warn-soft); border-color: var(--warn); }
+.table-tile.active { outline: 3px solid var(--brand); outline-offset: 1px; }
+
+/* The kitchen screen: big cards, oldest first, coloured by how long they have waited. */
+.kitchen { min-height: 100vh; background: var(--bg); padding: 12px 16px; display: grid; gap: 12px; align-content: start; }
+.kitchen header { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 1.1rem; }
+.kitchen-empty { text-align: center; font-size: 1.6rem; color: var(--muted); padding: 80px 0; }
+.kitchen-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; align-items: start; }
+.ticket { background: var(--card, #fff); border: 2px solid var(--line, #e2e8f0); border-radius: 14px; padding: 12px; display: grid; gap: 8px; }
+.ticket.new { border-color: var(--brand); }
+.ticket.ready { border-color: var(--ok); background: #f0fdf4; }
+.ticket.slow { box-shadow: 0 0 0 3px var(--warn-soft); }
+.ticket.late { box-shadow: 0 0 0 3px #fecaca; }
+.ticket.late .ticket-head .num { color: #b91c1c; }
+.ticket-head { display: flex; justify-content: space-between; align-items: baseline; font-size: 1.4rem; }
+.ticket ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 1.15rem; font-weight: 600; }
+.ticket li.cancelled { color: #b91c1c; text-decoration: line-through; }
+.ticket .note { color: var(--warn); font-size: .95rem; text-decoration: none; }
+.ticket button { padding: 12px; font-size: 1.05rem; }
+.kitchen-done { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }

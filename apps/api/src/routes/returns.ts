@@ -100,8 +100,10 @@ export async function returnRoutes(app: FastifyInstance) {
              VALUES ($1,$2,$3,$4,$5,$6,$7,0,$8,$9,$10,$11)`,
             [who.tid, b.id, p.l.product_id, p.l.unit_id, p.l.name, -p.qty, p.l.price_minor, -p.taxMinor, -p.totalMinor, -p.costMinor, p.l.id],
           );
+          // A cooked dish does not go back on the shelf, and its ingredients are already used.
           await tx.query(
-            `INSERT INTO stock_movements (tenant_id, store_id, product_id, qty_milli, kind, ref_id, note, user_id) VALUES ($1,$2,$3,$4,'return',$5,$6,$7)`,
+            `INSERT INTO stock_movements (tenant_id, store_id, product_id, qty_milli, kind, ref_id, note, user_id)
+             SELECT $1,$2,$3,$4,'return',$5,$6,$7 WHERE NOT EXISTS (SELECT 1 FROM recipe_lines WHERE product_id = $3)`,
             [who.tid, who.sid, p.l.product_id, Math.round((p.qty * p.l.factor_milli) / 1000), b.id, b.reason, who.sub],
           );
         }

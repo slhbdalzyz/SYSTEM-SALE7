@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { creditRoom, formatMoney, formatQty, pointsEarned, pointsFor, readShopSettings, type CatalogCustomer, type CatalogProduct, type LoyaltySettings, type Offer, type PaymentMethod, type QuickGroup, type QuickKey, type ShopSettings, expiryState, variantBaseName, type Prescription } from "@pos/shared";
+import { creditRoom, formatMoney, formatQty, pointsEarned, pointsFor, readShopSettings, type CatalogCustomer, type CatalogProduct, type LoyaltySettings, type Offer, type PaymentMethod, type QuickGroup, type QuickKey, type ShopSettings, expiryState, variantBaseName, type Prescription, kitchenDelta, sentSnapshot, ORDER_TYPE_LABELS, ORDER_TYPE_ICONS, type OrderType, type SentLine } from "@pos/shared";
 import { api } from "../api";
 import { db, getMeta, nextInvoiceNumber, setMeta, type HeldCart, type LocalShift } from "../localdb";
 import { alternatives, findByCode, searchProducts, type Found } from "../lookup";
 import { VariantPicker } from "./VariantPicker";
 import { RxDialog } from "./RxDialog";
 import { session, tokenClaims } from "../session";
-import { loadExpiry, loadOffers, onSync, refreshCounts, startSyncLoop, syncNow, type SyncState } from "../sync";
+import { loadExpiry, loadOffers, loadTables, onSync, refreshCounts, startSyncLoop, syncNow, type DiningTable, type SyncState } from "../sync";
+import { NoteDialog, OrderBar, TablesDialog, type Order } from "./restaurant";
 import { autoBackupIfDue } from "../owner/backup";
 import type { Screen } from "../App";
 import { addLine, cartTotals, lineFor, lineTotal, priceCart, switchUnit, toSaleInput, type CartLine } from "./cart";
@@ -45,15 +46,22 @@ type Dialog =
   | { kind: "prefs" }
   | { kind: "variant"; groupId: string; times: number }
   | { kind: "rx" }
+  | { kind: "tables" }
+  | { kind: "note"; key: string }
   | null;
 
 /** A customer being served. Several can be open at once, one tab each. */
-interface Tab { id: string; n: number; lines: CartLine[]; invoiceDiscount: number; customer: CatalogCustomer | null; selected: string | null; prescription?: Prescription | null }
-const emptyTab = (n: number): Tab => ({ id: crypto.randomUUID(), n, lines: [], invoiceDiscount: 0, customer: null, selected: null, prescription: null });
+interface Tab {
+  id: string; n: number; lines: CartLine[]; invoiceDiscount: number; customer: CatalogCustomer | null; selected: string | null; prescription?: Prescription | null;
+  /** Restaurants: how the order goes out, and what the kitchen has already been told. */
+  order?: Order | null; sent?: Record<string, SentLine>;
+}
+const emptyTab = (n: number, order: Order | null = null): Tab => ({ id: crypto.randomUUID(), n, lines: [], invoiceDiscount: 0, customer: null, selected: null, prescription: null, order, sent: {} });
+const DEFAULT_ORDER: Order = { type: "takeaway" };
 const today = () => new Date().toLocaleDateString("en-CA");
 const hhmm = (d: Date) => d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
 
-type Shop = { name: string; settings: ShopSettings };
+type Shop = { name: string; settings: ShopSettings; type?: string };
 
 /** The till's keyboard: what each key does, shown on F1. */
 const KEYS: [string, string][] = [
@@ -62,7 +70,7 @@ const KEYS: [string, string][] = [
   ["F9", "الفواتير المعلقة"], ["F10", "مرتجع"], ["F11", "فتح الدرج"], ["F12 / Ctrl+Enter", "الدفع"],
   ["↑ ↓", "التنقل بين أصناف الفاتورة"], ["+ / −", "زيادة أو نقص كمية الصنف المختار"], ["Delete", "حذف الصنف المختار"],
   ["Ctrl+Delete", "إلغاء الفاتورة كلها"], ["3*باركود", "يبيع 3 من نفس الصنف"], ["Esc", "يقفل النافذة أو يمسح البحث"],
-  ["Alt+N", "زبون جديد في تبويب ثاني"], ["Alt+1 … Alt+9", "التنقل بين الزبائن المفتوحين"], ["Alt+D", "إيداع أو سحب من الدرج"], ["Ctrl+1 … Ctrl+9", "الأزرار السريعة اللي على الشاشة"],
+  ["Alt+N", "زبون جديد في تبويب ثاني"], ["Alt+T", "الطاولات (مطعم)"], ["Alt+K", "أرسل للمطبخ (مطعم)"], ["Alt+M", "ملاحظة على الصنف (مطعم)"], ["Alt+1 … Alt+9", "التنقل بين الزبائن المفتوحين"], ["Alt+D", "إيداع أو سحب من الدرج"], ["Ctrl+1 … Ctrl+9", "الأزرار السريعة اللي على الشاشة"],
 ];
 
 export function Cashier({ go }: { go: (s: Screen) => void }) {
@@ -82,6 +90,12 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   const [customer, setCustomer] = useState<CatalogCustomer | null>(null);
   /** The prescription seen for this customer's prescription-only medicines. */
   const [prescription, setPrescription] = useState<Prescription | null>(null);
+  /** Restaurants: this customer's order type and table, and what the kitchen already has. */
+  const [order, setOrder] = useState<Order>(DEFAULT_ORDER);
+  const [sent, setSent] = useState<Record<string, SentLine>>({});
+  const [tables, setTables] = useState<DiningTable[]>([]);
+  /** A kitchen slip being printed: shown in place of the receipt until it is out. */
+  const [slip, setSlip] = useState<ReceiptData | null>(null);
   /** The soonest expiry date on the shelf for each dated item, to warn before selling it. */
   const [expiry, setExpiry] = useState<Map<string, string>>(new Map());
   /** The shop's points rules, kept on the device so points work offline too. */
@@ -89,6 +103,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [shop, setShop] = useState<Shop | null>(null);
   const till = (shop?.settings ?? readShopSettings({})).till;
+  const restaurant = shop?.type === "restaurant";
   const scanRef = useRef<HTMLInputElement>(null);
   const device = session.device;
   const [prefs, setPrefs] = useState<TillPrefs>(loadPrefs);
@@ -116,6 +131,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   }, []);
   useEffect(() => void loadOffers().then(setOffers), [sync?.lastSync]);
   useEffect(() => void loadExpiry().then(setExpiry), [sync?.lastSync]);
+  useEffect(() => void loadTables().then(setTables), [sync?.lastSync]);
   const priced = useMemo(() => priceCart(lines, offers, new Date()), [lines, offers, minute]); // eslint-disable-line react-hooks/exhaustive-deps
   const totals = useMemo(() => cartTotals(priced.lines, invoiceDiscount), [priced, invoiceDiscount]);
 
@@ -147,10 +163,10 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
       }
       void countMine();
       try {
-        const me = await api<{ tenant: { name: string; settings: unknown; loyalty?: LoyaltySettings }; stores: { id: string; receipt_footer: string | null }[]; storeId: string }>("/me", { token: session.staffToken });
+        const me = await api<{ tenant: { name: string; settings: unknown; loyalty?: LoyaltySettings; business_type?: string }; stores: { id: string; receipt_footer: string | null }[]; storeId: string }>("/me", { token: session.staffToken });
         await setMeta("store", { footer: me.stores.find((s) => s.id === me.storeId)?.receipt_footer });
         // The shop's name and settings: what the receipt shows and what a cashier may do.
-        const next = { name: me.tenant.name, settings: readShopSettings(me.tenant.settings) };
+        const next = { name: me.tenant.name, settings: readShopSettings(me.tenant.settings), type: me.tenant.business_type };
         await setMeta("shop", next);
         setShop(next);
         if (me.tenant.loyalty) {
@@ -384,6 +400,8 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     setSelected(null);
     setCustomer(null);
     setPrescription(null);
+    setOrder(DEFAULT_ORDER);
+    setSent({});
   }
 
   // ---- Several customers at once, one tab each ----
@@ -393,8 +411,10 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     setCustomer(t.customer);
     setSelected(t.selected);
     setPrescription(t.prescription ?? null);
+    setOrder(t.order ?? DEFAULT_ORDER);
+    setSent(t.sent ?? {});
   }
-  const current = (): Tab => ({ ...(tabs.find((t) => t.id === activeTab) ?? emptyTab(1)), lines, invoiceDiscount, customer, selected, prescription });
+  const current = (): Tab => ({ ...(tabs.find((t) => t.id === activeTab) ?? emptyTab(1)), lines, invoiceDiscount, customer, selected, prescription, order, sent });
   function switchTab(id: string) {
     if (id === activeTab) return;
     if (exchange) return flash("كمّل التبديل أول، أو ألغيه", true);
@@ -408,11 +428,13 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     setCode("");
     focusScan();
   }
-  function newTab() {
+  function newTab(order: Order | null = null) {
     if (exchange) return flash("كمّل التبديل أول، أو ألغيه", true);
-    if (tabs.length >= 9) return flash("أقصى حد 9 زبائن مفتوحين", true);
+    // A restaurant keeps a tab open for each table, so it needs more.
+    const most = restaurant ? 40 : 9;
+    if (tabs.length >= most) return flash(`أقصى حد ${most} ${restaurant ? "طلب مفتوح" : "زبائن مفتوحين"}`, true);
     const cur = current();
-    const t = emptyTab(Math.max(...tabs.map((x) => x.n)) + 1);
+    const t = emptyTab(Math.max(...tabs.map((x) => x.n)) + 1, order);
     setTabs((ts) => [...ts.map((x) => (x.id === activeTab ? cur : x)), t]);
     loadTab(t);
     setActiveTab(t.id);
@@ -433,7 +455,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   useEffect(() => {
     const t = setTimeout(() => void setMeta("tabs", { active: activeTab, tabs: tabs.map((x) => (x.id === activeTab ? current() : x)) }), 400);
     return () => clearTimeout(t);
-  }, [tabs, activeTab, lines, invoiceDiscount, customer]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tabs, activeTab, lines, invoiceDiscount, customer, order, sent]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** This cashier's sales today on this till: shown in the status bar. */
   async function countMine() {
@@ -468,9 +490,12 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
 
   async function pay(payments: { method: PaymentMethod; amountMinor: number }[], employeeId: string | null = null) {
     if (!device) return;
+    // Whatever the kitchen has not heard of yet goes now, so nothing paid for is left unmade.
+    if (restaurant && pendingKitchen.length) await sendKitchen();
     const id = crypto.randomUUID();
     const number = await nextInvoiceNumber(device.prefix);
-    const sale = toSaleInput({ id, number, shiftId: shift?.id ?? null, lines, offers, invoiceDiscountMinor: invoiceDiscount, payments, customerId: customer?.id, employeeId, prescription: lines.some((l) => l.rx) ? prescription : null });
+    const sale = toSaleInput({ id, number, shiftId: shift?.id ?? null, lines, offers, invoiceDiscountMinor: invoiceDiscount, payments, customerId: customer?.id, employeeId, prescription: lines.some((l) => l.rx) ? prescription : null,
+      ...(restaurant ? { orderType: order.type, tableName: order.type === "dine_in" ? order.table ?? null : null } : {}) });
     const credit = payments.filter((p) => p.method === "credit").reduce((a, p) => a + p.amountMinor, 0);
     const paid = payments.reduce((a, p) => a + p.amountMinor, 0);
     // In an exchange, what the returned piece was worth and the new one does not use goes back in cash.
@@ -539,6 +564,60 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     flash(`بدائل ${p.genericName}: ${alts.length}`);
     focusScan();
   }
+
+  // ---- Restaurants ----
+  const pendingKitchen = useMemo(() => (restaurant ? kitchenDelta(lines, sent) : []), [restaurant, lines, sent]); // eslint-disable-line react-hooks/exhaustive-deps
+  const orderLabel = (o: Order, n: number) => (o.type === "dine_in" && o.table ? o.table : `${ORDER_TYPE_LABELS[o.type]} ${n}`);
+
+  /** Tells the kitchen what is new on this order (and what was taken off), on its screen and on paper. */
+  async function sendKitchen() {
+    const delta = kitchenDelta(lines, sent);
+    if (!delta.length) return flash("المطبخ عنده كل شي", true);
+    const n = tabs.find((t) => t.id === activeTab)?.n ?? 1;
+    const at = new Date().toISOString();
+    const ticket = { id: crypto.randomUUID(), label: orderLabel(order, n), orderType: order.type, tableName: order.type === "dine_in" ? order.table ?? null : null, lines: delta, createdAt: at };
+    await db.outbox.add({ kind: "kitchen", refId: ticket.id, payload: ticket, createdAt: at });
+    setSent(sentSnapshot(lines));
+    flash(`👨‍🍳 وصل للمطبخ: ${ticket.label}`);
+    if (prefs.kitchenSlip) {
+      const data: ReceiptData = { storeName: device?.storeName ?? "", deviceName: device?.name ?? "", cashierName, kitchen: { label: ticket.label, orderType: order.type, at, lines: delta } };
+      setSlip(data);
+      await new Promise((ok) => setTimeout(ok, 60));
+      await print(data, false);
+      setSlip(null);
+    }
+    void syncNow();
+    focusScan();
+  }
+
+  function setOrderType(t: OrderType) {
+    if (t === "dine_in" && !order.table) return setDialog({ kind: "tables" });
+    setOrder((o) => ({ type: t, table: t === "dine_in" ? o.table : null }));
+    focusScan();
+  }
+
+  /** A taken table opens its order; a free one goes on this order if it is new, or starts one. */
+  function pickTable(t: DiningTable) {
+    setDialog(null);
+    const open = tabs.find((x) => (x.id === activeTab ? order : x.order)?.table === t.name);
+    if (open) return switchTab(open.id);
+    if (!lines.length || !order.table) {
+      setOrder({ type: "dine_in", table: t.name });
+      return focusScan();
+    }
+    newTab({ type: "dine_in", table: t.name });
+  }
+
+  const busyTables = useMemo(() => {
+    const m = new Map<string, { totalMinor: number; items: number; active: boolean }>();
+    for (const t of tabs) {
+      const live = t.id === activeTab;
+      const o = live ? order : t.order;
+      const ls = live ? lines : t.lines;
+      if (o?.type === "dine_in" && o.table) m.set(o.table, { items: ls.length, totalMinor: cartTotals(priceCart(ls, offers, new Date()).lines, live ? invoiceDiscount : t.invoiceDiscount).total, active: live });
+    }
+    return m;
+  }, [tabs, activeTab, order, lines, offers, invoiceDiscount]);
 
   /** Pay: in an exchange the returned piece's value pays first, and only the difference is asked for. */
   function startPay() {
@@ -661,6 +740,15 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
       } else if (e.altKey && e.code === "KeyN") {
         e.preventDefault();
         newTab();
+      } else if (restaurant && e.altKey && e.code === "KeyT") {
+        e.preventDefault();
+        setDialog({ kind: "tables" });
+      } else if (restaurant && e.altKey && e.code === "KeyK") {
+        e.preventDefault();
+        if (pendingKitchen.length) void sendKitchen();
+      } else if (restaurant && e.altKey && e.code === "KeyM") {
+        e.preventDefault();
+        if (selected) setDialog({ kind: "note", key: selected });
       } else if (e.altKey && e.code === "KeyD") {
         e.preventDefault();
         if (shift) setDialog({ kind: "drawer" });
@@ -777,6 +865,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
             <QuickPad groups={quick.groups} keys={quick.keys} products={quickProducts} group={qGroup} setGroup={setQGroup} size={prefs.quickSize} onPress={pressKey} />
           )}
 
+          {restaurant && <OrderBar order={order} setType={setOrderType} pickTable={() => setDialog({ kind: "tables" })} pending={pendingKitchen.length} onKitchen={() => void sendKitchen()} />}
           <div className="till-tabs" role="tablist" aria-label="الزبائن المفتوحين">
             {tabs.map((t, i) => {
               const live = t.id === activeTab;
@@ -784,12 +873,12 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
               const total = live ? totals.total : cartTotals(priceCart(t.lines, offers, new Date()).lines, t.invoiceDiscount).total;
               return (
                 <button key={t.id} role="tab" aria-selected={live} className={live ? "active" : ""} onClick={() => switchTab(t.id)} title={`Alt+${i + 1}`}>
-                  <span>{(live ? customer : t.customer)?.name ?? `زبون ${t.n}`}</span>
+                  <span>{(live ? customer : t.customer)?.name ?? (restaurant ? `${ORDER_TYPE_ICONS[(live ? order : t.order ?? DEFAULT_ORDER).type]} ${orderLabel(live ? order : t.order ?? DEFAULT_ORDER, t.n)}` : `زبون ${t.n}`)}</span>
                   {n > 0 && <small className="num">{n} · {formatMoney(total, "")}</small>}
                 </button>
               );
             })}
-            <button className="ghost" onClick={newTab} title="Alt+N">+ زبون جديد</button>
+            <button className="ghost" onClick={() => newTab()} title="Alt+N">{restaurant ? "+ طلب جديد" : "+ زبون جديد"}</button>
           </div>
 
           <div className="cart">
@@ -828,6 +917,8 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
                             ))}
                           </div>
                         )}
+                        {l.note && <div className="line-note">📝 {l.note}</div>}
+                        {restaurant && sent[l.key] && sent[l.key].qtyMilli === l.qtyMilli && (sent[l.key].note || null) === (l.note || null) && <div className="muted small">👨‍🍳 في المطبخ</div>}
                         {l.discountMinor > 0 && <div className="muted">خصم {formatMoney(l.discountMinor)}</div>}
                         {(l.promoMinor ?? 0) > 0 && <div className="offer-tag">🏷 {l.offerName} −{formatMoney(l.promoMinor!)}</div>}
                       </td>
@@ -898,6 +989,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
             <button onClick={() => setDialog({ kind: "discount" })} disabled={!lines.length || maxDiscount <= 0}>خصم على الفاتورة <kbd>F6</kbd></button>
             <button onClick={() => selectedLine && removeLine(selectedLine.key)} disabled={!selected} className="danger">حذف الصنف <kbd>Del</kbd></button>
             {hasGeneric && <button onClick={() => void showAlternatives()} disabled={!selected}>💊 البدائل</button>}
+            {restaurant && <button onClick={() => selected && setDialog({ kind: "note", key: selected })} disabled={!selected}>📝 ملاحظة <kbd>Alt+M</kbd></button>}
             <button onClick={hold} disabled={!lines.length}>تعليق <kbd>F8</kbd></button>
             <button onClick={async () => setDialog({ kind: "held", carts: await db.held.toArray() })}>الفواتير المعلقة <kbd>F9</kbd></button>
             <button onClick={() => setDialog({ kind: "customer" })}>{customer ? `العميل: ${customer.name}` : "العميل / تسديد"} <kbd>F3</kbd></button>
@@ -914,7 +1006,16 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
         </aside>
       </main>
 
-      <Receipt data={receipt} />
+      <Receipt data={slip ?? receipt} />
+      {dialog?.kind === "tables" && <TablesDialog tables={tables} busy={busyTables} onPick={pickTable} onClose={() => { setDialog(null); focusScan(); }} />}
+      {dialog?.kind === "note" && (
+        <NoteDialog
+          name={lines.find((l) => l.key === dialog.key)?.name ?? ""}
+          initial={lines.find((l) => l.key === dialog.key)?.note ?? ""}
+          onClose={() => { setDialog(null); focusScan(); }}
+          onDone={(note) => { setLines((ls) => ls.map((l) => (l.key === dialog.key ? { ...l, note: note || null } : l))); setDialog(null); focusScan(); }}
+        />
+      )}
 
       {dialog?.kind === "printer" && <PrinterDialog onClose={() => { setDialog(null); focusScan(); }} />}
       {dialog?.kind === "mypay" && (
@@ -1067,6 +1168,14 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
               <button className={prefs.quickPlace === "bottom" ? "active" : ""} onClick={() => { const p = { ...prefs, quickPlace: "bottom" as const }; setPrefs(p); savePrefs(p); }}>⬇️ تحت السلة</button>
             </div>
           </label>
+          {restaurant && (
+            <label>ورقة المطبخ
+              <div className="seg">
+                <button className={prefs.kitchenSlip ? "active" : ""} onClick={() => { const p = { ...prefs, kitchenSlip: true }; setPrefs(p); savePrefs(p); }}>🖨️ تنطبع مع كل إرسال</button>
+                <button className={!prefs.kitchenSlip ? "active" : ""} onClick={() => { const p = { ...prefs, kitchenSlip: false }; setPrefs(p); savePrefs(p); }}>📺 شاشة المطبخ بس</button>
+              </div>
+            </label>
+          )}
           <div className="row"><button onClick={() => sound("bad")}>جرّب صوت الخطأ</button><span className="spacer" /><button className="primary" onClick={() => { setDialog(null); focusScan(); }}>تمام</button></div>
         </Modal>
       )}

@@ -23,7 +23,7 @@ const TYPES: { id: string; icon: string; name: string; ready: boolean }[] = [
   { id: "clothing", icon: "👕", name: "ملابس وأحذية", ready: true },
   { id: "pharmacy", icon: "💊", name: "صيدلية", ready: true },
   { id: "butcher", icon: "🥩", name: "جزارة", ready: true },
-  { id: "restaurant", icon: "🍽️", name: "مطعم / مقهى", ready: false },
+  { id: "restaurant", icon: "🍽️", name: "مطعم / مقهى", ready: true },
 ];
 
 /** First screen on a browser that is not a registered cashier yet: what the system is, then sign in or open a shop. */

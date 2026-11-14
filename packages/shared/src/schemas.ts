@@ -27,6 +27,8 @@ export const saleLineSchema = z.object({
   offerId: z.string().uuid().nullable().optional(),
   offerName: z.string().max(120).nullable().optional(),
   taxBp: z.number().int().min(0).max(10000).default(0),
+  /** Restaurants: how the customer wants it (no onions, extra hot). */
+  note: z.string().trim().max(200).nullable().optional(),
 });
 
 export const paymentSchema = z.object({
@@ -53,6 +55,9 @@ export const saleInputSchema = z.object({
     number: z.string().trim().max(60).optional(),
     patient: z.string().trim().max(120).optional(),
   }).nullable().optional(),
+  /** Restaurants: eaten in, taken away or delivered, and at which table. */
+  orderType: z.enum(["dine_in", "takeaway", "delivery"]).nullable().optional(),
+  tableName: z.string().trim().max(60).nullable().optional(),
 });
 export type SaleInput = z.infer<typeof saleInputSchema>;
 export type SaleLineInput = z.infer<typeof saleLineSchema>;
