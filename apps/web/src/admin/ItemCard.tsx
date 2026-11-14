@@ -8,15 +8,15 @@ interface Dept { id: string; name: string; icon: string | null }
 
 const BASE_UNITS = ["حبة", "علبة", "قنينة", "كيس", "باكو", "لتر", "متر"];
 const PACKS = ["صندوق", "كرتونة", "شد", "جالون", "كيس", "باكو", "درزن", "طبقة"];
-const SIZE_SETS: [string, string[]][] = [
+export const SIZE_SETS: [string, string[]][] = [
   ["ملابس", ["S", "M", "L", "XL", "XXL"]],
   ["أحذية", ["38", "39", "40", "41", "42", "43", "44"]],
   ["أطفال", ["2", "4", "6", "8", "10", "12"]],
 ];
-const COLORS = ["أبيض", "أسود", "رمادي", "كحلي", "أزرق", "أحمر", "أخضر", "بيج", "بني"];
+export const COLORS = ["أبيض", "أسود", "رمادي", "كحلي", "أزرق", "أحمر", "أخضر", "بيج", "بني"];
 
 /** Words typed with Enter or a comma become chips; a tap on a suggestion adds it. */
-function Chips({ value, onChange, suggest, label }: { value: string[]; onChange: (v: string[]) => void; suggest: string[]; label: string }) {
+export function Chips({ value, onChange, suggest, label }: { value: string[]; onChange: (v: string[]) => void; suggest: string[]; label: string }) {
   const [t, setT] = useState("");
   const add = (w: string) => {
     const x = w.trim();

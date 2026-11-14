@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { creditRoom, formatMoney, formatQty, pointsEarned, pointsFor, readShopSettings, type CatalogCustomer, type CatalogProduct, type LoyaltySettings, type Offer, type PaymentMethod, type QuickGroup, type QuickKey, type ShopSettings } from "@pos/shared";
+import { creditRoom, formatMoney, formatQty, pointsEarned, pointsFor, readShopSettings, type CatalogCustomer, type CatalogProduct, type LoyaltySettings, type Offer, type PaymentMethod, type QuickGroup, type QuickKey, type ShopSettings, variantBaseName } from "@pos/shared";
 import { api } from "../api";
 import { db, getMeta, nextInvoiceNumber, setMeta, type HeldCart, type LocalShift } from "../localdb";
-import { findByCode, searchProducts } from "../lookup";
+import { findByCode, searchProducts, type Found } from "../lookup";
+import { VariantPicker } from "./VariantPicker";
 import { session, tokenClaims } from "../session";
 import { loadOffers, onSync, refreshCounts, startSyncLoop, syncNow, type SyncState } from "../sync";
 import { autoBackupIfDue } from "../owner/backup";
@@ -41,6 +42,7 @@ type Dialog =
   | { kind: "camera" }
   | { kind: "drawer" }
   | { kind: "prefs" }
+  | { kind: "variant"; groupId: string; times: number }
   | null;
 
 /** A customer being served. Several can be open at once, one tab each. */
@@ -66,7 +68,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [invoiceDiscount, setInvoiceDiscount] = useState(0);
   const [code, setCode] = useState("");
-  const [results, setResults] = useState<CatalogProduct[]>([]);
+  const [results, setResults] = useState<Found[]>([]);
   const [activeResult, setActiveResult] = useState(0);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [message, setMessage] = useState<{ text: string; bad?: boolean } | null>(null);
@@ -90,6 +92,8 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   const [mine, setMine] = useState({ count: 0, totalMinor: 0 });
   /** The last sale's change, shown big until the next item goes in (even on another customer's tab). */
   const [lastPaid, setLastPaid] = useState<{ number: string; changeMinor: number } | null>(null);
+  /** An exchange under way: what the returned piece was worth, to take off the new one. */
+  const [exchange, setExchange] = useState<{ number: string; creditMinor: number } | null>(null);
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 30_000);
@@ -320,9 +324,11 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     setCode("");
   }
 
-  function pick(p: CatalogProduct, times = 1) {
+  function pick(p: Found, times = 1) {
     setResults([]);
     setCode("");
+    // A model in several sizes or colours: pick the piece from its grid.
+    if (p.variants && p.groupId) return setDialog({ kind: "variant", groupId: p.groupId, times });
     if (p.isWeighted) return setDialog({ kind: "weight", product: p });
     const unit = p.units.find((u) => u.isBase) ?? p.units[0];
     put(lineFor(p, unit, Math.round(times * 1000)));
@@ -347,6 +353,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   }
 
   function voidCart() {
+    if (exchange) return cancelExchange();
     if (!lines.length) return;
     if (till.confirmClear && !confirm(`نلغي الفاتورة (${lines.length} أصناف · ${formatMoney(totals.total)})؟`)) return;
     finishCart();
@@ -371,6 +378,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   const current = (): Tab => ({ ...(tabs.find((t) => t.id === activeTab) ?? emptyTab(1)), lines, invoiceDiscount, customer, selected });
   function switchTab(id: string) {
     if (id === activeTab) return;
+    if (exchange) return flash("كمّل التبديل أول، أو ألغيه", true);
     const next = tabs.find((t) => t.id === id);
     if (!next) return;
     const cur = current();
@@ -382,6 +390,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     focusScan();
   }
   function newTab() {
+    if (exchange) return flash("كمّل التبديل أول، أو ألغيه", true);
     if (tabs.length >= 9) return flash("أقصى حد 9 زبائن مفتوحين", true);
     const cur = current();
     const t = emptyTab(Math.max(...tabs.map((x) => x.n)) + 1);
@@ -445,7 +454,8 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     const sale = toSaleInput({ id, number, shiftId: shift?.id ?? null, lines, offers, invoiceDiscountMinor: invoiceDiscount, payments, customerId: customer?.id, employeeId });
     const credit = payments.filter((p) => p.method === "credit").reduce((a, p) => a + p.amountMinor, 0);
     const paid = payments.reduce((a, p) => a + p.amountMinor, 0);
-    const change = paid - sale.totalMinor;
+    // In an exchange, what the returned piece was worth and the new one does not use goes back in cash.
+    const change = paid - sale.totalMinor + (exchange ? Math.max(0, exchange.creditMinor - sale.totalMinor) : 0);
     const cashIn = payments.filter((p) => p.method === "cash").reduce((a, p) => a + p.amountMinor, 0);
     // Saved on the device first, so a sale is never lost if the internet or the server is down.
     await db.transaction("rw", db.sales, db.outbox, async () => {
@@ -469,6 +479,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     const store = await getMeta<{ footer?: string }>("store");
     setReceipt({ storeName: device.storeName, shop, footer: store?.footer, deviceName: device.name, cashierName, sale, changeMinor: change, customerName: customer?.name, customerPhone: customer?.phone, employeeName: employees.find((e) => e.id === employeeId)?.name, points });
     finishCart();
+    setExchange(null);
     setDialog(null);
     sound("cash", prefs.sound);
     setLastPaid({ number, changeMinor: change });
@@ -487,8 +498,29 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     const store = await getMeta<{ footer?: string }>("store");
     setReceipt({ storeName: device.storeName, shop, footer: store?.footer, deviceName: device.name, cashierName, ret: r });
     setDialog(null);
-    flash(r.method === "cash" && r.refundMinor > 0 ? `رجّع للزبون ${formatMoney(r.refundMinor)} كاش` : "تم المرتجع");
+    if (r.exchange && r.refundMinor > 0) {
+      setExchange({ number: r.number, creditMinor: r.refundMinor + (exchange?.creditMinor ?? 0) });
+      flash("امسح القطعة الجديدة، وقيمة المرجّعة تنخصم منها");
+    } else {
+      flash(r.method === "cash" && r.refundMinor > 0 ? `رجّع للزبون ${formatMoney(r.refundMinor)} كاش` : "تم المرتجع");
+    }
     void syncNow();
+    focusScan();
+  }
+
+  /** Pay: in an exchange the returned piece's value pays first, and only the difference is asked for. */
+  function startPay() {
+    if (!lines.length || !shift) return;
+    if (exchange && totals.total <= exchange.creditMinor) return void pay([{ method: "cash", amountMinor: totals.total }]);
+    setDialog({ kind: "pay" });
+  }
+
+  /** The customer changed their mind: the exchange becomes a plain return, paid back in cash. */
+  function cancelExchange() {
+    if (!exchange) return;
+    if (!confirm(`نلغي التبديل؟ رجّع للزبون ${formatMoney(exchange.creditMinor)} كاش.`)) return;
+    setLastPaid({ number: exchange.number, changeMinor: exchange.creditMinor });
+    setExchange(null);
     focusScan();
   }
 
@@ -582,7 +614,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
         F9: () => void db.held.toArray().then((carts) => setDialog({ kind: "held", carts })),
         F10: () => shift && setDialog({ kind: "return" }),
         F11: () => void drawer(),
-        F12: () => lines.length && shift && setDialog({ kind: "pay" }),
+        F12: startPay,
       };
       if (e.ctrlKey && !e.altKey && /^(Digit|Numpad)[1-9]$/.test(e.code)) {
         // Ctrl+1 … Ctrl+9: the quick keys on screen, in order.
@@ -697,7 +729,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
               <div className="results">
                 {results.map((p, i) => (
                   <button key={p.id} className={i === activeResult ? "active" : ""} onClick={() => pick(p)}>
-                    <span>{p.name}{p.isWeighted && " ⚖️"}</span>
+                    <span>{p.variants ? <>{variantBaseName(p)} <small className="muted">👕 {p.variants} مقاس ولون</small></> : p.name}{p.isWeighted && " ⚖️"}</span>
                     <span className="num">{formatMoney((p.units.find((u) => u.isBase) ?? p.units[0]).priceMinor)}</span>
                   </button>
                 ))}
@@ -797,7 +829,14 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
             ))}
             {totals.discount > 0 && <div className="line"><span>الخصم</span><span className="num">−{formatMoney(totals.discount)}</span></div>}
             {totals.tax > 0 && <div className="line muted"><span>منها ضريبة</span><span className="num">{formatMoney(totals.tax)}</span></div>}
-            <div className="grand num">{formatMoney(totals.total)}</div>
+            {exchange && (
+              <>
+                <div className="line exchange-tag"><span>🔁 تبديل <small className="num">({exchange.number})</small></span><span className="num">−{formatMoney(exchange.creditMinor)}</span></div>
+                {totals.total < exchange.creditMinor && lines.length > 0 && <div className="line"><span>يرجع للزبون</span><span className="num">{formatMoney(exchange.creditMinor - totals.total)}</span></div>}
+              </>
+            )}
+            <div className="grand num">{formatMoney(exchange ? Math.max(0, totals.total - exchange.creditMinor) : totals.total)}</div>
+            {exchange && <button className="ghost" onClick={cancelExchange}>إلغاء التبديل ورجّع الفلوس</button>}
             {lastPaid && (
               <div className={`change-big ${lastPaid.changeMinor ? "" : "done"}`} onClick={() => setLastPaid(null)}>
                 <span>{lastPaid.changeMinor ? `الباقي للزبون · ${lastPaid.number}` : `✓ تم البيع · ${lastPaid.number}`}</span>
@@ -826,7 +865,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
             <button onClick={() => setDialog({ kind: "drawer" })} disabled={!shift}>💵 إيداع / سحب <kbd>Alt+D</kbd></button>
             <button onClick={voidCart} disabled={!lines.length} className="danger">إلغاء الفاتورة</button>
             <button onClick={() => setDialog({ kind: "keys" })} className="ghost">⌨️ الاختصارات <kbd>F1</kbd></button>
-            <button className="primary pay" disabled={!lines.length || !shift} onClick={() => setDialog({ kind: "pay" })}>
+            <button className="primary pay" disabled={!lines.length || !shift} onClick={startPay}>
               دفع <kbd>F12</kbd>
             </button>
           </div>
@@ -842,7 +881,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
           <div className="row"><span className="spacer" /><button onClick={() => { setDialog(null); focusScan(); }}>إغلاق</button></div>
         </Modal>
       )}
-      {dialog?.kind === "pay" && <PayDialog totalMinor={totals.total} customer={customer} employees={employees} rules={rules} onPay={pay} onClose={() => { setDialog(null); focusScan(); }} />}
+      {dialog?.kind === "pay" && <PayDialog totalMinor={exchange ? totals.total - exchange.creditMinor : totals.total} customer={customer} employees={employees} rules={rules} onPay={exchange ? (ps, emp) => pay(withCredit(ps, exchange.creditMinor), emp) : pay} onClose={() => { setDialog(null); focusScan(); }} />}
       {dialog?.kind === "weight" && (
         <AmountDialog
           title={dialog.product.name}
@@ -943,6 +982,10 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
         </Modal>
       )}
       {dialog?.kind === "drawer" && <DrawerDialog onDone={(k, m, r) => void drawerMove(k, m, r)} onClose={() => { setDialog(null); focusScan(); }} />}
+      {dialog?.kind === "variant" && (
+        <VariantPicker groupId={dialog.groupId} onClose={() => { setDialog(null); focusScan(); }}
+          onPick={(p) => { const times = dialog.times; setDialog(null); pick(p, times); }} />
+      )}
       {dialog?.kind === "prefs" && (
         <Modal title="🎨 شكل الشاشة" onClose={() => { setDialog(null); focusScan(); }}>
           <span className="muted">يتحفظ لك أنت ({cashierName}) على هذا الجهاز، وكل كاشير يختار اللي يريحه.</span>
@@ -1039,6 +1082,12 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
 
 
 /** The customer on the bill: what they owe, their limit, and a warning as they get close to it. */
+/** The returned piece's value joins the cash the customer hands over, as one cash payment. */
+function withCredit(ps: { method: PaymentMethod; amountMinor: number }[], creditMinor: number) {
+  const cash = ps.find((p) => p.method === "cash");
+  return cash ? ps.map((p) => (p === cash ? { ...p, amountMinor: p.amountMinor + creditMinor } : p)) : [{ method: "cash" as const, amountMinor: creditMinor }, ...ps];
+}
+
 function CustomerBox({ c, rules, onClear }: { c: CatalogCustomer; rules: LoyaltySettings | null; onClear: () => void }) {
   const room = creditRoom(c);
   const limit = c.creditLimitMinor;

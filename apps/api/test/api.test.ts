@@ -1417,6 +1417,41 @@ describe("pro pack: counts, variants, quick keys, two-step sign-in, audit and er
     expect((await call("POST", "/products/variants", t, { name: "قميص", sizes: [], colors: [] })).status).toBe(400);
   });
 
+  it("runs a clothing model as one: shared price, new sizes and colours, and a sizes report", async () => {
+    const made = (await call("POST", "/products/variants", t, { name: "بنطلون جينز", sizes: ["32", "30"], colors: ["أزرق"], priceMinor: 60000, costMinor: 30000 })).body;
+    const group = made[0].groupId as string;
+    // The price, cost and name change on every piece, and the name keeps each piece's colour and size.
+    const p = await call("PATCH", `/products/groups/${group}`, t, { name: "جينز سليم", priceMinor: 65000 });
+    expect(p.body).toEqual({ ok: true, pieces: 2 });
+    let all = (await call("GET", "/products", t)).body.filter((x: { groupId: string }) => x.groupId === group);
+    expect(all.map((x: { name: string }) => x.name).sort()).toEqual(["جينز سليم - أزرق - 30", "جينز سليم - أزرق - 32"]);
+    expect(all.every((x: { units: { priceMinor: number }[]; costMinor: number }) => x.units[0].priceMinor === 65000 && x.costMinor === 30000)).toBe(true);
+    const log = (await db.query(`SELECT data FROM audit_log WHERE action = 'product.price_change' AND data->>'model' = $1`, ["جينز سليم"])).rows;
+    expect(log[0].data).toMatchObject({ pieces: 2, priceChanges: [{ from: 60000, to: 65000 }] });
+
+    // A new colour comes with every size the model has, and a new size with every colour: only what is missing.
+    const added = await call("POST", `/products/groups/${group}/add`, t, { colors: ["أسود"], sizes: ["34"] });
+    expect(added.status).toBe(200);
+    expect(added.body.map((x: { attrs: object }) => x.attrs)).toEqual([{ color: "أزرق", size: "34" }, { color: "أسود", size: "30" }, { color: "أسود", size: "32" }, { color: "أسود", size: "34" }]);
+    expect(added.body.every((x: { name: string; units: { priceMinor: number; barcodes: string[] }[] }) => x.name.startsWith("جينز سليم - ") && x.units[0].priceMinor === 65000 && x.units[0].barcodes.length === 1)).toBe(true);
+    expect((await call("POST", `/products/groups/${group}/add`, t, { sizes: ["30"] })).status).toBe(400);
+    const sizesOnly = (await call("POST", "/products/variants", t, { name: "حزام", sizes: ["S", "M"] })).body[0].groupId;
+    expect((await call("POST", `/products/groups/${sizesOnly}/add`, t, { colors: ["بني"] })).status).toBe(400);
+    expect((await call("PATCH", `/products/groups/${crypto.randomUUID()}`, t, { priceMinor: 1 })).status).toBe(404);
+
+    // The sizes report: each model with each piece's colour, size and stock.
+    all = (await call("GET", "/products", t)).body.filter((x: { groupId: string }) => x.groupId === group);
+    const black34 = all.find((x: { attrs: { color: string; size: string } }) => x.attrs.color === "أسود" && x.attrs.size === "34");
+    await call("POST", "/stock/adjust", t, { storeId: store, productId: black34.id, qtyMilli: 3000, reason: "رصيد أول" });
+    const today = new Date().toISOString().slice(0, 10);
+    const rep = await call("GET", `/reports/sizes?from=${today}&to=${today}&storeId=${store}`, t);
+    expect(rep.status).toBe(200);
+    const jeans = rep.body.find((m: { groupId: string }) => m.groupId === group);
+    expect(jeans).toMatchObject({ name: "جينز سليم", stockMilli: 3000, soldMilli: 0 });
+    expect(jeans.pieces).toHaveLength(6);
+    expect(jeans.pieces.find((x: { productId: string }) => x.productId === black34.id)).toMatchObject({ color: "أسود", size: "34", stockMilli: 3000 });
+  });
+
   it("counts the shelves and turns each difference into one correction", async () => {
     const c = (await call("POST", "/counts", t, { storeId: store, note: "جرد آخر الشهر" })).body;
     expect(c.id).toBeTruthy();

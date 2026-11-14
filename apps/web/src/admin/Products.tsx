@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { formatMoney, formatQty, toMinor, type CatalogProduct } from "@pos/shared";
+import { foldVariants, formatMoney, formatQty, toMinor, variantBaseName, type CatalogProduct } from "@pos/shared";
 import { Modal } from "../pos/dialogs";
 import type { Call } from "./Admin";
 import { ItemCard } from "./ItemCard";
+import type { LabelDraft } from "./Labels";
+import { ModelSheet } from "./ModelSheet";
 
 export interface Dept { id: string; name: string; icon: string | null; sort: number; products: number }
 
@@ -32,7 +34,7 @@ function toForm(p: CatalogProduct): Form {
   };
 }
 
-export function Products({ call, storeId }: { call: Call; storeId: string }) {
+export function Products({ call, storeId, onLabels }: { call: Call; storeId: string; onLabels?: (d: LabelDraft[]) => void }) {
   const [rows, setRows] = useState<Row[]>([]);
   const [cats, setCats] = useState<Dept[]>([]);
   const [q, setQ] = useState("");
@@ -40,6 +42,8 @@ export function Products({ call, storeId }: { call: Call; storeId: string }) {
   const [manage, setManage] = useState(false);
   const [form, setForm] = useState<Form | null>(null);
   const [card, setCard] = useState(false);
+  /** The clothing model open on its own sheet. */
+  const [model, setModel] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = async () => {
@@ -54,6 +58,9 @@ export function Products({ call, storeId }: { call: Call; storeId: string }) {
     if (!s) return inDept;
     return inDept.filter((r) => r.name.toLowerCase().includes(s) || r.units.some((u) => u.barcodes.some((b) => b.includes(s))));
   }, [rows, q, dept]);
+  // Clothes: each model shows once, its sizes and colours on its own sheet.
+  const folded = useMemo(() => foldVariants(shown), [shown]);
+  const pieces = (group: string) => rows.filter((r) => r.groupId === group);
   const catName = (id: string | null) => {
     const c = cats.find((x) => x.id === id);
     return c ? `${c.icon ? `${c.icon} ` : ""}${c.name}` : "";
@@ -189,14 +196,19 @@ export function Products({ call, storeId }: { call: Call; storeId: string }) {
       </div>
       {card && (
         <ItemCard call={call} initial={q.trim()} categoryId={dept !== "all" && dept !== "none" ? dept : ""} onClose={() => setCard(false)}
-          onCreated={() => { setCard(false); setQ(""); void load(); }} />
+          onCreated={(p) => { setCard(false); setQ(""); void load(); if (p.groupId) setModel(p.groupId); }} />
+      )}
+      {model && pieces(model).length > 0 && (
+        <ModelSheet call={call} pieces={pieces(model)} cats={cats} onClose={() => setModel(null)} onChanged={load}
+          onEditPiece={(p) => { setModel(null); setForm(toForm(p)); }} onLabels={onLabels} />
       )}
       {manage && <Departments call={call} list={cats} reload={load} onClose={() => setManage(false)} />}
       <div className="card" style={{ padding: 0, overflow: "auto" }}>
         <table>
           <thead><tr><th>الصنف</th><th>القسم</th><th>الوحدات والأسعار</th><th>التكلفة</th><th>المخزون</th><th /></tr></thead>
           <tbody>
-            {shown.map((p) => {
+            {folded.map(({ item: p, count }) => {
+              if (count > 1) return <ModelRow key={p.groupId} pieces={pieces(p.groupId!)} dept={catName(p.categoryId)} onOpen={() => setModel(p.groupId!)} />;
               const low = p.stockMilli !== null && p.minStockMilli > 0 && p.stockMilli <= p.minStockMilli;
               return (
                 <tr key={p.id} style={{ opacity: p.active ? 1 : 0.5 }}>
@@ -275,5 +287,25 @@ function Departments({ call, list, reload, onClose }: { call: Call; list: Dept[]
         </>
       )}
     </Modal>
+  );
+}
+
+/** A clothing model on one line: its price, and how much is left over all its sizes and colours. */
+function ModelRow({ pieces, dept, onOpen }: { pieces: Row[]; dept: string; onOpen: () => void }) {
+  const price = pieces.map((p) => (p.units.find((u) => u.isBase) ?? p.units[0]).priceMinor);
+  const lo = Math.min(...price);
+  const hi = Math.max(...price);
+  const stock = pieces.reduce((a, p) => a + (p.stockMilli ?? 0), 0);
+  const out = pieces.filter((p) => p.active && (p.stockMilli ?? 0) <= 0).length;
+  const active = pieces.some((p) => p.active);
+  return (
+    <tr style={{ opacity: active ? 1 : 0.5, cursor: "pointer" }} onClick={onOpen}>
+      <td>{variantBaseName(pieces[0])} <span className="badge">👕 {pieces.length} مقاس ولون</span></td>
+      <td className="muted">{dept || "—"}</td>
+      <td>{hi ? <span className="num">{lo === hi ? formatMoney(lo) : `${formatMoney(lo, "")} – ${formatMoney(hi)}`}</span> : <span className="muted">بدون سعر</span>}</td>
+      <td className="num">{formatMoney(pieces[0].costMinor)}</td>
+      <td><span className="num">{formatQty(stock, false)}</span>{out > 0 && <> <span className="badge bad">{out} خالص</span></>}</td>
+      <td><button onClick={(e) => { e.stopPropagation(); onOpen(); }}>المقاسات</button></td>
+    </tr>
   );
 }

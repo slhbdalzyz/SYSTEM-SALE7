@@ -1,5 +1,6 @@
 // The demo shop: same data as `pnpm seed` on the server, made the first time the demo opens.
 import bcrypt from "bcryptjs";
+import { ean13CheckDigit } from "@pos/shared";
 import { hashToken } from "../../../api/src/auth";
 
 export const DEMO_DEVICE_TOKEN = "d".repeat(64);
@@ -17,7 +18,8 @@ export async function seedDemo(db: Q) {
     await addSuppliers(db);
     await addBranch(db);
     await addOffers(db);
-    return addOwnerDemo(db);
+    await addOwnerDemo(db);
+    return addClothing(db);
   }
   const one = async (sql: string, params: unknown[] = []) => (await db.query(sql, params)).rows[0]?.id as string;
   const hash = (s: string) => bcrypt.hash(s, 8);
@@ -99,6 +101,80 @@ export async function seedDemo(db: Q) {
   await addBranch(db);
   await addOffers(db);
   await addOwnerDemo(db);
+  await addClothing(db);
+}
+
+/**
+ * A rail of clothes in the demo shop, to try sizes and colours: two models, each colour in each
+ * size with its own tag and stock, and a week of sales so the sizes report has something to say.
+ */
+async function addClothing(db: Q) {
+  if ((await db.query(`SELECT 1 FROM products WHERE group_id IS NOT NULL LIMIT 1`)).rows.length) return;
+  const dev = (await db.query(`SELECT tenant_id AS tid, store_id AS sid, id AS did FROM devices WHERE kind = 'pos' ORDER BY created_at LIMIT 1`)).rows[0];
+  if (!dev) return;
+  const { tid, sid, did } = dev;
+  const uid = (await db.query(`SELECT id FROM users WHERE tenant_id = $1 AND role = 'cashier' LIMIT 1`, [tid])).rows[0].id;
+  const cat = (await db.query(
+    `INSERT INTO categories (tenant_id, name, icon, sort) VALUES ($1, 'ملابس', '👕', 99) ON CONFLICT DO NOTHING RETURNING id`, [tid],
+  )).rows[0]?.id ?? (await db.query(`SELECT id FROM categories WHERE tenant_id = $1 AND name = 'ملابس'`, [tid])).rows[0].id;
+  let code = 900;
+  const tag = () => {
+    const body = `299${String(++code).padStart(9, "0")}`;
+    return body + ean13CheckDigit(body);
+  };
+  const models: { name: string; price: number; cost: number; colors: string[]; sizes: string[]; stock: (c: number, s: number) => number; sold: [number, number, number][] }[] = [
+    // Stock low in the middle sizes, which sell best: what the report should point at.
+    { name: "قميص بولو", price: 45000, cost: 22000, colors: ["أبيض", "كحلي", "أحمر"], sizes: ["S", "M", "L", "XL"], stock: (c, s) => (s === 1 || s === 2 ? 2 + c : 6), sold: [[0, 1, 3], [0, 2, 2], [1, 1, 2], [1, 2, 3], [2, 2, 1], [0, 3, 1]] },
+    { name: "حذاء رياضي", price: 120000, cost: 70000, colors: ["أسود", "أبيض"], sizes: ["40", "41", "42", "43", "44"], stock: (c, s) => (s === 2 ? 0 : 3 - c), sold: [[0, 2, 2], [0, 1, 1], [1, 2, 1], [0, 3, 1]] },
+  ];
+  const sales: { id: string; number: string; total: number; mins: number }[] = [];
+  const lines: { sale: string; pid: string; uid: string; name: string; qty: number; price: number; total: number; cost: number; mins: number }[] = [];
+  for (const m of models) {
+    const group = crypto.randomUUID();
+    const ids: { pid: string; uid: string; name: string }[][] = [];
+    for (const [ci, color] of m.colors.entries()) {
+      ids.push([]);
+      for (const [si, size] of m.sizes.entries()) {
+        const name = `${m.name} - ${color} - ${size}`;
+        const pid = (await db.query(
+          `INSERT INTO products (tenant_id, name, category_id, cost_minor, min_stock_milli, group_id, attrs) VALUES ($1,$2,$3,$4,2000,$5,$6) RETURNING id`,
+          [tid, name, cat, m.cost, group, JSON.stringify({ color, size })],
+        )).rows[0].id;
+        const unit = (await db.query(`INSERT INTO product_units (tenant_id, product_id, name, factor_milli, price_minor, is_base) VALUES ($1,$2,'قطعة',1000,$3,true) RETURNING id`, [tid, pid, m.price])).rows[0].id;
+        await db.query(`INSERT INTO barcodes (tenant_id, unit_id, code) VALUES ($1,$2,$3)`, [tid, unit, tag()]);
+        const sold = m.sold.filter(([c, s2]) => c === ci && s2 === si).reduce((a, x) => a + x[2], 0);
+        await db.query(`INSERT INTO stock_movements (tenant_id, store_id, product_id, qty_milli, kind, note) VALUES ($1,$2,$3,$4,'adjust','رصيد افتتاحي')`, [tid, sid, pid, (m.stock(ci, si) + sold) * 1000]);
+        ids[ci].push({ pid, uid: unit, name });
+      }
+    }
+    for (const [k, [c, s, qty]] of m.sold.entries()) {
+      const it = ids[c][s];
+      const id = crypto.randomUUID();
+      const mins = (1 + (k % 6)) * 1440 - 300;
+      const total = m.price * qty;
+      sales.push({ id, number: `D-C${String(sales.length + 1).padStart(4, "0")}`, total, mins });
+      lines.push({ sale: id, pid: it.pid, uid: it.uid, name: it.name, qty: qty * 1000, price: m.price, total, cost: m.cost * qty, mins });
+    }
+  }
+  await db.query(
+    `INSERT INTO sales (id, tenant_id, store_id, device_id, user_id, number, subtotal_minor, discount_minor, tax_minor, total_minor, paid_minor, change_minor, created_at)
+     SELECT x.id, $2, $3, $4, $5, x.number, x.total, 0, 0, x.total, x.total, 0, now() - make_interval(mins => x.mins)
+     FROM jsonb_to_recordset($1::jsonb) AS x(id uuid, number text, total bigint, mins int)`,
+    [JSON.stringify(sales), tid, sid, did, uid],
+  );
+  await db.query(`INSERT INTO payments (tenant_id, sale_id, method, amount_minor) SELECT $2, x.id, 'cash', x.total FROM jsonb_to_recordset($1::jsonb) AS x(id uuid, total bigint)`, [JSON.stringify(sales), tid]);
+  await db.query(
+    `INSERT INTO sale_lines (tenant_id, sale_id, product_id, unit_id, name, qty_milli, price_minor, discount_minor, tax_minor, total_minor, cost_minor)
+     SELECT $2, x.sale, x.pid, x.uid, x.name, x.qty, x.price, 0, 0, x.total, x.cost
+     FROM jsonb_to_recordset($1::jsonb) AS x(sale uuid, pid uuid, uid uuid, name text, qty bigint, price bigint, total bigint, cost bigint)`,
+    [JSON.stringify(lines), tid],
+  );
+  await db.query(
+    `INSERT INTO stock_movements (tenant_id, store_id, product_id, qty_milli, kind, ref_id, created_at)
+     SELECT $2, $3, x.pid, -x.qty, 'sale', x.sale, now() - make_interval(mins => x.mins)
+     FROM jsonb_to_recordset($1::jsonb) AS x(sale uuid, pid uuid, qty bigint, mins int)`,
+    [JSON.stringify(lines), tid, sid],
+  );
 }
 
 /**

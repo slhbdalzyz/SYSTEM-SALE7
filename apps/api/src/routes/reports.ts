@@ -201,4 +201,42 @@ export async function reportRoutes(app: FastifyInstance) {
       slowMovers: slow.sort((a, b) => b.costValueMinor - a.costValueMinor).slice(0, 20),
     };
   });
+
+  /**
+   * Clothes: for each model, how many pieces of each colour and size sold in the period (returns
+   * taken off) and how many are left, so the next order brings the sizes that move.
+   */
+  app.get("/reports/sizes", managers, async (req) => {
+    const q = z.object({ storeId: z.string().uuid().optional(), from: dateStr, to: dateStr, tz }).parse(req.query);
+    if (q.from > q.to) throw new HttpError(400, "بداية الفترة بعد نهايتها");
+    if ((Date.parse(q.to) - Date.parse(q.from)) / 864e5 > 366) throw new HttpError(400, "الفترة أطول من سنة");
+    await ownStore(req.user.tid, q.storeId);
+    const rows = (await app.db.query(
+      `SELECT p.id, p.group_id, p.name, p.attrs,
+         COALESCE((SELECT sum(l.qty_milli * u.factor_milli / 1000) FROM sale_lines l JOIN sales s ON s.id = l.sale_id JOIN product_units u ON u.id = l.unit_id
+                   WHERE l.product_id = p.id AND s.tenant_id = $1 AND ($2::uuid IS NULL OR s.store_id = $2)
+                     AND (s.created_at AT TIME ZONE $5)::date BETWEEN $3::date AND $4::date), 0)::bigint AS sold_milli,
+         COALESCE((SELECT sum(l.total_minor) FROM sale_lines l JOIN sales s ON s.id = l.sale_id
+                   WHERE l.product_id = p.id AND s.tenant_id = $1 AND ($2::uuid IS NULL OR s.store_id = $2)
+                     AND (s.created_at AT TIME ZONE $5)::date BETWEEN $3::date AND $4::date), 0)::bigint AS total_minor,
+         COALESCE((SELECT sum(m.qty_milli) FROM stock_movements m WHERE m.product_id = p.id AND ($2::uuid IS NULL OR m.store_id = $2)), 0)::bigint AS stock_milli
+       FROM products p
+       WHERE p.tenant_id = $1 AND p.group_id IS NOT NULL AND p.attrs IS NOT NULL AND p.active`,
+      [req.user.tid, q.storeId ?? null, q.from, q.to, q.tz],
+    )).rows;
+    type Model = { groupId: string; name: string; soldMilli: number; totalMinor: number; stockMilli: number; pieces: { productId: string; color: string | null; size: string | null; soldMilli: number; stockMilli: number }[] };
+    const models = new Map<string, Model>();
+    for (const r of rows) {
+      const a = (r.attrs ?? {}) as Record<string, string>;
+      let name = r.name as string;
+      for (const v of [a.size, a.color]) if (v && name.endsWith(` - ${v}`)) name = name.slice(0, -(v.length + 3));
+      const m: Model = models.get(r.group_id) ?? { groupId: r.group_id, name, soldMilli: 0, totalMinor: 0, stockMilli: 0, pieces: [] };
+      m.soldMilli += Number(r.sold_milli);
+      m.totalMinor += Number(r.total_minor);
+      m.stockMilli += Number(r.stock_milli);
+      m.pieces.push({ productId: r.id, color: a.color ?? null, size: a.size ?? null, soldMilli: Number(r.sold_milli), stockMilli: Number(r.stock_milli) });
+      models.set(r.group_id, m);
+    }
+    return [...models.values()].sort((x, y) => y.soldMilli - x.soldMilli || y.stockMilli - x.stockMilli);
+  });
 }

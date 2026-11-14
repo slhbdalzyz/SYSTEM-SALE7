@@ -692,3 +692,16 @@ a.btn.primary { background: var(--brand); color: var(--brand-ink); border-color:
 .hand-grid td, .hand-grid th { padding: 3px 4px; border-bottom: 1px solid var(--line); }
 .hand-grid td input:not([type=checkbox]) { width: 100%; padding: 6px 8px; border-radius: 6px; }
 .hand-grid td input[type=checkbox] { width: 20px; height: 20px; margin: 0 auto; display: block; }
+
+/* Sizes and colours: one model laid out as colours by sizes. */
+.variant-grid { display: grid; gap: 6px; align-items: stretch; overflow-x: auto; }
+.variant-grid .vg-head { text-align: center; font-size: .9rem; }
+.variant-grid .vg-color { align-self: center; padding-inline-end: 6px; white-space: nowrap; }
+.variant-grid .vg-cell { display: grid; gap: 2px; justify-items: center; padding: 10px 4px; min-height: 52px; font-weight: 600; }
+.variant-grid .vg-cell small { font-weight: 400; color: var(--muted); }
+.variant-grid .vg-none { display: grid; place-items: center; color: var(--muted); opacity: .5; }
+.variant-grid .vg-stock { display: grid; place-items: center; padding: 8px 4px; border-radius: 8px; background: var(--bg); font-variant-numeric: tabular-nums; }
+.variant-grid .vg-stock.out { color: var(--danger); }
+.variant-grid .vg-stock.low { color: var(--warn); }
+.modal.wide { width: min(860px, 100%); }
+.exchange-tag { color: var(--brand); font-weight: 600; }
