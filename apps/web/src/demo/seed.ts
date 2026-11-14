@@ -20,7 +20,8 @@ export async function seedDemo(db: Q) {
     await addOffers(db);
     await addOwnerDemo(db);
     await addClothing(db);
-    return addPharmacy(db);
+    await addPharmacy(db);
+    return addButcher(db);
   }
   const one = async (sql: string, params: unknown[] = []) => (await db.query(sql, params)).rows[0]?.id as string;
   const hash = (s: string) => bcrypt.hash(s, 8);
@@ -104,6 +105,56 @@ export async function seedDemo(db: Q) {
   await addOwnerDemo(db);
   await addClothing(db);
   await addPharmacy(db);
+  await addButcher(db);
+}
+
+/**
+ * A butcher's counter in the demo shop: a whole lamb bought by the kilo, the cuts it becomes, and
+ * one past breakdown so the usual cuts fill in and the history has a line.
+ */
+async function addButcher(db: Q) {
+  if ((await db.query(`SELECT 1 FROM breakdowns LIMIT 1`)).rows.length) return;
+  const dev = (await db.query(`SELECT tenant_id AS tid, store_id AS sid FROM devices WHERE kind = 'pos' ORDER BY created_at LIMIT 1`)).rows[0];
+  if (!dev) return;
+  const { tid, sid } = dev;
+  const cat = (await db.query(`INSERT INTO categories (tenant_id, name, icon, sort) VALUES ($1, 'لحوم', '🥩', 97) ON CONFLICT DO NOTHING RETURNING id`, [tid])).rows[0]?.id
+    ?? (await db.query(`SELECT id FROM categories WHERE tenant_id = $1 AND name = 'لحوم'`, [tid])).rows[0].id;
+  // name, scale code, price per kg, cost per kg, kilos cut in the past breakdown
+  const items: [string, string, number, number, number][] = [
+    ["خروف كامل (ذبيحة)", "3001", 0, 42000, 0],
+    ["لحم غنمي فخذ", "3002", 75000, 0, 6.2],
+    ["ريش غنمي", "3003", 85000, 0, 3.1],
+    ["لحم غنمي كتف", "3004", 65000, 0, 4.4],
+    ["لحم مفروم غنمي", "3005", 55000, 0, 2.6],
+    ["عظم للشوربة", "3006", 10000, 0, 1.5],
+  ];
+  const ids: string[] = [];
+  for (const [name, plu, price, cost] of items) {
+    const pid = (await db.query(
+      `INSERT INTO products (tenant_id, name, category_id, cost_minor, is_weighted, scale_code) VALUES ($1,$2,$3,$4,true,$5) ON CONFLICT DO NOTHING RETURNING id`,
+      [tid, name, cat, cost, plu],
+    )).rows[0]?.id;
+    if (!pid) return; // the scale codes are already taken in this shop
+    await db.query(`INSERT INTO product_units (tenant_id, product_id, name, factor_milli, price_minor, is_base) VALUES ($1,$2,'كغ',1000,$3,true)`, [tid, pid, price]);
+    ids.push(pid);
+  }
+  // Two lambs bought last week: one cut three days ago, one still hanging.
+  const lamb = ids[0];
+  await db.query(`INSERT INTO stock_movements (tenant_id, store_id, product_id, qty_milli, kind, created_at) VALUES ($1,$2,$3,42000,'adjust', now() - interval '6 days')`, [tid, sid, lamb]);
+  const src = 21000, cost = 21 * 42000;
+  const cuts = items.slice(1).map(([, , price, , kgs], i) => ({ pid: ids[i + 1], qty: Math.round(kgs * 1000), price }));
+  const value = cuts.reduce((a, c) => a + c.qty * c.price, 0);
+  const bid = (await db.query(
+    `INSERT INTO breakdowns (tenant_id, store_id, source_product_id, source_qty_milli, cost_minor, note, created_at) VALUES ($1,$2,$3,$4,$5,'خروف وطني', now() - interval '3 days') RETURNING id`,
+    [tid, sid, lamb, src, cost],
+  )).rows[0].id;
+  await db.query(`INSERT INTO stock_movements (tenant_id, store_id, product_id, qty_milli, kind, ref_id, created_at) VALUES ($1,$2,$3,$4,'breakdown',$5, now() - interval '3 days')`, [tid, sid, lamb, -src, bid]);
+  for (const c of cuts) {
+    const share = Math.round((cost * c.qty * c.price) / value);
+    await db.query(`INSERT INTO breakdown_lines (breakdown_id, product_id, qty_milli, cost_minor) VALUES ($1,$2,$3,$4)`, [bid, c.pid, c.qty, share]);
+    await db.query(`UPDATE products SET cost_minor = $2 WHERE id = $1`, [c.pid, Math.round((share * 1000) / c.qty)]);
+    await db.query(`INSERT INTO stock_movements (tenant_id, store_id, product_id, qty_milli, kind, ref_id, created_at) VALUES ($1,$2,$3,$4,'breakdown',$5, now() - interval '3 days')`, [tid, sid, c.pid, c.qty, bid]);
+  }
 }
 
 /**

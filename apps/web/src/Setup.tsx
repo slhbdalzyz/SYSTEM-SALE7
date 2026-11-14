@@ -22,7 +22,7 @@ const TYPES: { id: string; icon: string; name: string; ready: boolean }[] = [
   { id: "other", icon: "🏪", name: "محل تجاري آخر", ready: true },
   { id: "clothing", icon: "👕", name: "ملابس وأحذية", ready: true },
   { id: "pharmacy", icon: "💊", name: "صيدلية", ready: true },
-  { id: "butcher", icon: "🥩", name: "جزارة", ready: false },
+  { id: "butcher", icon: "🥩", name: "جزارة", ready: true },
   { id: "restaurant", icon: "🍽️", name: "مطعم / مقهى", ready: false },
 ];
 

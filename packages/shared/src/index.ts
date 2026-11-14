@@ -17,3 +17,4 @@ export * from "./quick";
 export * from "./platform";
 export * from "./variants";
 export * from "./pharmacy";
+export * from "./butcher";
