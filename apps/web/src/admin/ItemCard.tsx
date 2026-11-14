@@ -6,7 +6,7 @@ import type { Call } from "./Admin";
 interface Pack { name: string; qty: string; barcode: string }
 interface Dept { id: string; name: string; icon: string | null }
 
-const BASE_UNITS = ["حبة", "علبة", "قنينة", "كيس", "باكو", "لتر", "متر"];
+const BASE_UNITS = ["حبة", "علبة", "قنينة", "كيس", "باكو", "لتر", "متر", "شريط", "أمبولة", "كيس دواء"];
 const PACKS = ["صندوق", "كرتونة", "شد", "جالون", "كيس", "باكو", "درزن", "طبقة"];
 export const SIZE_SETS: [string, string[]][] = [
   ["ملابس", ["S", "M", "L", "XL", "XXL"]],
@@ -57,6 +57,10 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [quick, setQuick] = useState(false);
+  // Pharmacies: the scientific name (to find the medicine and its alternatives), and prescription-only.
+  const [pharmacy, setPharmacy] = useState(false);
+  const [generic, setGeneric] = useState("");
+  const [rx, setRx] = useState(false);
   // Clothing and shoes: one item per colour and size, each with its own barcode and stock.
   const [variants, setVariants] = useState(false);
   const [sizes, setSizes] = useState<string[]>([]);
@@ -65,6 +69,7 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
   useEffect(() => void call<Dept[]>("/categories").then(setCats), [call]);
   useEffect(() => void call<{ tenant: { business_type?: string } }>("/me").then((m) => {
     if (m.tenant.business_type === "clothing") { setVariants(true); setExpiry(false); }
+    if (m.tenant.business_type === "pharmacy") { setPharmacy(true); setExpiry(true); setBase("شريط"); setPacks([{ name: "علبة", qty: "", barcode: "" }]); }
   }).catch(() => {}), [call]);
   const combos = Math.max(sizes.length, 1) * Math.max(colors.length, 1);
 
@@ -97,7 +102,7 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
       }
       const p = await call<CatalogProduct>("/products", {
         body: {
-          name: name.trim(), categoryId: dept || null, isWeighted: weighted, autoCode: true, trackExpiry: !!expiry, quick,
+          name: name.trim(), categoryId: dept || null, isWeighted: weighted, autoCode: true, trackExpiry: !!expiry, quick, genericName: generic.trim() || null, rx,
           minStockMilli: alert.on ? toMinor((Number(alert.qty) || 0) * alertFactor) : 0,
           units: [
             { name: baseName, factorMilli: 1000, priceMinor: 0, isBase: true, barcodes: !weighted && barcode ? [barcode] : [] },
@@ -116,7 +121,18 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
   return (
     <Modal title="بطاقة صنف جديدة" onClose={onClose}>
       <div className="item-card">
-        <label>اسم الصنف<input value={name} onChange={(e) => setName(e.target.value)} autoFocus /></label>
+        <label>{pharmacy ? "الاسم التجاري" : "اسم الصنف"}<input value={name} onChange={(e) => setName(e.target.value)} autoFocus placeholder={pharmacy ? "مثلاً: بنادول 500" : ""} /></label>
+        {(pharmacy || generic) && !variants && (
+          <div className="row" style={{ alignItems: "end" }}>
+            <label style={{ flex: 1, minWidth: 200 }}>الاسم العلمي (المادة الفعالة)
+              <input value={generic} onChange={(e) => setGeneric(e.target.value)} placeholder="مثلاً: باراسيتامول" />
+            </label>
+            <label className="row" style={{ color: "var(--ink)" }}>
+              <input type="checkbox" style={{ width: "auto" }} checked={rx} onChange={(e) => setRx(e.target.checked)} /> 💊 يتباع بوصفة طبية بس
+            </label>
+          </div>
+        )}
+        {pharmacy && generic.trim() && <div className="hint">في الكاشير تقدر تبحث بالاسم العلمي، ويطلعوا كل الأدوية اللي فيها نفس المادة كبدائل.</div>}
 
         <div className="row" style={{ alignItems: "end" }}>
           <label style={{ flex: 1, minWidth: 180 }}>القسم

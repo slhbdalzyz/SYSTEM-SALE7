@@ -239,4 +239,25 @@ export async function reportRoutes(app: FastifyInstance) {
     }
     return [...models.values()].sort((x, y) => y.soldMilli - x.soldMilli || y.stockMilli - x.stockMilli);
   });
+
+  /**
+   * Pharmacies: every sale of a prescription-only medicine in the period, with the prescription the
+   * cashier saw (doctor, number, patient), or flagged when none was entered.
+   */
+  app.get("/reports/prescriptions", managers, async (req) => {
+    const q = z.object({ storeId: z.string().uuid().optional(), from: dateStr, to: dateStr, tz }).parse(req.query);
+    if (q.from > q.to) throw new HttpError(400, "بداية الفترة بعد نهايتها");
+    if ((Date.parse(q.to) - Date.parse(q.from)) / 864e5 > 366) throw new HttpError(400, "الفترة أطول من سنة");
+    await ownStore(req.user.tid, q.storeId);
+    return (await app.db.query(
+      `SELECT s.id, s.number, s.created_at, u.name AS cashier, s.prescription, st.name AS store,
+              json_agg(json_build_object('name', l.name, 'qtyMilli', l.qty_milli) ORDER BY l.name) AS items
+       FROM sales s JOIN sale_lines l ON l.sale_id = s.id JOIN products p ON p.id = l.product_id
+       JOIN users u ON u.id = s.user_id JOIN stores st ON st.id = s.store_id
+       WHERE s.tenant_id = $1 AND ($2::uuid IS NULL OR s.store_id = $2) AND s.kind = 'sale' AND p.rx
+         AND (s.created_at AT TIME ZONE $5)::date BETWEEN $3::date AND $4::date
+       GROUP BY s.id, u.name, st.name ORDER BY s.created_at DESC LIMIT 1000`,
+      [req.user.tid, q.storeId ?? null, q.from, q.to, q.tz],
+    )).rows;
+  });
 }

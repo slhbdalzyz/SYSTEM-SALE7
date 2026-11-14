@@ -5,7 +5,7 @@ import { session } from "../session";
 import { buildBackup, commitRestore, downloadBlob, readManifest, uploadBackup, type BackupManifest } from "./backup";
 import { disablePush, enablePush, pushEnabled, pushSupported } from "./push";
 
-interface S { lowStock: boolean; returnOverMinor: number; discountOverMinor: number; cashDiffOverMinor: number; overCreditLimit: boolean; pushKey: string | null }
+interface S { lowStock: boolean; returnOverMinor: number; discountOverMinor: number; cashDiffOverMinor: number; overCreditLimit: boolean; expiryDays: number; pushKey: string | null }
 
 const isIos = () => /iphone|ipad|ipod/i.test(navigator.userAgent);
 const standalone = () => window.matchMedia?.("(display-mode: standalone)").matches || (navigator as { standalone?: boolean }).standalone === true;
@@ -78,6 +78,11 @@ export function AlertSettings({ call, isOwner }: { call: Call; isOwner: boolean 
         {money("returnOverMinor", "مرتجع أكبر من (د.ل)")}
         {money("discountOverMinor", "خصم أكبر من (د.ل)")}
         {money("cashDiffOverMinor", "فرق الدرج أكبر من (د.ل)")}
+        <label>
+          صلاحية تخلص خلال (يوم)
+          <input inputMode="numeric" disabled={!isOwner} defaultValue={s.expiryDays ? String(s.expiryDays) : ""} placeholder="مقفول"
+            onChange={(e) => setS({ ...s, expiryDays: Math.min(365, Number(e.target.value.replace(/\D/g, "")) || 0) })} />
+        </label>
       </div>
       <span className="muted small">خلّي الخانة فاضية باش توقف التنبيه هذا. مثلاً: خصم أكبر من {formatMoney(20000)}.</span>
       {isOwner && <button className="primary" onClick={save}>{saved ? "تم الحفظ ✓" : "حفظ"}</button>}

@@ -1,7 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { audit, inTx } from "../db";
-import { HttpError, requirePerm } from "../auth";
+import { daysUntil } from "@pos/shared";
+import { HttpError, authenticate, requirePerm } from "../auth";
+import { libyaToday, shelfExpiry } from "../expiry";
 
 const supplierSchema = z.object({
   name: z.string().min(2).max(120),
@@ -245,23 +247,29 @@ export async function purchasingRoutes(app: FastifyInstance) {
   });
 
   /**
-   * Goods that expire within `days` (or already have), from the expiry dates on supply invoices,
-   * for items that are still in stock at this branch. Newest delivery per item and date.
+   * Goods on this branch's shelves that expire within `days` (or already have). The stock is
+   * matched to the newest deliveries it still comes from, so a batch already sold out is not
+   * shown, and each row says how much of that batch is left.
    */
   app.get("/stock/expiring", { preHandler: requirePerm("purchasing", "reports") }, async (req) => {
     const q = z.object({ storeId: z.string().uuid(), days: z.coerce.number().int().min(0).max(365).default(30) }).parse(req.query);
-    const r = await app.db.query(
-      `SELECT l.product_id, l.name, p.is_weighted, to_char(l.expiry_date, 'YYYY-MM-DD') AS expiry_date, (l.expiry_date - current_date) AS days_left,
-              sum(l.qty_milli * u.factor_milli / 1000)::bigint AS received_milli, max(s.name) AS supplier_name,
-              (SELECT COALESCE(sum(m.qty_milli), 0) FROM stock_movements m WHERE m.product_id = l.product_id AND m.store_id = $2)::bigint AS stock_milli
-       FROM purchase_lines l JOIN purchase_invoices i ON i.id = l.invoice_id JOIN products p ON p.id = l.product_id
-       JOIN product_units u ON u.id = l.unit_id LEFT JOIN suppliers s ON s.id = i.supplier_id
-       WHERE l.tenant_id = $1 AND i.store_id = $2 AND l.expiry_date IS NOT NULL AND l.expiry_date <= current_date + $3::int
-       GROUP BY l.product_id, l.name, p.is_weighted, l.expiry_date
-       HAVING (SELECT COALESCE(sum(m.qty_milli), 0) FROM stock_movements m WHERE m.product_id = l.product_id AND m.store_id = $2) > 0
-       ORDER BY l.expiry_date, l.name`,
-      [req.user.tid, q.storeId, q.days],
-    );
-    return r.rows;
+    await ownStore(req.user.tid, q.storeId);
+    const today = libyaToday();
+    const items = await shelfExpiry(app.db, req.user.tid, q.storeId);
+    return items.flatMap((it) => it.batches.map((b) => ({
+      product_id: it.productId, name: it.name, is_weighted: it.isWeighted, expiry_date: b.expiry, days_left: daysUntil(b.expiry, today),
+      received_milli: b.receivedMilli, left_milli: b.leftMilli, stock_milli: it.stockMilli, supplier_name: it.supplier,
+    }))).filter((r) => r.days_left <= q.days).sort((a, b) => a.expiry_date.localeCompare(b.expiry_date) || a.name.localeCompare(b.name));
   });
+
+  /** For the till: the soonest expiry date on this branch's shelf for each dated item, to warn at sale. */
+  app.get("/sync/expiry", { preHandler: authenticate }, async (req) => {
+    const sid = req.user.sid;
+    if (!sid) return [];
+    return (await shelfExpiry(app.db, req.user.tid, sid)).map((it) => ({ productId: it.productId, expiry: it.batches[0].expiry }));
+  });
+
+  async function ownStore(tid: string, storeId: string) {
+    if (!(await app.db.query(`SELECT 1 FROM stores WHERE id = $1 AND tenant_id = $2`, [storeId, tid])).rowCount) throw new HttpError(404, "الفرع غير موجود");
+  }
 }

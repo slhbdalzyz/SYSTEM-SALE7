@@ -20,6 +20,8 @@ export interface CartLine {
   promoMinor?: number;
   offerId?: string | null;
   offerName?: string | null;
+  /** A medicine sold only against a prescription. */
+  rx?: boolean;
 }
 
 export function lineFor(product: CatalogProduct, unit: CatalogUnit, qtyMilli: number): CartLine {
@@ -36,6 +38,7 @@ export function lineFor(product: CatalogProduct, unit: CatalogUnit, qtyMilli: nu
     isWeighted: product.isWeighted,
     categoryId: product.categoryId,
     isBaseUnit: unit.isBase,
+    ...(product.rx ? { rx: true } : {}),
     ...(product.units.length > 1 && !product.isWeighted
       ? { units: product.units.map((u) => ({ id: u.id, name: u.name, priceMinor: u.priceMinor, isBase: u.isBase })), productName: product.name }
       : {}),
@@ -85,7 +88,7 @@ export function lineTotal(l: CartLine) {
 }
 
 export function toSaleInput(
-  a: { id: string; number: string; shiftId: string | null; lines: CartLine[]; offers: Offer[]; invoiceDiscountMinor: number; payments: SaleInput["payments"]; customerId?: string | null; employeeId?: string | null },
+  a: { id: string; number: string; shiftId: string | null; lines: CartLine[]; offers: Offer[]; invoiceDiscountMinor: number; payments: SaleInput["payments"]; customerId?: string | null; employeeId?: string | null; prescription?: SaleInput["prescription"] },
 ): SaleInput {
   const at = new Date();
   const lines = priceCart(a.lines, a.offers, at).lines;
@@ -112,5 +115,6 @@ export function toSaleInput(
     totalMinor: totals.total,
     employeeId: a.employeeId ?? null,
     customerId: a.customerId ?? null,
+    ...(a.prescription ? { prescription: a.prescription } : {}),
   };
 }

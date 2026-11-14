@@ -47,6 +47,12 @@ export const saleInputSchema = z.object({
   customerId: z.string().uuid().nullable().optional(),
   /** The employee whose salary pays the "payroll" part. */
   employeeId: z.string().uuid().nullable().optional(),
+  /** The prescription the cashier saw, when the sale has a prescription-only medicine. */
+  prescription: z.object({
+    doctor: z.string().trim().max(120).optional(),
+    number: z.string().trim().max(60).optional(),
+    patient: z.string().trim().max(120).optional(),
+  }).nullable().optional(),
 });
 export type SaleInput = z.infer<typeof saleInputSchema>;
 export type SaleLineInput = z.infer<typeof saleLineSchema>;
@@ -76,6 +82,10 @@ export const productInputSchema = z.object({
   autoCode: z.boolean().default(false),
   /** Shown as a button on the till's quick keys (bread, vegetables, things without a barcode). */
   quick: z.boolean().default(false),
+  /** Pharmacies: the scientific name (paracetamol), to find the medicine and its alternatives. */
+  genericName: z.string().trim().max(200).nullable().optional(),
+  /** Sold only against a prescription: the till asks for it. */
+  rx: z.boolean().default(false),
   units: z.array(unitInputSchema).min(1).max(10),
 });
 export type ProductInput = z.infer<typeof productInputSchema>;
@@ -126,6 +136,8 @@ export interface CatalogProduct {
   /** Variants of one item (sizes, colours) share a group. */
   groupId?: string | null;
   attrs?: Record<string, string> | null;
+  genericName?: string | null;
+  rx?: boolean;
   updatedAt: string;
   units: CatalogUnit[];
 }

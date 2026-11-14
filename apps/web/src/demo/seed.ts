@@ -19,7 +19,8 @@ export async function seedDemo(db: Q) {
     await addBranch(db);
     await addOffers(db);
     await addOwnerDemo(db);
-    return addClothing(db);
+    await addClothing(db);
+    return addPharmacy(db);
   }
   const one = async (sql: string, params: unknown[] = []) => (await db.query(sql, params)).rows[0]?.id as string;
   const hash = (s: string) => bcrypt.hash(s, 8);
@@ -102,6 +103,58 @@ export async function seedDemo(db: Q) {
   await addOffers(db);
   await addOwnerDemo(db);
   await addClothing(db);
+  await addPharmacy(db);
+}
+
+/**
+ * A pharmacy shelf in the demo shop: two brands of the same medicine (to try alternatives), one
+ * sold only on prescription, and deliveries with expiry dates, one batch already past its date.
+ */
+async function addPharmacy(db: Q) {
+  if ((await db.query(`SELECT 1 FROM products WHERE generic_name IS NOT NULL LIMIT 1`)).rows.length) return;
+  const dev = (await db.query(`SELECT tenant_id AS tid, store_id AS sid FROM devices WHERE kind = 'pos' ORDER BY created_at LIMIT 1`)).rows[0];
+  if (!dev) return;
+  const { tid, sid } = dev;
+  const cat = (await db.query(`INSERT INTO categories (tenant_id, name, icon, sort) VALUES ($1, 'صيدلية', '💊', 98) ON CONFLICT DO NOTHING RETURNING id`, [tid])).rows[0]?.id
+    ?? (await db.query(`SELECT id FROM categories WHERE tenant_id = $1 AND name = 'صيدلية'`, [tid])).rows[0].id;
+  let code = 950;
+  const tag = () => {
+    const body = `299${String(++code).padStart(9, "0")}`;
+    return body + ean13CheckDigit(body);
+  };
+  // name, scientific name, prescription, strip price, strips per box, box price, cost per box, deliveries [boxes, days until expiry, days ago]
+  const meds: [string, string, boolean, number, number, number, number, [number, number, number][]][] = [
+    ["بنادول 500 مجم", "باراسيتامول", false, 2000, 2, 3500, 2500, [[3, -10, 120], [10, 400, 10]]],
+    ["أدول 500 مجم", "باراسيتامول", false, 1500, 2, 2750, 1800, [[8, 20, 30]]],
+    ["أموكسيل 500 مجم", "أموكسيسيلين", true, 4500, 2, 8500, 6000, [[6, 300, 15]]],
+    ["فيتامين سي 1000", "حمض الأسكوربيك", false, 0, 0, 12000, 8000, [[12, 500, 5]]],
+  ];
+  for (const [name, generic, rx, strip, per, box, cost, deliveries] of meds) {
+    const pid = (await db.query(
+      `INSERT INTO products (tenant_id, name, category_id, cost_minor, min_stock_milli, track_expiry, generic_name, rx) VALUES ($1,$2,$3,$4,2000,true,$5,$6) RETURNING id`,
+      [tid, name, cat, per ? Math.round(cost / per) : cost, generic, rx],
+    )).rows[0].id;
+    // Strips are the base unit when the box is cut; vitamins only sell by the tube.
+    const base = (await db.query(`INSERT INTO product_units (tenant_id, product_id, name, factor_milli, price_minor, is_base) VALUES ($1,$2,$3,1000,$4,true) RETURNING id`,
+      [tid, pid, per ? "شريط" : "أنبوبة", per ? strip : box])).rows[0].id;
+    let boxUnit = base;
+    if (per) boxUnit = (await db.query(`INSERT INTO product_units (tenant_id, product_id, name, factor_milli, price_minor, is_base) VALUES ($1,$2,'علبة',$3,$4,false) RETURNING id`, [tid, pid, per * 1000, box])).rows[0].id;
+    await db.query(`INSERT INTO barcodes (tenant_id, unit_id, code) VALUES ($1,$2,$3)`, [tid, boxUnit, tag()]);
+    for (const [boxes, expiresIn, ago] of deliveries) {
+      const inv = (await db.query(
+        `INSERT INTO purchase_invoices (tenant_id, store_id, invoice_date, total_minor, created_at) VALUES ($1,$2, current_date - $3::int, $4, now() - make_interval(days => $3::int)) RETURNING id`,
+        [tid, sid, ago, boxes * cost],
+      )).rows[0].id;
+      await db.query(
+        `INSERT INTO purchase_lines (tenant_id, invoice_id, product_id, unit_id, name, unit_name, qty_milli, unit_cost_minor, total_minor, expiry_date)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, current_date + $10::int)`,
+        [tid, inv, pid, boxUnit, name, per ? "علبة" : "أنبوبة", boxes * 1000, cost, boxes * cost, expiresIn],
+      );
+      await db.query(`INSERT INTO stock_movements (tenant_id, store_id, product_id, qty_milli, kind, ref_id, created_at) VALUES ($1,$2,$3,$4,'purchase',$5, now() - make_interval(days => $6::int))`,
+        [tid, sid, pid, boxes * Math.max(per, 1) * 1000, inv, ago]);
+    }
+  }
+  // Panadol: more on the shelf than the last delivery, so a few strips of the old, expired batch are still there.
 }
 
 /**

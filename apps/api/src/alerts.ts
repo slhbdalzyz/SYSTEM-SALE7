@@ -1,7 +1,7 @@
 import { formatHijri, formatMoney, formatQty, nextHawl, readZakatSettings } from "@pos/shared";
 import type { Db, Tx } from "./db";
 
-export type AlertKind = "low_stock" | "out_of_stock" | "big_return" | "big_discount" | "cash_diff" | "over_credit_limit" | "zakat_due" | "subscription_due" | "support_reply" | "announcement";
+export type AlertKind = "low_stock" | "out_of_stock" | "big_return" | "big_discount" | "cash_diff" | "over_credit_limit" | "zakat_due" | "subscription_due" | "support_reply" | "announcement" | "expiry_soon";
 
 /** What a shop wants to hear about. Amounts in dirham; 0 turns that alert off. */
 export interface AlertSettings {
@@ -10,9 +10,11 @@ export interface AlertSettings {
   discountOverMinor: number;
   cashDiffOverMinor: number;
   overCreditLimit: boolean;
+  /** Warn this many days before dated goods on the shelf expire; 0 turns it off. */
+  expiryDays: number;
 }
 
-export const DEFAULT_ALERT_SETTINGS: AlertSettings = { lowStock: true, returnOverMinor: 50000, discountOverMinor: 20000, cashDiffOverMinor: 5000, overCreditLimit: true };
+export const DEFAULT_ALERT_SETTINGS: AlertSettings = { lowStock: true, returnOverMinor: 50000, discountOverMinor: 20000, cashDiffOverMinor: 5000, overCreditLimit: true, expiryDays: 30 };
 
 type Q = Db | Tx;
 

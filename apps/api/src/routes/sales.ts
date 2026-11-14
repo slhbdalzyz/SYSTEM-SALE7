@@ -6,6 +6,7 @@ import { currentOffers } from "./offers";
 import { openPriceProducts } from "./quick";
 import { alertBigDiscount, alertOverCreditLimit, checkLowStock, checkZakatDue, flushPushes } from "../alerts";
 import { audit, inTx } from "../db";
+import { checkExpirySoon } from "../expiry";
 import { requireDevice } from "../auth";
 import { payrollPurchase } from "./payroll";
 import type { TokenPayload } from "../auth";
@@ -38,6 +39,7 @@ export async function salesRoutes(app: FastifyInstance) {
     }
     if (results.some((r) => r.status === "accepted")) {
       await checkZakatDue(app.db, req.user.tid).catch(() => false);
+      await checkExpirySoon(app.db, req.user.tid).catch(() => false);
       await flushPushes(app.db, req.user.tid);
     }
     return { results };
@@ -94,7 +96,7 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
 
   const unitIds = [...new Set(s.lines.map((l) => l.unitId))];
   const units = await app.db.query(
-    `SELECT u.id, u.product_id, u.factor_milli, u.price_minor, u.is_base, p.cost_minor, p.name, p.category_id, p.is_weighted
+    `SELECT u.id, u.product_id, u.factor_milli, u.price_minor, u.is_base, p.cost_minor, p.name, p.category_id, p.is_weighted, p.rx
      FROM product_units u JOIN products p ON p.id = u.product_id WHERE u.tenant_id = $1 AND u.id = ANY($2)`,
     [tid, unitIds],
   );
@@ -122,6 +124,11 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
     claimed.length ? (await app.db.query(`SELECT id FROM offers WHERE tenant_id = $1 AND id = ANY($2::uuid[])`, [tid, claimed])).rows.map((r) => r.id as string) : [],
   );
 
+  // Prescription-only medicines: the sale is kept even without one (the till may have been
+  // offline on an old catalog), and the missing prescription is logged for the pharmacist.
+  const rxNames = [...new Set(s.lines.filter((l) => byUnit.get(l.unitId)!.rx).map((l) => byUnit.get(l.unitId)!.name as string))];
+  const rxMissing = rxNames.length > 0 && !(s.prescription && (s.prescription.doctor || s.prescription.number || s.prescription.patient));
+
   if (s.shiftId) {
     const sh = await app.db.query(`SELECT 1 FROM shifts WHERE id = $1 AND tenant_id = $2 AND device_id = $3`, [s.shiftId, tid, who.did]);
     if (!sh.rowCount) throw new Reject("الوردية غير موجودة على هذا الجهاز");
@@ -130,9 +137,10 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
   try {
     await inTx(app.db, async (tx) => {
       await tx.query(
-        `INSERT INTO sales (id, tenant_id, store_id, device_id, shift_id, user_id, number, subtotal_minor, discount_minor, tax_minor, total_minor, paid_minor, change_minor, created_at, customer_id, employee_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
-        [s.id, tid, who.sid, who.did, s.shiftId ?? null, who.sub, s.number, totals.subtotal, totals.discount, totals.tax, totals.total, paid, change, s.createdAt, s.customerId ?? null, onSalary > 0 ? s.employeeId : null],
+        `INSERT INTO sales (id, tenant_id, store_id, device_id, shift_id, user_id, number, subtotal_minor, discount_minor, tax_minor, total_minor, paid_minor, change_minor, created_at, customer_id, employee_id, prescription)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+        [s.id, tid, who.sid, who.did, s.shiftId ?? null, who.sub, s.number, totals.subtotal, totals.discount, totals.tax, totals.total, paid, change, s.createdAt, s.customerId ?? null, onSalary > 0 ? s.employeeId : null,
+          rxNames.length ? JSON.stringify(s.prescription ?? {}) : null],
       );
       const overrides: { name: string; catalog: number; sold: number }[] = [];
       const taken = new Map<string, number>();
@@ -172,6 +180,9 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
       if (customer && credit > 0 && customer.credit_limit_minor !== null && customer.balance_minor + credit > customer.credit_limit_minor) {
         await audit(tx, { tenantId: tid, userId: who.sub, deviceId: who.did, action: "customer.over_limit", entity: "customer", entityId: s.customerId!, data: { sale: s.number, balance: customer.balance_minor + credit, limit: customer.credit_limit_minor } });
         await alertOverCreditLimit(tx, { tenantId: tid, storeId: who.sid!, customer: customer.name, balanceMinor: customer.balance_minor + credit, limitMinor: customer.credit_limit_minor });
+      }
+      if (rxMissing) {
+        await audit(tx, { tenantId: tid, userId: who.sub, deviceId: who.did, action: "sale.rx_missing", entity: "sale", entityId: s.id, data: { sale: s.number, items: rxNames } });
       }
       if (offerMismatch) {
         await audit(tx, {

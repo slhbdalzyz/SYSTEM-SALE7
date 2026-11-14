@@ -2010,3 +2010,101 @@ describe("platform back office: team, coupons, agents, reminders, support", () =
     expect(rows.find((x: { id: string }) => x.id === tid).health).toBe("new");
   });
 });
+
+describe("pharmacy: scientific names, prescriptions and expiry by batch", () => {
+  let t: string;
+  let till: string;
+  let shift: string;
+  let store: string;
+  let pan: { id: string; strip: string; box: string };
+  let amox: { id: string; strip: string };
+  const fresh = async (url: string, body: unknown) => (await app.inject({ method: "POST", url, payload: body as object, remoteAddress: "10.0.0.97" })).json();
+  const day = (n: number) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
+  const sale = (lines: { productId: string; unitId: string; name: string; qtyMilli: number; priceMinor: number }[], prescription?: object) => ({
+    id: randomUUID(), number: `R-${randomUUID().slice(0, 6).toUpperCase()}`, shiftId: shift, createdAt: new Date().toISOString(), lines,
+    payments: [{ method: "cash", amountMinor: lines.reduce((a, l) => a + (l.qtyMilli * l.priceMinor) / 1000, 0) }],
+    totalMinor: lines.reduce((a, l) => a + (l.qtyMilli * l.priceMinor) / 1000, 0), ...(prescription ? { prescription } : {}),
+  });
+  const sell = async (s: ReturnType<typeof sale>) => (await call("POST", "/sales/batch", till, { sales: [s] })).body.results[0];
+
+  it("gives a new pharmacy its departments", async () => {
+    const r = await fresh("/auth/register", { businessName: "صيدلية الشفاء", storeName: "الرئيسي", ownerName: "علي", email: "pharma@test.ly", password: "password123", businessType: "pharmacy" });
+    t = r.token;
+    store = r.storeId;
+    const names = (await call("GET", "/categories", t)).body.map((c: { name: string }) => c.name);
+    expect(names).toContain("أدوية بوصفة");
+    expect(names).not.toContain("المعلبات");
+    const d = await call("POST", "/devices", t, { storeId: store, name: "كاشير" });
+    const u = await call("POST", "/users", t, { name: "سالم", role: "manager", pin: "4321" });
+    till = (await fresh("/auth/pin", { deviceToken: d.body.deviceToken, userId: u.body.id, pin: "4321" })).token;
+    shift = randomUUID();
+    await call("POST", "/shifts/open", till, { id: shift, openingCashMinor: 0 });
+  });
+
+  it("keeps a medicine's scientific name and whether it needs a prescription", async () => {
+    const p = await call("POST", "/products", t, {
+      name: "بنادول 500", genericName: "باراسيتامول", trackExpiry: true,
+      units: [{ name: "شريط", priceMinor: 2000, isBase: true }, { name: "علبة", factorMilli: 10000, priceMinor: 18000 }],
+    });
+    expect(p.body).toMatchObject({ genericName: "باراسيتامول", rx: false });
+    pan = { id: p.body.id, strip: p.body.units[0].id, box: p.body.units[1].id };
+    const a = await call("POST", "/products", t, { name: "أموكسيل 500", genericName: "أموكسيسيلين", rx: true, trackExpiry: true, units: [{ name: "شريط", priceMinor: 6000, isBase: true }] });
+    amox = { id: a.body.id, strip: a.body.units[0].id };
+    expect(a.body.rx).toBe(true);
+    // Editing keeps them only if sent: the item page always sends both.
+    const e = await call("PUT", `/products/${amox.id}`, t, { name: "أموكسيل 500", genericName: "أموكسيسيلين", rx: true, trackExpiry: true, units: [{ id: amox.strip, name: "شريط", priceMinor: 6500, isBase: true }] });
+    expect(e.body).toMatchObject({ rx: true, genericName: "أموكسيسيلين" });
+  });
+
+  it("finds the batch on the shelf: older boxes are sold first", async () => {
+    // June: 2 boxes expiring soon; later: 3 boxes with a far date. 25 strips in stock.
+    await call("POST", "/purchases", t, { storeId: store, lines: [{ unitId: pan.box, qtyMilli: 2000, unitCostMinor: 12000, expiryDate: day(-3) }] });
+    await db.query(`UPDATE purchase_invoices SET created_at = now() - interval '60 days' WHERE store_id = $1`, [store]);
+    await call("POST", "/purchases", t, { storeId: store, lines: [{ unitId: pan.box, qtyMilli: 3000, unitCostMinor: 12000, expiryDate: day(200) }] });
+    let rows = (await call("GET", `/stock/expiring?storeId=${store}&days=365`, t)).body;
+    expect(rows.map((r: { expiry_date: string; left_milli: number }) => [r.expiry_date, r.left_milli])).toEqual([[day(-3), 20000], [day(200), 30000]]);
+    expect(rows[0]).toMatchObject({ days_left: -3, received_milli: 20000, stock_milli: 50000 });
+    // Sell 25 strips: the old batch is gone, and only the new one is left on the shelf.
+    expect((await sell(sale([{ productId: pan.id, unitId: pan.strip, name: "بنادول 500", qtyMilli: 25000, priceMinor: 2000 }]))).status).toBe("accepted");
+    rows = (await call("GET", `/stock/expiring?storeId=${store}&days=365`, t)).body;
+    expect(rows.map((r: { expiry_date: string; left_milli: number }) => [r.expiry_date, r.left_milli])).toEqual([[day(200), 25000]]);
+    expect((await call("GET", "/sync/expiry", till)).body).toEqual([{ productId: pan.id, expiry: day(200) }]);
+    expect((await call("GET", `/stock/expiring?storeId=${randomUUID()}&days=30`, t)).status).toBe(404);
+  });
+
+  it("warns the owner once a day about goods close to their date", async () => {
+    const { checkExpirySoon } = await import("../src/expiry");
+    const tid = (await db.query(`SELECT tenant_id FROM users WHERE email = 'pharma@test.ly'`)).rows[0].tenant_id;
+    await db.query(`DELETE FROM alerts WHERE tenant_id = $1 AND kind = 'expiry_soon'`, [tid]);
+    await call("POST", "/purchases", t, { storeId: store, lines: [{ unitId: amox.strip, qtyMilli: 10000, unitCostMinor: 4000, expiryDate: day(12) }] });
+    expect(await checkExpirySoon(db, tid)).toBe(true);
+    expect(await checkExpirySoon(db, tid)).toBe(false);
+    const a = (await call("GET", "/alerts", t)).body.alerts.find((x: { kind: string }) => x.kind === "expiry_soon");
+    expect(a.title).toContain("1 يخلص خلال 30 يوم");
+    expect(a.body).toContain("أموكسيل 500");
+    // The owner can narrow the window or turn it off.
+    const s = (await call("PUT", "/alerts/settings", t, { expiryDays: 0 })).body;
+    expect(s.expiryDays).toBe(0);
+    await db.query(`DELETE FROM alerts WHERE tenant_id = $1 AND kind = 'expiry_soon'`, [tid]);
+    expect(await checkExpirySoon(db, tid)).toBe(false);
+  });
+
+  it("keeps the prescription on the sale, and logs a sale without one", async () => {
+    const line = { productId: amox.id, unitId: amox.strip, name: "أموكسيل 500", qtyMilli: 1000, priceMinor: 6500 };
+    const withRx = sale([line], { doctor: "د. فاطمة", number: "445" });
+    expect((await sell(withRx)).status).toBe("accepted");
+    const without = sale([line]);
+    expect((await sell(without)).status).toBe("accepted");
+    const plain = sale([{ productId: pan.id, unitId: pan.strip, name: "بنادول 500", qtyMilli: 1000, priceMinor: 2000 }]);
+    await sell(plain);
+    expect((await db.query(`SELECT prescription FROM sales WHERE id = $1`, [withRx.id])).rows[0].prescription).toEqual({ doctor: "د. فاطمة", number: "445" });
+    expect((await db.query(`SELECT prescription FROM sales WHERE id = $1`, [plain.id])).rows[0].prescription).toBeNull();
+    const logged = (await db.query(`SELECT data FROM audit_log WHERE action = 'sale.rx_missing' AND entity_id = $1`, [without.id])).rows;
+    expect(logged[0].data).toMatchObject({ items: ["أموكسيل 500"] });
+    const today = new Date().toISOString().slice(0, 10);
+    const rep = (await call("GET", `/reports/prescriptions?from=${today}&to=${today}`, t)).body;
+    expect(rep).toHaveLength(2);
+    expect(rep.find((r: { id: string }) => r.id === withRx.id)).toMatchObject({ prescription: { doctor: "د. فاطمة" }, items: [{ name: "أموكسيل 500", qtyMilli: 1000 }] });
+    expect(rep.find((r: { id: string }) => r.id === without.id).prescription).toEqual({});
+  });
+});
