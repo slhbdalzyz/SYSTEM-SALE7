@@ -214,14 +214,32 @@ describe("spreadsheets from paper", async () => {
     const back = parseCsv(templateCsv("products"));
     expect(back[0][0]).toBe("اسم الصنف");
     const m = mapSheet("products", back);
-    expect(m.rows[0]).toEqual({ name: "سكر 1 كيلو", barcode: "6281000000011", category: "المواد الغذائية", unit: "كيس", priceMinor: 4500, costMinor: 3800, qtyMilli: 24000, minStockMilli: 5000, weighted: false });
-    expect(m.rows[1]).toMatchObject({ name: "طماطم", qtyMilli: 40500, weighted: true });
-    expect(m.rows[1].barcode).toBeUndefined();
+    expect(m.rows[0]).toEqual({ name: "سكر 1 كيلو", barcode: "6281000000011", category: "المواد الغذائية", unit: "كيس", priceMinor: 4500, costMinor: 3800, qtyMilli: 24000, minStockMilli: 5000, weighted: false, packUnit: "شوال", packFactorMilli: 10000, packPriceMinor: 42000 });
+    expect(m.rows[1]).toMatchObject({ name: "بيبسي علبة", unit: "علبة", packUnit: "صندوق", packFactorMilli: 24000, packPriceMinor: 30000, packBarcode: "6281000000035" });
+    expect(m.rows[2]).toMatchObject({ name: "طماطم", qtyMilli: 40500, weighted: true });
+    expect(m.rows[2].barcode).toBeUndefined();
+    expect(m.rows[2].packUnit).toBeUndefined();
     const odd = mapSheet("products", [["دفتر البقالة"], ["الكمية", "السعر", "الاسم"], ["3", "abc", "بيبسي"], ["", "", ""], ["2", "1.5", "مياه"], ["1", "1", ""]]);
     expect(odd.rows).toEqual([expect.objectContaining({ name: "مياه", priceMinor: 1500, qtyMilli: 2000 })]);
     expect(odd.lines).toEqual([5]);
     expect(odd.errors).toEqual([{ row: 3, message: "السعر مش رقم: abc" }, { row: 6, message: "بدون اسم" }]);
     expect(mapSheet("customers", [["شي"], ["ثاني"]]).missing).toEqual(["اسم العميل"]);
+  });
+  it("adds a box of 24 to an item, and reads a line typed per box", () => {
+    const head = ["الاسم", "الوحدة", "سعر البيع", "التكلفة", "الكمية", "العبوة الكبيرة", "فيها كم", "سعر العبوة"];
+    const m = mapSheet("products", [head,
+      ["مياه", "قنينة", "1", "0.6", "48", "صندوق", "12", ""],
+      ["عصير", "علبة", "2", "", "", "", "24", "40"],
+      // «صندوق فيه 24» typed as the unit: price, cost and quantity are per box.
+      ["حليب", "صندوق", "36", "24", "3", "", "24", ""],
+      ["تونة", "علبة", "5", "", "", "كرتونة", "", ""],
+      ["رز", "كيس", "5", "", "", "شوال", "1", ""],
+    ]);
+    expect(m.rows[0]).toMatchObject({ unit: "قنينة", priceMinor: 1000, qtyMilli: 48000, packUnit: "صندوق", packFactorMilli: 12000 });
+    expect(m.rows[0].packPriceMinor).toBeUndefined();
+    expect(m.rows[1]).toMatchObject({ packUnit: "صندوق", packFactorMilli: 24000, packPriceMinor: 40000 });
+    expect(m.rows[2]).toMatchObject({ unit: "حبة", priceMinor: 1500, costMinor: 1000, qtyMilli: 72000, packUnit: "صندوق", packFactorMilli: 24000, packPriceMinor: 36000 });
+    expect(m.errors).toEqual([{ row: 5, message: "اكتب كم حبة في الـكرتونة" }, { row: 6, message: "العدد في العبوة لازم رقم صحيح أكبر من 1: 1" }]);
   });
   it("reads the debt book, fixing phone numbers Excel stripped of their 0", () => {
     const m = mapSheet("customers", [["الاسم", "الهاتف", "الدين"], ["محمد", 912345678, "125.5"], ["علي", "", "-20"]]);

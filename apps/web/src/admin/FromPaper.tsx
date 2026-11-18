@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatMoney, toMinor } from "@pos/shared";
 import type { Call } from "./Admin";
-import { SHEETS, mapSheet, readSheetFile, readNumber, templateCsv, type Mapped, type SheetKind } from "./sheet";
+import { BIG_UNITS, SHEETS, mapSheet, readSheetFile, readNumber, templateCsv, type Mapped, type SheetKind } from "./sheet";
 
 interface Status { products: number; stocked: number; customers: number; customers_owe: number; suppliers: number; suppliers_owed: number; cash_opening: number; sales: number }
 interface Result { created: number; stocked?: number; newCategories?: number; totalMinor?: number; skipped: { row: number; reason: string }[] }
@@ -27,7 +27,7 @@ function download(name: string, text: string) {
  * For a shop that worked on paper: bring in the items with what is on the shelves, the debt book,
  * what is owed to suppliers and the cash in hand, step by step, from a spreadsheet anyone can fill.
  */
-export function FromPaper({ call, storeId, open }: { call: Call; storeId: string; open: (t: "products" | "counts" | "devices" | "money") => void }) {
+export function FromPaper({ call, storeId, open, onHide }: { call: Call; storeId: string; open: (t: "products" | "counts" | "devices" | "money") => void; onHide: () => Promise<void> }) {
   const [s, setS] = useState<Status | null>(null);
   const [step, setStep] = useState<SheetKind | "cash" | null>(null);
   const load = useCallback(() => call<Status>("/import/status").then(setS).catch(() => {}), [call]);
@@ -74,6 +74,11 @@ export function FromPaper({ call, storeId, open }: { call: Call; storeId: string
           <span className="muted">نصيحة: أول أسبوع خلي الدفتر جنبك، وقارن آخر النهار بين تقرير الوردية والدفتر لين تطمّن.</span>
         </div>
       )}
+      <div className="card row wrap">
+        <span className="muted">{done === steps.length ? "خلصت من الدفتر؟" : "ما تحتاجش الصفحة هذي؟"} تقدر تخفيها من القائمة، وترجّعها وقت ما تبي من ⚙️ الإعدادات.</span>
+        <span className="spacer" />
+        <button onClick={() => void onHide()}>🙈 إخفاء «من الدفتر للنظام»</button>
+      </div>
     </div>
   );
 }
@@ -116,7 +121,7 @@ function ImportStep({ kind, call, storeId, onDone }: { kind: SheetKind; call: Ca
   const preview = mapped?.rows.slice(0, 8) ?? [];
   const show = (r: Record<string, unknown>) =>
     kind === "products"
-      ? [r.name, r.barcode ?? "تلقائي", r.category ?? "—", formatMoney(Number(r.priceMinor)), String(Number(r.qtyMilli) / 1000) + (r.weighted ? " كغ" : "")]
+      ? [r.packUnit ? `${r.name} (${r.packUnit} = ${Number(r.packFactorMilli) / 1000})` : r.name, r.barcode ?? "تلقائي", r.category ?? "—", formatMoney(Number(r.priceMinor)), String(Number(r.qtyMilli) / 1000) + (r.weighted ? " كغ" : "")]
       : [r.name, r.phone ?? "—", formatMoney(Number(r.balanceMinor))];
   const cols = kind === "products" ? ["الصنف", "الباركود", "القسم", "السعر", "الكمية"] : ["الاسم", "الهاتف", kind === "customers" ? "الدين" : "المستحق له"];
 
@@ -183,12 +188,14 @@ const HAND: Record<SheetKind, { key: string; label: string; kind?: "num" | "mone
   products: [
     { key: "name", label: "اسم الصنف *", w: 200 }, { key: "barcode", label: "الباركود", kind: "num", w: 140 }, { key: "category", label: "القسم", kind: "list", w: 140 },
     { key: "unit", label: "الوحدة", kind: "list", w: 80 }, { key: "price", label: "سعر البيع", kind: "money", w: 90 }, { key: "cost", label: "التكلفة", kind: "money", w: 90 },
-    { key: "qty", label: "الكمية", kind: "num", w: 80 }, { key: "weighted", label: "بالوزن", kind: "check", w: 56 },
+    { key: "qty", label: "الكمية", kind: "num", w: 80 },
+    { key: "pack", label: "العبوة الكبيرة", kind: "list", w: 100 }, { key: "packQty", label: "فيها كم", kind: "num", w: 70 }, { key: "packPrice", label: "سعر العبوة", kind: "money", w: 90 },
+    { key: "weighted", label: "بالوزن", kind: "check", w: 56 },
   ],
   customers: [{ key: "name", label: "اسم العميل *", w: 200 }, { key: "phone", label: "الهاتف", kind: "num", w: 130 }, { key: "balance", label: "الدين القديم", kind: "money", w: 110 }, { key: "limit", label: "حد الدين", kind: "money", w: 100 }],
   suppliers: [{ key: "name", label: "اسم المورد *", w: 220 }, { key: "phone", label: "الهاتف", kind: "num", w: 130 }, { key: "balance", label: "المستحق له", kind: "money", w: 120 }],
 };
-const UNITS = ["حبة", "علبة", "قنينة", "كيس", "كيلو", "لتر", "رغيف", "باكو"];
+const UNITS = ["حبة", "علبة", "قنينة", "كيس", "كيلو", "لتر", "رغيف", "باكو", "صندوق", "كرتونة"];
 const blank = (n: number) => Array.from({ length: n }, () => "");
 const draftKey = (k: SheetKind) => `pos.paperDraft.${k}`;
 
@@ -274,7 +281,18 @@ function HandEntry({ kind, call, busy, onSend }: { kind: SheetKind; call: Call; 
         </table>
         <datalist id="hand-category">{cats.map((c) => <option key={c} value={c} />)}</datalist>
         <datalist id="hand-unit">{UNITS.map((u) => <option key={u} value={u} />)}</datalist>
+        <datalist id="hand-pack">{BIG_UNITS.map((u) => <option key={u} value={u} />)}</datalist>
       </div>
+      {kind === "products" && (
+        <small className="muted">📦 صنف يتباع بالحبة وبالصندوق؟ اكتب «صندوق» في «العبوة الكبيرة» و24 في «فيها كم»، وسعر الصندوق لو يختلف (لو فاضي: سعر الحبة × 24). ولو كتبت «صندوق» في الوحدة نفسها مع «فيها كم»، نعتبروا السطر كله بالصندوق: السعر والتكلفة والكمية، ونحسبوا الحبة منه.</small>
+      )}
+      {kind === "products" && mapped.rows.some((r) => r.packUnit) && (
+        <ul className="muted" style={{ margin: 0, paddingInlineStart: 24 }}>
+          {mapped.rows.filter((r) => r.packUnit).slice(0, 6).map((r, i) => (
+            <li key={i}>{String(r.name)}: {String(r.unit ?? "حبة")} بـ{formatMoney(Number(r.priceMinor))} · {String(r.packUnit)} ({Number(r.packFactorMilli) / 1000} {String(r.unit ?? "حبة")}) بـ{formatMoney(Number(r.packPriceMinor ?? Math.round((Number(r.priceMinor) * Number(r.packFactorMilli)) / 1000)))}{Number(r.qtyMilli) ? ` · الكمية ${Number(r.qtyMilli) / 1000} ${String(r.unit ?? "حبة")}` : ""}</li>
+          ))}
+        </ul>
+      )}
       <small className="muted">Enter ينقلك للخانة اللي بعدها، والسطر الجديد يتفتح وحده. اللي تكتبه يتحفظ في الجهاز لين تدخله، حتى لو قفلت الصفحة.</small>
       <div className="row wrap">
         {mapped.rows.length > 0 && <span className="badge ok">{mapped.rows.length} سطر جاهز</span>}

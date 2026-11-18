@@ -10,6 +10,10 @@ export const SHEETS = {
       barcode: ["الباركود", "باركود", "الكود", "barcode", "code"],
       category: ["القسم", "التصنيف", "category"],
       unit: ["الوحدة", "unit"],
+      pack: ["العبوة الكبيرة", "وحدة الجملة", "العبوة", "pack"],
+      packQty: ["فيها كم", "العدد في العبوة", "عدد الحبات", "pack qty"],
+      packPrice: ["سعر العبوة", "سعر الجملة", "pack price"],
+      packBarcode: ["باركود العبوة", "باركود الجملة", "pack barcode"],
       price: ["سعر البيع", "السعر", "price"],
       cost: ["التكلفة", "سعر الشراء", "cost"],
       qty: ["الكمية الموجودة", "الكمية", "المخزون", "qty", "quantity", "stock"],
@@ -17,8 +21,9 @@ export const SHEETS = {
       weighted: ["بالوزن", "موزون", "weighted"],
     },
     example: [
-      ["سكر 1 كيلو", "6281000000011", "المواد الغذائية", "كيس", "4.500", "3.800", "24", "5", "لا"],
-      ["طماطم", "", "الخضروات والفواكه", "كيلو", "3.500", "2.500", "40.5", "", "نعم"],
+      ["سكر 1 كيلو", "6281000000011", "المواد الغذائية", "كيس", "شوال", "10", "42", "", "4.500", "3.800", "24", "5", "لا"],
+      ["بيبسي علبة", "6281000000028", "المشروبات", "علبة", "صندوق", "24", "30", "6281000000035", "1.500", "1.000", "96", "24", "لا"],
+      ["طماطم", "", "الخضروات والفواكه", "كيلو", "", "", "", "", "3.500", "2.500", "40.5", "", "نعم"],
     ],
   },
   customers: {
@@ -93,6 +98,9 @@ const yes = (v: unknown) => ["نعم", "اي", "أي", "ايه", "yes", "y", "1"
 /** `lines[i]` is the spreadsheet line `rows[i]` came from. */
 export interface Mapped<T> { rows: T[]; lines: number[]; errors: { row: number; message: string }[]; missing: string[] }
 
+/** Words for a packing that holds several pieces: typed as the unit, they mean the line is per box. */
+export const BIG_UNITS = ["صندوق", "كرتونة", "كرتون", "شد", "باكو", "شوال", "طرد", "درزن", "دستة"];
+
 /** Finds each column by its header (any of its names), then turns the rows into what the server takes. */
 export function mapSheet(kind: SheetKind, table: unknown[][]): Mapped<Record<string, unknown>> {
   const cols = SHEETS[kind].cols as Record<string, readonly string[]>;
@@ -119,13 +127,37 @@ export function mapSheet(kind: SheetKind, table: unknown[][]): Mapped<Record<str
       return n;
     };
     if (kind === "products") {
-      const price = num("price", "السعر"), cost = num("cost", "التكلفة"), qty = num("qty", "الكمية"), min = num("min", "حد التنبيه");
-      if ([price, cost, qty, min].includes(null)) return;
-      const barcode = String(cell(r, "barcode") ?? "").replace(/\.0+$/, "").replace(/\s/g, "");
+      const p0 = num("price", "السعر"), c0 = num("cost", "التكلفة"), q0 = num("qty", "الكمية");
+      const min = num("min", "حد التنبيه"), per = num("packQty", "العدد في العبوة"), packPriceIn = num("packPrice", "سعر العبوة");
+      if (p0 === null || c0 === null || q0 === null || min === null || per === null || packPriceIn === null) return;
+      let price = p0, cost = c0, qty = q0;
+      const code = (k: string) => String(cell(r, k) ?? "").replace(/\.0+$/, "").replace(/\s/g, "");
+      const barcode = code("barcode");
+      const weighted = yes(cell(r, "weighted"));
+      let unit = str(r, "unit");
+      let pack = str(r, "pack");
+      let packPrice = packPriceIn;
+      if (per !== undefined && !weighted) {
+        if (per < 2 || !Number.isInteger(per)) return errors.push({ row: line, message: `العدد في العبوة لازم رقم صحيح أكبر من 1: ${per}` });
+        // «صندوق فيه 24» typed in the unit box: the whole line is per box, and the piece is worked out from it.
+        if (!pack && BIG_UNITS.includes(unit)) {
+          pack = unit;
+          unit = "حبة";
+          if (price !== undefined && packPrice === undefined) { packPrice = price; price = Math.round((price / per) * 1000) / 1000; }
+          if (cost !== undefined) cost = Math.round((cost / per) * 1000) / 1000;
+          if (qty !== undefined) qty = qty * per;
+        }
+        pack ||= "صندوق";
+      } else if (pack && !weighted) {
+        return errors.push({ row: line, message: `اكتب كم حبة في الـ${pack}` });
+      }
+      const withPack = per !== undefined && !weighted;
+      const packCode = withPack ? code("packBarcode") : "";
       lines.push(line);
       rows.push({
-        name, ...(barcode ? { barcode } : {}), ...(str(r, "category") ? { category: str(r, "category") } : {}), ...(str(r, "unit") ? { unit: str(r, "unit") } : {}),
-        priceMinor: toMinor(price ?? 0), costMinor: toMinor(cost ?? 0), qtyMilli: toMinor(qty ?? 0), minStockMilli: toMinor(min ?? 0), weighted: yes(cell(r, "weighted")),
+        name, ...(barcode ? { barcode } : {}), ...(str(r, "category") ? { category: str(r, "category") } : {}), ...(unit ? { unit } : {}),
+        priceMinor: toMinor(price ?? 0), costMinor: toMinor(cost ?? 0), qtyMilli: toMinor(qty ?? 0), minStockMilli: toMinor(min ?? 0), weighted,
+        ...(withPack ? { packUnit: pack, packFactorMilli: toMinor(per!), ...(packPrice !== undefined ? { packPriceMinor: toMinor(packPrice) } : {}), ...(packCode ? { packBarcode: packCode } : {}) } : {}),
       });
     } else {
       const bal = num("balance", "المبلغ", true), limit = kind === "customers" ? num("limit", "حد الدين") : undefined;
