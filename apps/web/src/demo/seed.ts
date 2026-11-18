@@ -109,6 +109,58 @@ export async function seedDemo(db: Q) {
   await addPharmacy(db);
   await addButcher(db);
   await addRestaurant(db);
+  await addElectronics(db);
+}
+
+/**
+ * A phone corner for trying the shop as an electronics store (the demo bar switches the type):
+ * phones sold by their IMEI with a year's warranty, accessories with barcodes, and repairs in the workshop.
+ */
+async function addElectronics(db: Q) {
+  if ((await db.query(`SELECT 1 FROM repairs LIMIT 1`)).rows.length) return;
+  const dev = (await db.query(`SELECT tenant_id AS tid, store_id AS sid FROM devices WHERE kind = 'pos' ORDER BY created_at LIMIT 1`)).rows[0];
+  if (!dev) return;
+  const { tid, sid } = dev;
+  const cat = async (name: string, icon: string, sort: number) =>
+    (await db.query(`INSERT INTO categories (tenant_id, name, icon, sort) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING RETURNING id`, [tid, name, icon, sort])).rows[0]?.id
+      ?? (await db.query(`SELECT id FROM categories WHERE tenant_id = $1 AND name = $2`, [tid, name])).rows[0].id;
+  const phones = await cat("هواتف", "📱", 80);
+  const cables = await cat("شواحن وكوابل", "🔌", 81);
+  const audio = await cat("سماعات", "🎧", 82);
+  // name, department, price, cost, warranty months, IMEIs in stock, or a barcode and stock for accessories
+  const items: [string, string, number, number, number, string[], string | null, number][] = [
+    ["سامسونج جالاكسي A15 128GB", phones, 650000, 560000, 12, ["354678110000010", "354678110000028", "354678110000036"], null, 0],
+    ["آيفون 13 128GB", phones, 2350000, 2100000, 12, ["352099001761481", "352099001761499"], null, 0],
+    ["شاومي ريدمي 13C", phones, 420000, 360000, 6, ["353322110000016", "353322110000024"], null, 0],
+    ["شاحن سريع 25 واط تايب سي", cables, 35000, 18000, 3, [], "6970000000101", 40],
+    ["كابل تايب سي 1 متر", cables, 15000, 6000, 0, [], "6970000000118", 60],
+    ["سماعة بلوتوث", audio, 85000, 50000, 6, [], "6970000000125", 15],
+  ];
+  for (const [name, category, price, cost, warranty, imeis, barcode, stock] of items) {
+    const pid = (await db.query(
+      `INSERT INTO products (tenant_id, name, category_id, cost_minor, serialized, warranty_months, min_stock_milli) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+      [tid, name, category, cost, imeis.length > 0, warranty, imeis.length ? 1000 : 5000],
+    )).rows[0].id;
+    const uid = (await db.query(`INSERT INTO product_units (tenant_id, product_id, name, factor_milli, price_minor, is_base) VALUES ($1,$2,'حبة',1000,$3,true) RETURNING id`, [tid, pid, price])).rows[0].id;
+    if (barcode) await db.query(`INSERT INTO barcodes (tenant_id, unit_id, code) VALUES ($1,$2,$3)`, [tid, uid, barcode]);
+    for (const imei of imeis) await db.query(`INSERT INTO product_serials (tenant_id, product_id, store_id, serial) VALUES ($1,$2,$3,$4)`, [tid, pid, sid, imei]);
+    const qty = imeis.length || stock;
+    if (qty) await db.query(`INSERT INTO stock_movements (tenant_id, store_id, product_id, qty_milli, kind) VALUES ($1,$2,$3,$4,'adjust')`, [tid, sid, pid, qty * 1000]);
+  }
+  // Devices in the workshop: one just in, one waiting for a part, one ready for its owner.
+  const repairs: [string, string, string, string | null, string, string, number, number, string, number][] = [
+    ["سالم الورفلي", "0912345678", "آيفون 11 أسود", "356938035643809", "الشاشة مكسورة واللمس ما يخدمش", "بدون شاحن", 280000, 100000, "received", 0],
+    ["هدى الزوي", "0923456789", "سامسونج A52", "490154203237518", "ما يشحنش، مدخل الشحن", "جراب", 60000, 20000, "waiting_parts", 2],
+    ["عمر بن علي", "0918765432", "لابتوب HP", null, "بطيء، يحتاج فورمات وتنظيف", "شاحن اللابتوب", 50000, 0, "ready", 3],
+  ];
+  let n = 0;
+  for (const [name, phone, device, serial, problem, acc, estimate, deposit, status, ago] of repairs) {
+    await db.query(
+      `INSERT INTO repairs (tenant_id, store_id, number, customer_name, phone, device, serial, problem, accessories, estimate_minor, deposit_minor, status, technician, created_at, ready_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'محمود', now() - make_interval(days => $13::int), CASE WHEN $12 = 'ready' THEN now() ELSE NULL END)`,
+      [tid, sid, ++n, name, phone, device, serial, problem, acc, estimate, deposit, status, ago],
+    );
+  }
 }
 
 /**

@@ -17,7 +17,7 @@ export async function returnRoutes(app: FastifyInstance) {
     )).rows[0];
     if (!s) return null;
     const lines = (await app.db.query(
-      `SELECT l.id, l.product_id, l.unit_id, l.name, l.qty_milli, l.price_minor, l.discount_minor, l.tax_minor, l.total_minor, l.cost_minor, u.factor_milli,
+      `SELECT l.id, l.product_id, l.unit_id, l.name, l.qty_milli, l.price_minor, l.discount_minor, l.tax_minor, l.total_minor, l.cost_minor, l.serials, l.warranty_until, u.factor_milli,
          COALESCE((SELECT -sum(r.qty_milli) FROM sale_lines r WHERE r.original_line_id = l.id), 0)::bigint AS returned_milli
        FROM sale_lines l JOIN product_units u ON u.id = l.unit_id WHERE l.sale_id = $1 ORDER BY l.id`,
       [s.id],
@@ -106,6 +106,16 @@ export async function returnRoutes(app: FastifyInstance) {
              SELECT $1,$2,$3,$4,'return',$5,$6,$7 WHERE NOT EXISTS (SELECT 1 FROM recipe_lines WHERE product_id = $3)`,
             [who.tid, who.sid, p.l.product_id, Math.round((p.qty * p.l.factor_milli) / 1000), b.id, b.reason, who.sub],
           );
+          // Phones with their own numbers go back in stock under the same numbers.
+          if (p.l.serials?.length) {
+            const pieces = Math.round((p.qty * p.l.factor_milli) / 1e6);
+            await tx.query(
+              `UPDATE product_serials SET status = 'in_stock', sale_id = NULL, sold_at = NULL, warranty_until = NULL, store_id = $4
+               WHERE id IN (SELECT id FROM product_serials WHERE tenant_id = $1 AND sale_id = $2 AND status = 'sold' AND serial = ANY($3::text[]) ORDER BY serial LIMIT $5)`,
+              [who.tid, orig.id, p.l.serials, who.sid, pieces],
+            );
+            await tx.query(`UPDATE products SET updated_at = now() WHERE id = $1`, [p.l.product_id]);
+          }
         }
         if (loyalty.pointsMinor > 0) {
           await tx.query(`INSERT INTO payments (tenant_id, sale_id, method, amount_minor) VALUES ($1,$2,'points',$3)`, [who.tid, b.id, -loyalty.pointsMinor]);

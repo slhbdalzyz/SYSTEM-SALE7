@@ -1,11 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { applyOffers, computeLine, computeTotals, pointsEarned, pointsFor, recipeCost, recipeUsage, saleInputSchema, type SaleInput } from "@pos/shared";
+import { applyOffers, computeLine, computeTotals, normSerial, pointsEarned, pointsFor, recipeCost, recipeUsage, saleInputSchema, warrantyUntil, type SaleInput } from "@pos/shared";
 import { addPoints, customerPoints, loyaltySettings } from "../loyalty";
 import { currentOffers } from "./offers";
 import { openPriceProducts } from "./quick";
 import { alertBigDiscount, alertOverCreditLimit, checkLowStock, checkZakatDue, flushPushes } from "../alerts";
-import { audit, inTx } from "../db";
+import { audit, inTx, type Tx } from "../db";
 import { checkExpirySoon } from "../expiry";
 import { requireDevice } from "../auth";
 import { payrollPurchase } from "./payroll";
@@ -56,6 +56,38 @@ export async function salesRoutes(app: FastifyInstance) {
   });
 }
 
+/**
+ * Marks the pieces sold. A number the shop never entered is still taken (the box was in stock
+ * before the numbers were) and kept as sold; one already sold, or a line short of numbers, is
+ * logged for the owner to look at. The sale itself always stands: the customer has the phone.
+ */
+async function sellSerials(tx: Tx, a: { tid: string; who: TokenPayload; saleId: string; number: string; at: string; productId: string; name: string; pieces: number; serials: string[]; warranty: string | null }) {
+  const twice: string[] = [];
+  for (const serial of a.serials) {
+    const was = (await tx.query(`SELECT id, status, product_id FROM product_serials WHERE tenant_id = $1 AND serial = $2 FOR UPDATE`, [a.tid, serial])).rows[0];
+    if (was?.status === "sold") twice.push(serial);
+    if (was) {
+      await tx.query(
+        `UPDATE product_serials SET status = 'sold', sale_id = $2, sold_at = $3, warranty_until = $4, store_id = $5, product_id = CASE WHEN $6::boolean THEN product_id ELSE $7 END WHERE id = $1`,
+        [was.id, a.saleId, a.at, a.warranty, a.who.sid, was.status === "sold", a.productId],
+      );
+    } else {
+      await tx.query(
+        `INSERT INTO product_serials (tenant_id, product_id, store_id, serial, status, sale_id, sold_at, warranty_until, note, created_by) VALUES ($1,$2,$3,$4,'sold',$5,$6,$7,'بيع قبل تسجيل الرقم',$8)`,
+        [a.tid, a.productId, a.who.sid, serial, a.saleId, a.at, a.warranty, a.who.sub],
+      );
+    }
+  }
+  // The phone left the shop: the till's list of numbers in stock has to drop it.
+  await tx.query(`UPDATE products SET updated_at = now() WHERE id = $1`, [a.productId]);
+  if (twice.length) {
+    await audit(tx, { tenantId: a.tid, userId: a.who.sub, deviceId: a.who.did, action: "sale.serial_twice", entity: "sale", entityId: a.saleId, data: { sale: a.number, item: a.name, serials: twice } });
+  }
+  if (a.serials.length < a.pieces) {
+    await audit(tx, { tenantId: a.tid, userId: a.who.sub, deviceId: a.who.did, action: "sale.serial_missing", entity: "sale", entityId: a.saleId, data: { sale: a.number, item: a.name, missing: a.pieces - a.serials.length } });
+  }
+}
+
 async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput): Promise<Result> {
   const tid = who.tid;
   const dup = await app.db.query(`SELECT tenant_id FROM sales WHERE id = $1`, [s.id]);
@@ -96,7 +128,7 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
 
   const unitIds = [...new Set(s.lines.map((l) => l.unitId))];
   const units = await app.db.query(
-    `SELECT u.id, u.product_id, u.factor_milli, u.price_minor, u.is_base, p.cost_minor, p.name, p.category_id, p.is_weighted, p.rx
+    `SELECT u.id, u.product_id, u.factor_milli, u.price_minor, u.is_base, p.cost_minor, p.name, p.category_id, p.is_weighted, p.rx, p.serialized, p.warranty_months
      FROM product_units u JOIN products p ON p.id = u.product_id WHERE u.tenant_id = $1 AND u.id = ANY($2)`,
     [tid, unitIds],
   );
@@ -164,12 +196,16 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
         const recipe = recipes.get(l.productId);
         const unitCost = recipe ? recipeCost(recipe, ingredientCost) : Number(u.cost_minor);
         const cost = Math.round((unitCost * baseQty) / 1000);
+        // Electronics: the numbers of the pieces sold, and the warranty they carry from today.
+        const serials = [...new Set((l.serials ?? []).map(normSerial).filter(Boolean))];
+        const warranty = warrantyUntil(s.createdAt, Number(u.warranty_months ?? 0));
         await tx.query(
-          `INSERT INTO sale_lines (tenant_id, sale_id, product_id, unit_id, name, qty_milli, price_minor, discount_minor, tax_minor, total_minor, cost_minor, promo_minor, offer_id, note)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+          `INSERT INTO sale_lines (tenant_id, sale_id, product_id, unit_id, name, qty_milli, price_minor, discount_minor, tax_minor, total_minor, cost_minor, promo_minor, offer_id, note, serials, warranty_until)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
           [tid, s.id, l.productId, l.unitId, l.name, l.qtyMilli, l.priceMinor, t.discount, t.tax, t.total, cost, Math.min(l.promoMinor, t.discount),
-            l.offerId && knownOffers.has(l.offerId) ? l.offerId : null, l.note || null],
+            l.offerId && knownOffers.has(l.offerId) ? l.offerId : null, l.note || null, serials.length ? serials : null, warranty],
         );
+        if (u.serialized || serials.length) await sellSerials(tx, { tid, who, saleId: s.id, number: s.number, at: s.createdAt, productId: l.productId, name: l.name, pieces: Math.round(baseQty / 1000), serials, warranty });
         for (const [productId, qty] of recipeUsage([{ productId: l.productId, baseMilli: baseQty }], recipes)) {
           await tx.query(
             // Dated when the sale was made, not when an offline till sent it, so a stock count

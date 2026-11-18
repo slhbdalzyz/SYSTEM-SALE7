@@ -16,7 +16,8 @@ export async function loadProducts(q: Db | Tx, tenantId: string, opts: { since?:
     where.push(`p.id = ANY($${args.length})`);
   }
   const r = await q.query(
-    `SELECT p.id, p.name, p.sku, p.category_id, p.is_weighted, p.scale_code, p.tax_bp, p.cost_minor, p.min_stock_milli, p.active, p.track_expiry, p.quick, p.group_id, p.attrs, p.generic_name, p.rx, p.updated_at,
+    `SELECT p.id, p.name, p.sku, p.category_id, p.is_weighted, p.scale_code, p.tax_bp, p.cost_minor, p.min_stock_milli, p.active, p.track_expiry, p.quick, p.group_id, p.attrs, p.generic_name, p.rx, p.serialized, p.warranty_months, p.updated_at,
+       CASE WHEN p.serialized THEN COALESCE((SELECT json_agg(ps.serial ORDER BY ps.created_at) FROM product_serials ps WHERE ps.product_id = p.id AND ps.status = 'in_stock'), '[]'::json) END AS serials,
        COALESCE(json_agg(json_build_object(
          'id', u.id, 'name', u.name, 'factorMilli', u.factor_milli, 'priceMinor', u.price_minor, 'isBase', u.is_base,
          'barcodes', COALESCE((SELECT json_agg(b.code ORDER BY b.code) FROM barcodes b WHERE b.unit_id = u.id), '[]'::json)
@@ -43,6 +44,7 @@ export async function loadProducts(q: Db | Tx, tenantId: string, opts: { since?:
     attrs: p.attrs,
     genericName: p.generic_name,
     rx: p.rx,
+    ...(p.serialized ? { serialized: true, warrantyMonths: p.warranty_months, serials: p.serials ?? [] } : p.warranty_months ? { warrantyMonths: p.warranty_months } : {}),
     updatedAt: p.updated_at.toISOString(),
     units: p.units.map((u: CatalogProduct["units"][number]) => ({ ...u, factorMilli: Number(u.factorMilli), priceMinor: Number(u.priceMinor) })),
   }));
@@ -85,11 +87,11 @@ export async function saveProduct(tx: Tx, tenantId: string, id: string | null, i
     if (!c.rowCount) throw new HttpError(400, "التصنيف غير موجود");
   }
 
-  const cols = [b.name, b.sku ?? null, b.categoryId ?? null, b.isWeighted, b.scaleCode ?? null, b.taxBp, b.costMinor, b.minStockMilli, b.active, b.trackExpiry, b.quick, b.genericName || null, b.rx];
+  const cols = [b.name, b.sku ?? null, b.categoryId ?? null, b.isWeighted, b.scaleCode ?? null, b.taxBp, b.costMinor, b.minStockMilli, b.active, b.trackExpiry, b.quick, b.genericName || null, b.rx, b.serialized, b.warrantyMonths];
   let pid: string;
   if (id) {
     const r = await tx.query(
-      `UPDATE products SET name=$3, sku=$4, category_id=$5, is_weighted=$6, scale_code=$7, tax_bp=$8, cost_minor=$9, min_stock_milli=$10, active=$11, track_expiry=$12, quick=$13, generic_name=$14, rx=$15, updated_at=now()
+      `UPDATE products SET name=$3, sku=$4, category_id=$5, is_weighted=$6, scale_code=$7, tax_bp=$8, cost_minor=$9, min_stock_milli=$10, active=$11, track_expiry=$12, quick=$13, generic_name=$14, rx=$15, serialized=$16, warranty_months=$17, updated_at=now()
        WHERE id=$1 AND tenant_id=$2 RETURNING id`,
       [id, tenantId, ...cols],
     );
@@ -97,8 +99,8 @@ export async function saveProduct(tx: Tx, tenantId: string, id: string | null, i
     pid = id;
   } else {
     const r = await tx.query(
-      `INSERT INTO products (tenant_id, name, sku, category_id, is_weighted, scale_code, tax_bp, cost_minor, min_stock_milli, active, track_expiry, quick, generic_name, rx)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
+      `INSERT INTO products (tenant_id, name, sku, category_id, is_weighted, scale_code, tax_bp, cost_minor, min_stock_milli, active, track_expiry, quick, generic_name, rx, serialized, warranty_months)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
       [tenantId, ...cols],
     );
     pid = r.rows[0].id;

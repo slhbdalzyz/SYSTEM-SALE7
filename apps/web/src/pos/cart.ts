@@ -24,6 +24,12 @@ export interface CartLine {
   rx?: boolean;
   /** Restaurants: how the customer wants it (no onions). */
   note?: string | null;
+  /** Electronics: each piece has its own number, scanned when it is sold. */
+  serialized?: boolean;
+  serials?: string[];
+  warrantyMonths?: number;
+  /** The cashier chose to sell it without scanning the number. */
+  noSerial?: boolean;
 }
 
 export function lineFor(product: CatalogProduct, unit: CatalogUnit, qtyMilli: number): CartLine {
@@ -41,6 +47,8 @@ export function lineFor(product: CatalogProduct, unit: CatalogUnit, qtyMilli: nu
     categoryId: product.categoryId,
     isBaseUnit: unit.isBase,
     ...(product.rx ? { rx: true } : {}),
+    ...(product.serialized ? { serialized: true, serials: [] } : {}),
+    ...(product.warrantyMonths ? { warrantyMonths: product.warrantyMonths } : {}),
     ...(product.units.length > 1 && !product.isWeighted
       ? { units: product.units.map((u) => ({ id: u.id, name: u.name, priceMinor: u.priceMinor, isBase: u.isBase })), productName: product.name }
       : {}),
@@ -61,7 +69,10 @@ export function switchUnit(line: CartLine, unitId: string): CartLine {
 export function addLine(lines: CartLine[], line: CartLine): { lines: CartLine[]; key: string } {
   if (!line.isWeighted) {
     const same = lines.find((l) => l.unitId === line.unitId && l.priceMinor === line.priceMinor && l.discountMinor === 0 && !l.note && !line.note);
-    if (same) return { lines: lines.map((l) => (l === same ? { ...l, qtyMilli: l.qtyMilli + line.qtyMilli } : l)), key: same.key };
+    if (same) {
+      const serials = same.serialized || line.serialized ? [...new Set([...(same.serials ?? []), ...(line.serials ?? [])])] : undefined;
+      return { lines: lines.map((l) => (l === same ? { ...l, qtyMilli: l.qtyMilli + line.qtyMilli, ...(serials ? { serials } : {}) } : l)), key: same.key };
+    }
   }
   return { lines: [...lines, line], key: line.key };
 }
@@ -112,6 +123,8 @@ export function toSaleInput(
       offerName: l.offerName ?? null,
       taxBp: l.taxBp,
       ...(l.note ? { note: l.note } : {}),
+      ...(l.serials?.length ? { serials: l.serials } : {}),
+      ...(l.warrantyMonths ? { warrantyMonths: l.warrantyMonths } : {}),
     })),
     invoiceDiscountMinor: a.invoiceDiscountMinor,
     payments: a.payments,

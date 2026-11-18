@@ -66,6 +66,8 @@ class PosDb extends Dexie {
       meta: "key",
     });
     this.version(2).stores({ customers: "id, name, phone" });
+    // Phones in stock, found on the till by their own IMEI.
+    this.version(3).stores({ products: "id, name, scaleCode, sku, *serials" });
   }
 }
 

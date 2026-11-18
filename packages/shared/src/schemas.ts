@@ -29,6 +29,10 @@ export const saleLineSchema = z.object({
   taxBp: z.number().int().min(0).max(10000).default(0),
   /** Restaurants: how the customer wants it (no onions, extra hot). */
   note: z.string().trim().max(200).nullable().optional(),
+  /** Electronics: the serial numbers / IMEIs of the pieces sold on this line. */
+  serials: z.array(z.string().trim().min(3).max(40)).max(200).optional(),
+  /** For the printed receipt only; the server takes the warranty from the item. */
+  warrantyMonths: z.number().int().min(0).max(120).optional(),
 });
 
 export const paymentSchema = z.object({
@@ -91,6 +95,10 @@ export const productInputSchema = z.object({
   genericName: z.string().trim().max(200).nullable().optional(),
   /** Sold only against a prescription: the till asks for it. */
   rx: z.boolean().default(false),
+  /** Electronics: every piece has its own serial number / IMEI, scanned when it is sold. */
+  serialized: z.boolean().default(false),
+  /** Months of warranty from the day it is sold (0 = none). */
+  warrantyMonths: z.number().int().min(0).max(120).default(0),
   units: z.array(unitInputSchema).min(1).max(10),
 });
 export type ProductInput = z.infer<typeof productInputSchema>;
@@ -143,6 +151,10 @@ export interface CatalogProduct {
   attrs?: Record<string, string> | null;
   genericName?: string | null;
   rx?: boolean;
+  serialized?: boolean;
+  warrantyMonths?: number;
+  /** The serial numbers / IMEIs of the pieces in stock, so the till finds the phone by its own number. */
+  serials?: string[];
   updatedAt: string;
   units: CatalogUnit[];
 }

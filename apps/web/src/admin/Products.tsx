@@ -25,13 +25,15 @@ interface Form {
   quick: boolean;
   genericName: string;
   rx: boolean;
+  serialized: boolean;
+  warranty: string;
   units: UnitForm[];
 }
 
 function toForm(p: CatalogProduct): Form {
   return {
     id: p.id, name: p.name, sku: p.sku ?? "", categoryId: p.categoryId ?? "", isWeighted: p.isWeighted, scaleCode: p.scaleCode ?? "",
-    cost: String(p.costMinor / 1000), minStock: String(p.minStockMilli / 1000), active: p.active, trackExpiry: !!p.trackExpiry, quick: !!p.quick, genericName: p.genericName ?? "", rx: !!p.rx,
+    cost: String(p.costMinor / 1000), minStock: String(p.minStockMilli / 1000), active: p.active, trackExpiry: !!p.trackExpiry, quick: !!p.quick, genericName: p.genericName ?? "", rx: !!p.rx, serialized: !!p.serialized, warranty: String(p.warrantyMonths ?? 0),
     units: p.units.map((u) => ({ id: u.id, name: u.name, factor: String(u.factorMilli / 1000), price: String(u.priceMinor / 1000), barcodes: u.barcodes.join(", "), isBase: u.isBase })),
   };
 }
@@ -85,6 +87,8 @@ export function Products({ call, storeId, onLabels }: { call: Call; storeId: str
       quick: form.quick,
       genericName: form.genericName.trim() || null,
       rx: form.rx,
+      serialized: (form.serialized ?? false) && !form.isWeighted,
+      warrantyMonths: Math.max(0, Math.min(120, Math.round(Number(form.warranty) || 0))),
       units: form.units.map((u) => ({
         id: u.id,
         name: u.name,
@@ -154,6 +158,13 @@ export function Products({ call, storeId, onLabels }: { call: Call; storeId: str
             <input type="checkbox" style={{ width: "auto" }} checked={form.rx} onChange={(e) => setForm({ ...form, rx: e.target.checked })} />
             💊 بوصفة طبية
           </label>
+          <label className="row" style={{ color: "var(--ink)" }} title="الكاشير يطلب رقم الجهاز وقت البيع">
+            <input type="checkbox" style={{ width: "auto" }} checked={!!form.serialized} onChange={(e) => setForm({ ...form, serialized: e.target.checked })} />
+            📱 كل حبة برقمها (IMEI)
+          </label>
+          <label className="row" style={{ color: "var(--ink)" }}>
+            الضمان <input className="num" style={{ width: 60 }} value={form.warranty ?? "0"} onChange={(e) => setForm({ ...form, warranty: e.target.value })} /> شهر
+          </label>
           <label className="row" style={{ color: "var(--ink)" }} title="يطلع زر في شاشة الكاشير، للأصناف اللي ما عندهاش باركود">
             <input type="checkbox" style={{ width: "auto" }} checked={form.quick} onChange={(e) => setForm({ ...form, quick: e.target.checked })} />
             ⭐ زر سريع في الكاشير <span className="muted">(ترتيبه ومجموعاته من «🔘 أزرار الكاشير»)</span>
@@ -221,7 +232,7 @@ export function Products({ call, storeId, onLabels }: { call: Call; storeId: str
               const low = p.stockMilli !== null && p.minStockMilli > 0 && p.stockMilli <= p.minStockMilli;
               return (
                 <tr key={p.id} style={{ opacity: p.active ? 1 : 0.5 }}>
-                  <td>{p.name}{p.isWeighted && <span className="muted"> ⚖️ {p.scaleCode}</span>}{p.trackExpiry && <span className="muted" title="خاضع للصلاحية"> ⏳</span>}{p.rx && <span title="بوصفة طبية"> 💊</span>}{p.genericName && <div className="muted" style={{ fontSize: ".85rem" }}>{p.genericName}</div>}{p.quick && <span title="زر سريع في الكاشير"> ⭐</span>}
+                  <td>{p.name}{p.isWeighted && <span className="muted"> ⚖️ {p.scaleCode}</span>}{p.trackExpiry && <span className="muted" title="خاضع للصلاحية"> ⏳</span>}{p.rx && <span title="بوصفة طبية"> 💊</span>}{p.serialized && <span title={`برقم تسلسلي · ${p.serials?.length ?? 0} في المخزن`}> 📱</span>}{p.genericName && <div className="muted" style={{ fontSize: ".85rem" }}>{p.genericName}</div>}{p.quick && <span title="زر سريع في الكاشير"> ⭐</span>}
                     {p.attrs && (p.attrs.color || p.attrs.size) && <div className="row" style={{ gap: 4 }}>{p.attrs.color && <span className="badge">🎨 {p.attrs.color}</span>}{p.attrs.size && <span className="badge">📏 {p.attrs.size}</span>}</div>}</td>
                   <td className="muted">{catName(p.categoryId) || "—"}</td>
                   <td>{p.units.map((u) => <div key={u.id}>{u.name}{!u.isBase && <span className="muted"> ({formatQty(u.factorMilli, false)})</span>}: {u.priceMinor ? <span className="num">{formatMoney(u.priceMinor)}</span> : <span className="muted">بدون سعر</span>}</div>)}</td>
