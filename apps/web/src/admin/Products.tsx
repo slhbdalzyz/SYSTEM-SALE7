@@ -10,7 +10,10 @@ export interface Dept { id: string; name: string; icon: string | null; sort: num
 
 type Row = CatalogProduct & { stockMilli: number | null };
 
-interface UnitForm { id?: string; name: string; factor: string; price: string; barcodes: string; isBase: boolean }
+interface UnitForm { id?: string; name: string; factor: string; price: string; barcodes: string; isBase: boolean; wholesale?: string; contractor?: string; workshop?: string }
+const TIERS = [["wholesale", "جملة"], ["contractor", "مقاول"], ["workshop", "ورشة"]] as const;
+const tierIn = (m: number | undefined) => (m ? String(m / 1000) : "");
+const tierOut = (s: string | undefined) => (s && Number(s) > 0 ? toMinor(Number(s)) : null);
 interface Form {
   id?: string;
   name: string;
@@ -27,6 +30,9 @@ interface Form {
   rx: boolean;
   serialized: boolean;
   warranty: string;
+  partNumber: string;
+  fits: string;
+  location: string;
   units: UnitForm[];
 }
 
@@ -34,7 +40,9 @@ function toForm(p: CatalogProduct): Form {
   return {
     id: p.id, name: p.name, sku: p.sku ?? "", categoryId: p.categoryId ?? "", isWeighted: p.isWeighted, scaleCode: p.scaleCode ?? "",
     cost: String(p.costMinor / 1000), minStock: String(p.minStockMilli / 1000), active: p.active, trackExpiry: !!p.trackExpiry, quick: !!p.quick, genericName: p.genericName ?? "", rx: !!p.rx, serialized: !!p.serialized, warranty: String(p.warrantyMonths ?? 0),
-    units: p.units.map((u) => ({ id: u.id, name: u.name, factor: String(u.factorMilli / 1000), price: String(u.priceMinor / 1000), barcodes: u.barcodes.join(", "), isBase: u.isBase })),
+    partNumber: p.partNumber ?? "", fits: p.fits ?? "", location: p.location ?? "",
+    units: p.units.map((u) => ({ id: u.id, name: u.name, factor: String(u.factorMilli / 1000), price: String(u.priceMinor / 1000), barcodes: u.barcodes.join(", "), isBase: u.isBase,
+      wholesale: tierIn(u.tierPrices?.wholesale), contractor: tierIn(u.tierPrices?.contractor), workshop: tierIn(u.tierPrices?.workshop) })),
   };
 }
 
@@ -49,6 +57,9 @@ export function Products({ call, storeId, onLabels }: { call: Call; storeId: str
   /** The clothing model open on its own sheet. */
   const [model, setModel] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** The wholesale / contractor / workshop prices are shown when the item has them, or when asked for. */
+  const [tiers, setTiers] = useState(false);
+  useEffect(() => setTiers(!!form?.units.some((u) => u.wholesale || u.contractor || u.workshop)), [form?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const load = async () => {
     setRows(await call<Row[]>(`/products?storeId=${storeId}`));
@@ -89,7 +100,9 @@ export function Products({ call, storeId, onLabels }: { call: Call; storeId: str
       rx: form.rx,
       serialized: (form.serialized ?? false) && !form.isWeighted,
       warrantyMonths: Math.max(0, Math.min(120, Math.round(Number(form.warranty) || 0))),
+      partNumber: form.partNumber.trim() || null, fits: form.fits.trim() || null, location: form.location.trim() || null,
       units: form.units.map((u) => ({
+        tierPrices: tiers ? { wholesale: tierOut(u.wholesale), contractor: tierOut(u.contractor), workshop: tierOut(u.workshop) } : {},
         id: u.id,
         name: u.name,
         factorMilli: toMinor(Number(u.factor) || 1),
@@ -134,6 +147,9 @@ export function Products({ call, storeId, onLabels }: { call: Call; storeId: str
             </div>
           </label>
           <label>الاسم العلمي (للأدوية)<input value={form.genericName} onChange={(e) => setForm({ ...form, genericName: e.target.value })} placeholder="باراسيتامول…" /></label>
+          <label>رقم القطعة (OEM)<input className="num" value={form.partNumber} onChange={(e) => setForm({ ...form, partNumber: e.target.value })} placeholder="لقطع الغيار" /></label>
+          <label>تركب على<input value={form.fits} onChange={(e) => setForm({ ...form, fits: e.target.value })} placeholder="السيارات (لقطع الغيار)" /></label>
+          <label>مكانه في المخزن<input value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="رف A3" /></label>
           <label>كود داخلي (SKU)<input value={form.sku} onChange={(e) => setForm({ ...form, sku: e.target.value })} /></label>
           <label>التكلفة للوحدة الأساسية<input className="num" value={form.cost} onChange={(e) => setForm({ ...form, cost: e.target.value })} title="تتحدث تلقائياً من فواتير التوريد" /></label>
           <label>حد التنبيه بالنقص<input className="num" value={form.minStock} onChange={(e) => setForm({ ...form, minStock: e.target.value })} /></label>
@@ -182,8 +198,19 @@ export function Products({ call, storeId, onLabels }: { call: Call; storeId: str
             <input className="num" value={u.barcodes} onChange={(e) => setUnit(i, { barcodes: e.target.value })} />
             <input type="radio" style={{ width: "auto" }} checked={u.isBase} onChange={() => setUnit(i, { isBase: true, factor: "1" })} />
             <button className="danger" disabled={form.units.length === 1} onClick={() => setForm({ ...form, units: form.units.filter((_, j) => j !== i) })}>✕</button>
+            {tiers && (
+              <div className="tier-prices">
+                {TIERS.map(([k, label]) => (
+                  <label key={k}>سعر {label} ({u.name})<input className="num" value={u[k] ?? ""} placeholder={u.price} onChange={(e) => setUnit(i, { [k]: e.target.value })} /></label>
+                ))}
+              </div>
+            )}
           </div>
         ))}
+        <label className="row" style={{ color: "var(--ink)" }}>
+          <input type="checkbox" style={{ width: "auto" }} checked={tiers} onChange={(e) => setTiers(e.target.checked)} />
+          أسعار خاصة للجملة والمقاولين والورش <span className="muted">(فاضي = السعر العادي)</span>
+        </label>
         {!form.isWeighted && (
           <div><button onClick={() => setForm({ ...form, units: [...form.units, { name: "كرتونة", factor: "12", price: "", barcodes: "", isBase: false }] })}>+ وحدة (كرتونة، شد…)</button></div>
         )}

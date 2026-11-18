@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { makeScaleBarcode, type CatalogProduct } from "@pos/shared";
 import { db, storeCatalog, nextInvoiceNumber } from "../src/localdb";
 import { findByCode } from "../src/lookup";
-import { addLine, lineFor, switchUnit } from "../src/pos/cart";
+import { addLine, lineFor, repriceFor, switchUnit, toSaleInput } from "../src/pos/cart";
 import { parseScaleLine, parseScaleOutput } from "../src/scale";
 
 const water: CatalogProduct = {
@@ -282,5 +282,34 @@ describe("phones by IMEI", async () => {
     expect(t).toContain("354678110000010");
     expect(t).toContain("ضمان سنة");
     expect(t).toContain("حتى 18/11/2027");
+  });
+});
+
+describe("prices by kind of customer on the till", () => {
+  const cement: CatalogProduct = {
+    id: "00000000-0000-4000-8000-0000000000c1", name: "أسمنت", sku: null, categoryId: null, isWeighted: false, scaleCode: null, taxBp: 0, costMinor: 0, minStockMilli: 0,
+    active: true, trackExpiry: false, updatedAt: new Date().toISOString(),
+    units: [
+      { id: "00000000-0000-4000-8000-0000000000c2", name: "شكارة", factorMilli: 1000, priceMinor: 42000, isBase: true, barcodes: [], tierPrices: { contractor: 39000 } },
+      { id: "00000000-0000-4000-8000-0000000000c3", name: "طن", factorMilli: 20000, priceMinor: 800000, isBase: false, barcodes: [], tierPrices: { contractor: 760000 } },
+    ],
+  };
+  it("prices a line for a contractor and moves it back when the customer goes", () => {
+    const l = lineFor(cement, cement.units[0], 10_000, "contractor");
+    expect(l.priceMinor).toBe(39000);
+    const [back] = repriceFor([l], "contractor", "retail");
+    expect(back.priceMinor).toBe(42000);
+    // A price the cashier typed stays as it is.
+    const [typed] = repriceFor([{ ...l, priceMinor: 37000 }], "contractor", null);
+    expect(typed.priceMinor).toBe(37000);
+    expect(switchUnit(l, cement.units[1].id, "contractor").priceMinor).toBe(760000);
+  });
+  it("carries the quote, the building site and the delivery on the sale", () => {
+    const l = lineFor(cement, cement.units[0], 1000);
+    const s = toSaleInput({ id: crypto.randomUUID(), number: "T1-1", shiftId: null, lines: [l], offers: [], invoiceDiscountMinor: 0, payments: [{ method: "cash", amountMinor: 42000 }],
+      deal: { quoteId: "00000000-0000-4000-8000-0000000000d1", project: "عمارة السراج", delivery: { address: "قرجي" } } });
+    expect(s.quoteId).toBe("00000000-0000-4000-8000-0000000000d1");
+    expect(s.project).toBe("عمارة السراج");
+    expect(s.delivery?.address).toBe("قرجي");
   });
 });

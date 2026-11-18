@@ -27,10 +27,10 @@ export function DemoBar() {
     session.staffToken = null;
     location.reload();
   }
-  let type: "grocery" | "restaurant" | "electronics" = "grocery";
+  let type: "grocery" | "restaurant" | "electronics" | "building" = "grocery";
   try {
     const t = localStorage.getItem("pos.demoType");
-    if (t === "restaurant" || t === "electronics") type = t;
+    if (t === "restaurant" || t === "electronics" || t === "building") type = t;
   } catch {
     /* storage blocked */
   }
@@ -61,7 +61,7 @@ export function DemoBar() {
         <span>
           الكاشير: <b>أحمد</b> رقمه <b className="num">1234</b> · المالك رقمه <b className="num">9999</b> · الإدارة:{" "}
           <b className="num">owner@demo.ly</b> / <b className="num">demo12345</b> (المحاسبة: <b className="num">mona@demo.ly</b>، مدخل البيانات: <b className="num">khaled@demo.ly</b>، بنفس كلمة السر) · باركودات للتجربة: <b className="num">6191234500042</b> (كرتونة بيبسي)،{" "}
-          <b className="num">2000101012504</b> (ميزان: طماطم 1.250 كغ){type === "electronics" && <> · IMEI للتجربة: <b className="num">354678110000010</b> (سامسونج A15)</>}
+          <b className="num">2000101012504</b> (ميزان: طماطم 1.250 كغ){type === "electronics" && <> · IMEI للتجربة: <b className="num">354678110000010</b> (سامسونج A15)</>}{type === "building" && <> · اختار العميل «شركة البناء الحديث» (مقاول) وشوف الأسعار تتغير، وجرّب «📄 عرض سعر» رقم <b className="num">1</b></>}
         </span>
       )}
       <span className="spacer" />
@@ -69,6 +69,7 @@ export function DemoBar() {
       {!platform && type !== "grocery" && <button onClick={() => void switchType("grocery")}>🛒 رجوع للسوبرماركت</button>}
       {!platform && type !== "restaurant" && <button onClick={() => void switchType("restaurant")}>🍽️ جرّب كمطعم</button>}
       {!platform && type !== "electronics" && <button onClick={() => void switchType("electronics")}>📱 جرّب كمحل هواتف</button>}
+      {!platform && type !== "building" && <button onClick={() => void switchType("building")}>🧱 جرّب كمواد بناء</button>}
       {!platform && restaurant && <button onClick={() => switchDevice(kitchen ? "pos" : "kitchen")}>{kitchen ? "رجوع للكاشير" : "👨‍🍳 شاشة المطبخ"}</button>}
       {!platform && !kitchen && <button onClick={() => switchDevice(checker ? "pos" : "price_checker")}>{checker ? "رجوع للكاشير" : "جرّب قارئ الأسعار"}</button>}
       <button onClick={() => setOpen(!open)}>{open ? "إخفاء" : "عرض"}</button>

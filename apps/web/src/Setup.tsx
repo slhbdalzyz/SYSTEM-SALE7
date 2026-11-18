@@ -25,6 +25,13 @@ const TYPES: { id: string; icon: string; name: string; ready: boolean }[] = [
   { id: "butcher", icon: "🥩", name: "جزارة", ready: true },
   { id: "restaurant", icon: "🍽️", name: "مطعم / مقهى", ready: true },
   { id: "electronics", icon: "📱", name: "هواتف وإلكترونيات", ready: true },
+  { id: "building", icon: "🧱", name: "مواد بناء وكهرباء وسباكة", ready: true },
+  { id: "auto_parts", icon: "🚗", name: "قطع غيار سيارات", ready: true },
+  { id: "wholesale", icon: "📦", name: "جملة وتوزيع", ready: true },
+  { id: "stationery", icon: "📚", name: "مكتبة وقرطاسية", ready: true },
+  { id: "perfume", icon: "🌸", name: "عطور ومستحضرات تجميل", ready: true },
+  { id: "bakery", icon: "🥐", name: "حلويات ومخابز", ready: true },
+  { id: "furniture", icon: "🛋️", name: "أثاث وأجهزة منزلية", ready: true },
 ];
 
 /** First screen on a browser that is not a registered cashier yet: what the system is, then sign in or open a shop. */

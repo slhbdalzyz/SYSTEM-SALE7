@@ -95,7 +95,7 @@ interface Line { ingredientId: string; qty: string }
  * What goes into one of each dish, in the ingredient's own unit (grams, ml, pieces). Selling the dish
  * takes them out of stock, and its cost is what they cost, so the profit is the real one.
  */
-function Recipes({ call, storeId }: { call: Call; storeId: string }) {
+export function Recipes({ call, storeId, label }: { call: Call; storeId: string; label?: string }) {
   const [products, setProducts] = useState<CatalogProduct[]>([]);
   const [list, setList] = useState<RecipeRow[]>([]);
   const [dish, setDish] = useState("");
@@ -137,7 +137,7 @@ function Recipes({ call, storeId }: { call: Call; storeId: string }) {
   return (
     <>
       <div className="card stack">
-        <label>الصنف (الوجبة أو المشروب)
+        <label>{label ?? "الصنف (الوجبة أو المشروب)"}
           <select value={dish} onChange={(e) => void open(e.target.value)}>
             <option value="">— اختار —</option>
             {products.filter((p) => p.active).map((p) => <option key={p.id} value={p.id}>{p.name}{withRecipe.has(p.id) ? " ✓" : ""}</option>)}

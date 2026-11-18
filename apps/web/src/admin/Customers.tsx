@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { formatMoney, readShopSettings, toMinor, type CatalogCustomer, type LoyaltySettings, type ShopSettings } from "@pos/shared";
+import { PRICE_TIER_LABELS, formatMoney, readShopSettings, type CustomerTier, toMinor, type CatalogCustomer, type LoyaltySettings, type ShopSettings } from "@pos/shared";
 import { sendDebtReminder } from "../whatsapp";
 import { Modal } from "../pos/dialogs";
 import type { Call } from "./Admin";
@@ -18,7 +18,8 @@ export function Customers({ call, isOwner = false }: { call: Call; isOwner?: boo
   const [adjust, setAdjust] = useState({ points: "", note: "" });
   const [list, setList] = useState<CatalogCustomer[]>([]);
   const [q, setQ] = useState("");
-  const [edit, setEdit] = useState<{ id?: string; name: string; phone: string; limit: string; noLimit: boolean } | null>(null);
+  const [edit, setEdit] = useState<{ id?: string; name: string; phone: string; limit: string; noLimit: boolean; tier: CustomerTier } | null>(null);
+  const [projects, setProjects] = useState<{ customer: CatalogCustomer; rows: { project: string; sales: number; totalMinor: number; creditMinor: number; lastAt: string }[] } | null>(null);
   const [statement, setStatement] = useState<{ customer: CatalogCustomer; entries: Entry[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [shop, setShop] = useState<{ name: string; settings: ShopSettings } | null>(null);
@@ -39,7 +40,7 @@ export function Customers({ call, isOwner = false }: { call: Call; isOwner?: boo
   async function save() {
     if (!edit) return;
     setError(null);
-    const body = { name: edit.name, phone: edit.phone || null, creditLimitMinor: edit.noLimit ? null : toMinor(Number(edit.limit) || 0) };
+    const body = { name: edit.name, phone: edit.phone || null, creditLimitMinor: edit.noLimit ? null : toMinor(Number(edit.limit) || 0), priceTier: edit.tier };
     try {
       await call(edit.id ? `/customers/${edit.id}` : "/customers", { method: edit.id ? "PATCH" : "POST", body });
       setEdit(null);
@@ -56,7 +57,7 @@ export function Customers({ call, isOwner = false }: { call: Call; isOwner?: boo
         <span className="muted">إجمالي الديون: <b className="num">{formatMoney(totalDebt)}</b></span>
         <span className="spacer" />
         <button onClick={() => setRemind(true)} disabled={!owing.length}>📲 تذكير المدينين ({owing.length})</button>
-        <button className="primary" onClick={() => setEdit({ name: "", phone: "", limit: "0", noLimit: false })}>+ عميل</button>
+        <button className="primary" onClick={() => setEdit({ name: "", phone: "", limit: "0", noLimit: false, tier: "retail" })}>+ عميل</button>
       </div>
       <div className="card" style={{ padding: 0, overflow: "auto" }}>
         <table>
@@ -66,16 +67,17 @@ export function Customers({ call, isOwner = false }: { call: Call; isOwner?: boo
               const over = c.creditLimitMinor !== null && c.balanceMinor > c.creditLimitMinor;
               return (
                 <tr key={c.id} style={{ opacity: c.active ? 1 : 0.5 }}>
-                  <td>{c.name}</td>
+                  <td>{c.name}{c.priceTier && c.priceTier !== "retail" && <span className="tier-tag">{PRICE_TIER_LABELS[c.priceTier]}</span>}</td>
                   <td className="num">{c.phone ?? "—"}</td>
                   <td><span className={over ? "badge bad" : ""}><span className="num">{formatMoney(c.balanceMinor)}</span></span></td>
                   <td className="num">{c.creditLimitMinor === null ? "بدون حد" : c.creditLimitMinor === 0 ? "بدون آجل" : formatMoney(c.creditLimitMinor)}</td>
                   {loyalty && <td className="num">⭐ {c.points ?? 0}</td>}
                   <td className="row">
                     <button onClick={async () => setStatement(await call(`/customers/${c.id}/statement`))}>كشف حساب</button>
+                    {c.priceTier && c.priceTier !== "retail" && <button onClick={async () => setProjects({ customer: c, rows: await call(`/customers/${c.id}/projects`) })}>🏗️ المشاريع</button>}
                     {c.balanceMinor > 0 && <button onClick={() => nudge(c)} title={c.phone ? "" : "ما عندهش رقم: تختار المحادثة من الواتساب"}>{sent.has(c.id) ? "✓ تذكير" : "📲 تذكير"}</button>}
                     {loyalty && <button onClick={async () => { setError(null); setAdjust({ points: "", note: "" }); setPoints(await call(`/customers/${c.id}/points`)); }}>⭐ النقاط</button>}
-                    <button onClick={() => setEdit({ id: c.id, name: c.name, phone: c.phone ?? "", limit: String((c.creditLimitMinor ?? 0) / 1000), noLimit: c.creditLimitMinor === null })}>تعديل</button>
+                    <button onClick={() => setEdit({ id: c.id, name: c.name, phone: c.phone ?? "", limit: String((c.creditLimitMinor ?? 0) / 1000), noLimit: c.creditLimitMinor === null, tier: c.priceTier ?? "retail" })}>تعديل</button>
                   </td>
                 </tr>
               );
@@ -92,6 +94,12 @@ export function Customers({ call, isOwner = false }: { call: Call; isOwner?: boo
             <input type="checkbox" style={{ width: "auto" }} checked={edit.noLimit} onChange={(e) => setEdit({ ...edit, noLimit: e.target.checked })} />
             آجل بدون حد
           </label>
+          <label>نوع الزبون (الأسعار اللي يدفعها)
+            <select value={edit.tier} onChange={(e) => setEdit({ ...edit, tier: e.target.value as CustomerTier })}>
+              {(Object.keys(PRICE_TIER_LABELS) as CustomerTier[]).map((t) => <option key={t} value={t}>{PRICE_TIER_LABELS[t]}</option>)}
+            </select>
+          </label>
+          {edit.tier !== "retail" && <div className="hint">الكاشير يحسب له سعر «{PRICE_TIER_LABELS[edit.tier]}» من بطاقة كل صنف (لو محطوط)، وإلا السعر العادي.</div>}
           {!edit.noLimit && <label>حد الآجل (د.ل) — صفر يعني بدون آجل<input className="num" value={edit.limit} onChange={(e) => setEdit({ ...edit, limit: e.target.value })} /></label>}
           {error && <div className="error">{error}</div>}
           <div className="row"><span className="spacer" /><button onClick={() => setEdit(null)}>إلغاء</button><button className="primary" disabled={edit.name.length < 2} onClick={save}>حفظ</button></div>
@@ -153,6 +161,26 @@ export function Customers({ call, isOwner = false }: { call: Call; isOwner?: boo
           </table>
           {statement.entries.length === 0 && <span className="muted">ما فيش حركات</span>}
           <div className="row"><b>الرصيد الحالي</b><span className="spacer" /><b className="num">{formatMoney(statement.customer.balanceMinor)}</b></div>
+        </Modal>
+      )}
+      {projects && (
+        <Modal title={`🏗️ مشاريع ${projects.customer.name}`} onClose={() => setProjects(null)}>
+          <table>
+            <thead><tr><th>المشروع</th><th>الفواتير</th><th>المشتريات</th><th>منها آجل</th><th>آخر شراء</th></tr></thead>
+            <tbody>
+              {projects.rows.map((r) => (
+                <tr key={r.project}>
+                  <td>{r.project || <span className="muted">بدون مشروع</span>}</td>
+                  <td className="num">{r.sales}</td>
+                  <td className="num">{formatMoney(r.totalMinor)}</td>
+                  <td className="num">{formatMoney(r.creditMinor)}</td>
+                  <td className="num">{new Date(r.lastAt).toLocaleDateString("en-GB")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {projects.rows.length === 0 && <span className="muted">ما فيش فواتير لين توا</span>}
+          <div className="row"><b>عليه الآن</b><span className="spacer" /><b className="num">{formatMoney(projects.customer.balanceMinor)}</b></div>
         </Modal>
       )}
       {remind && (

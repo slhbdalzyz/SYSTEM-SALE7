@@ -9,8 +9,33 @@ export interface Repair {
   id: string; number: number; storeId: string | null; storeName: string | null; customerName: string; phone: string | null; device: string; serial: string | null;
   problem: string; accessories: string | null; estimateMinor: number; depositMinor: number; finalMinor: number | null; status: RepairStatus;
   notes: string | null; technician: string | null; createdAt: string; readyAt: string | null; deliveredAt: string | null;
+  kind?: "repair" | "order"; dueAt?: string | null;
 }
-interface Stats { inShop: number; ready: number; monthMinor: number; monthCount: number; depositsMinor: number }
+interface Stats { inShop: number; ready: number; monthMinor: number; monthCount: number; depositsMinor: number; dueSoon?: number }
+
+/** The same screen serves repairs and orders taken ahead (a cake, a suit, a part to bring in); only the words change. */
+const WORDS = {
+  repair: {
+    add: "📥 استلام جهاز للصيانة", customer: "اسم الزبون", item: "الجهاز", itemPh: "مثلاً: آيفون 11 أسود", detail: "العطل كما قاله الزبون", detailPh: "الشاشة مكسورة، ما يشحنش…",
+    ticket: "إيصال صيانة", inShop: "في الورشة", ready: "جاهز ينتظر صاحبه", month: "صيانة هذا الشهر", none: "أجهزة", who: "الفني", search: "اسم، تلفون، رقم إيصال أو IMEI",
+    head: "الجهاز والعطل", save: "حفظ وطباعة الإيصال", notesPh: "ملاحظات الفني (القطعة اللي تبدلت…)", working: REPAIR_STATUS_LABELS.working, waiting: REPAIR_STATUS_LABELS.waiting_parts,
+    keep: "احتفظ بالإيصال هذا لاستلام جهازك. المحل مش مسؤول عن الأجهزة اللي ما تتسلمش خلال 90 يوم.",
+    hint: "لما تحط الجهاز «جاهز»، يفتحلك الواتساب برسالة للزبون. فلوس الصيانة متسجلة هنا في الإيصال، وما تدخلش في الكاشير ولا في تقرير المبيعات.",
+  },
+  order: {
+    add: "📝 طلبية جديدة", customer: "اسم الزبون", item: "الطلب", itemPh: "مثلاً: تورتة عيد ميلاد 2 كيلو، بدلة، قطعة غيار", detail: "التفاصيل", detailPh: "الشكل، اللون، الكتابة، المقاس، رقم القطعة…",
+    ticket: "إيصال طلبية", inShop: "تحت التجهيز", ready: "جاهزة تنتظر صاحبها", month: "طلبيات هذا الشهر", none: "طلبيات", who: "المسؤول", search: "اسم، تلفون أو رقم الطلبية",
+    head: "الطلب", save: "حفظ وطباعة الإيصال", notesPh: "ملاحظات (اتصلنا بالزبون، تأخر المورد…)", working: "🛠️ قيد التجهيز", waiting: "⏳ تنتظر مواد",
+    keep: "احتفظ بالإيصال هذا لاستلام طلبيتك. العربون ما يرجعش بعد ما نبدو في التجهيز.",
+    hint: "لما تحط الطلبية «جاهزة»، يفتحلك الواتساب برسالة للزبون. الطلبيات اللي موعدها قريب تطلع فوق.",
+  },
+};
+type Kind = keyof typeof WORDS;
+const statusLabel = (s: RepairStatus, kind: Kind) => (s === "working" ? WORDS[kind].working : s === "waiting_parts" ? WORDS[kind].waiting : REPAIR_STATUS_LABELS[s]);
+/** A date and time from the form, as the server takes it. */
+const isoOf = (local: string) => (local ? new Date(local).toISOString() : null);
+const localOf = (iso: string | null | undefined) => (iso ? new Date(new Date(iso).getTime() - new Date().getTimezoneOffset() * 6e4).toISOString().slice(0, 16) : "");
+const when = (iso: string) => new Date(iso).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 interface Piece {
   id: string; serial: string; status: "in_stock" | "sold"; note: string | null; product: string; warrantyMonths: number; receivedAt: string; soldAt: string | null;
   warrantyUntil: string | null; storeName: string | null; returnedAt: string | null;
@@ -42,9 +67,10 @@ export function Electronics({ call, storeId, shopName }: { call: Call; storeId: 
 
 // ---- Repairs ----
 
-const EMPTY = { customerName: "", phone: "", device: "", serial: "", problem: "", accessories: "", estimate: "", deposit: "", technician: "" };
+const EMPTY = { customerName: "", phone: "", device: "", serial: "", problem: "", accessories: "", estimate: "", deposit: "", technician: "", dueAt: "" };
 
-function Repairs({ call, storeId, shopName }: { call: Call; storeId: string; shopName: string }) {
+export function Repairs({ call, storeId, shopName, kind = "repair" }: { call: Call; storeId: string; shopName: string; kind?: Kind }) {
+  const W = WORDS[kind];
   const [rows, setRows] = useState<Repair[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [filter, setFilter] = useState<"open" | "all" | "delivered">("open");
@@ -52,7 +78,7 @@ function Repairs({ call, storeId, shopName }: { call: Call; storeId: string; sho
   const [form, setForm] = useState<typeof EMPTY | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ text: string; bad?: boolean } | null>(null);
-  const load = () => call<{ rows: Repair[]; stats: Stats }>(`/repairs?status=${filter}${q.trim() ? `&q=${encodeURIComponent(q.trim())}` : ""}`).then((r) => { setRows(r.rows); setStats(r.stats); });
+  const load = () => call<{ rows: Repair[]; stats: Stats }>(`/repairs?kind=${kind}&status=${filter}${q.trim() ? `&q=${encodeURIComponent(q.trim())}` : ""}`).then((r) => { setRows(r.rows); setStats(r.stats); });
   useEffect(() => void load(), [filter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function create() {
@@ -61,12 +87,12 @@ function Repairs({ call, storeId, shopName }: { call: Call; storeId: string; sho
     try {
       const r = await call<Repair>("/repairs", {
         body: {
-          storeId, customerName: form.customerName, phone: form.phone || null, device: form.device, serial: form.serial || null, problem: form.problem,
+          kind, dueAt: isoOf(form.dueAt), storeId, customerName: form.customerName, phone: form.phone || null, device: form.device, serial: form.serial || null, problem: form.problem,
           accessories: form.accessories || null, estimateMinor: money(form.estimate), depositMinor: money(form.deposit), technician: form.technician || null,
         },
       });
       setForm(null);
-      setMsg({ text: `انفتح إيصال صيانة رقم ${r.number}` });
+      setMsg({ text: `انفتح ${W.ticket} رقم ${r.number}` });
       printTicket(r, shopName);
       await load();
     } catch (e) {
@@ -91,18 +117,19 @@ function Repairs({ call, storeId, shopName }: { call: Call; storeId: string; sho
     <>
       {stats && (
         <div className="kpis">
-          <div className="kpi"><span>في الورشة</span><b className="num">{stats.inShop}</b></div>
-          <div className="kpi"><span>جاهز ينتظر صاحبه</span><b className="num">{stats.ready}</b></div>
+          <div className="kpi"><span>{W.inShop}</span><b className="num">{stats.inShop}</b></div>
+          <div className="kpi"><span>{W.ready}</span><b className="num">{stats.ready}</b></div>
+          {kind === "order" && <div className="kpi"><span>موعدها اليوم أو بكرة</span><b className="num">{stats.dueSoon ?? 0}</b></div>}
           <div className="kpi"><span>عرابين عندك</span><b className="num">{formatMoney(stats.depositsMinor)}</b></div>
-          <div className="kpi"><span>صيانة هذا الشهر ({stats.monthCount})</span><b className="num">{formatMoney(stats.monthMinor)}</b></div>
+          <div className="kpi"><span>{W.month} ({stats.monthCount})</span><b className="num">{formatMoney(stats.monthMinor)}</b></div>
         </div>
       )}
       {msg && <div className={msg.bad ? "error" : "hint"}>{msg.text}</div>}
       {!f ? (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-          <button className="primary" onClick={() => setForm({ ...EMPTY })}>📥 استلام جهاز للصيانة</button>
+          <button className="primary" onClick={() => setForm({ ...EMPTY })}>{W.add}</button>
           <form style={{ display: "flex", gap: 6, flex: 1, minWidth: 260 }} onSubmit={(e) => { e.preventDefault(); void load(); }}>
-            <input style={{ flex: 1 }} value={q} onChange={(e) => setQ(e.target.value)} placeholder="اسم، تلفون، رقم إيصال أو IMEI" />
+            <input style={{ flex: 1 }} value={q} onChange={(e) => setQ(e.target.value)} placeholder={W.search} />
             <button type="submit">بحث</button>
           </form>
           <select style={{ width: "auto" }} value={filter} onChange={(e) => setFilter(e.target.value as typeof filter)}>
@@ -113,20 +140,22 @@ function Repairs({ call, storeId, shopName }: { call: Call; storeId: string; sho
         </div>
       ) : (
         <div className="card stack">
-          <h3>📥 استلام جهاز للصيانة</h3>
+          <h3>{W.add}</h3>
           <div className="row">
             <label style={{ flex: 1, minWidth: 160 }}>اسم الزبون<input value={f.customerName} onChange={(e) => setForm({ ...f, customerName: e.target.value })} autoFocus /></label>
             <label style={{ flex: 1, minWidth: 140 }}>تلفونه (للواتساب)<input className="num" value={f.phone} onChange={(e) => setForm({ ...f, phone: e.target.value })} placeholder="09xxxxxxxx" /></label>
           </div>
           <div className="row">
-            <label style={{ flex: 1, minWidth: 160 }}>الجهاز<input value={f.device} onChange={(e) => setForm({ ...f, device: e.target.value })} placeholder="مثلاً: آيفون 11 أسود" /></label>
-            <label style={{ flex: 1, minWidth: 160 }}>IMEI أو الرقم التسلسلي<input className="num" value={f.serial} onChange={(e) => setForm({ ...f, serial: e.target.value })} /></label>
+            <label style={{ flex: 1, minWidth: 160 }}>{W.item}<input value={f.device} onChange={(e) => setForm({ ...f, device: e.target.value })} placeholder={W.itemPh} /></label>
+            {kind === "repair"
+              ? <label style={{ flex: 1, minWidth: 160 }}>IMEI أو الرقم التسلسلي<input className="num" value={f.serial} onChange={(e) => setForm({ ...f, serial: e.target.value })} /></label>
+              : <label style={{ flex: 1, minWidth: 160 }}>موعد التسليم<input type="datetime-local" value={f.dueAt} onChange={(e) => setForm({ ...f, dueAt: e.target.value })} /></label>}
           </div>
           {f.serial && looksLikeBadImei(f.serial) && <div className="hint">⚠️ الرقم هذا مش IMEI صحيح، تأكد منه (اطلب *#06# من الجهاز).</div>}
-          <label>العطل كما قاله الزبون<textarea rows={2} value={f.problem} onChange={(e) => setForm({ ...f, problem: e.target.value })} placeholder="الشاشة مكسورة، ما يشحنش…" /></label>
+          <label>{W.detail}<textarea rows={2} value={f.problem} onChange={(e) => setForm({ ...f, problem: e.target.value })} placeholder={W.detailPh} /></label>
           <div className="row">
-            <label style={{ flex: 2, minWidth: 180 }}>استلمنا معاه<input value={f.accessories} onChange={(e) => setForm({ ...f, accessories: e.target.value })} placeholder="شاحن، جراب، شريحة…" /></label>
-            <label style={{ flex: 1, minWidth: 120 }}>الفني<input value={f.technician} onChange={(e) => setForm({ ...f, technician: e.target.value })} /></label>
+            {kind === "repair" && <label style={{ flex: 2, minWidth: 180 }}>استلمنا معاه<input value={f.accessories} onChange={(e) => setForm({ ...f, accessories: e.target.value })} placeholder="شاحن، جراب، شريحة…" /></label>}
+            <label style={{ flex: 1, minWidth: 120 }}>{W.who}<input value={f.technician} onChange={(e) => setForm({ ...f, technician: e.target.value })} /></label>
           </div>
           <div className="row">
             <label style={{ width: 150 }}>السعر المتفق عليه<input className="num" value={f.estimate} onChange={(e) => setForm({ ...f, estimate: e.target.value })} placeholder="0" /></label>
@@ -134,16 +163,16 @@ function Repairs({ call, storeId, shopName }: { call: Call; storeId: string; sho
             {money(f.estimate) > 0 && <span className="muted">يبقى عليه {formatMoney(Math.max(0, money(f.estimate) - money(f.deposit)))}</span>}
           </div>
           <div className="row">
-            <button className="primary" disabled={f.customerName.trim().length < 2 || f.device.trim().length < 2 || f.problem.trim().length < 2} onClick={() => void create()}>حفظ وطباعة الإيصال</button>
+            <button className="primary" disabled={f.customerName.trim().length < 2 || f.device.trim().length < 2 || f.problem.trim().length < 2} onClick={() => void create()}>{W.save}</button>
             <button className="ghost" onClick={() => setForm(null)}>إلغاء</button>
           </div>
         </div>
       )}
 
       <div className="card">
-        {rows.length === 0 ? <div className="muted">ما فيش أجهزة {filter === "open" ? "في المحل الحين" : "هنا"}.</div> : (
+        {rows.length === 0 ? <div className="muted">ما فيش {W.none} {filter === "open" ? "مفتوحة الحين" : "هنا"}.</div> : (
           <table className="table">
-            <thead><tr><th>#</th><th>الزبون</th><th>الجهاز والعطل</th><th>الحالة</th><th>المتبقي</th><th /></tr></thead>
+            <thead><tr><th>#</th><th>الزبون</th><th>{W.head}</th><th>الحالة</th><th>المتبقي</th><th /></tr></thead>
             <tbody>
               {rows.map((r) => (
                 <RepairRow key={r.id} r={r} open={open === r.id} toggle={() => setOpen(open === r.id ? null : r.id)} update={(b) => update(r, b)} shopName={shopName} />
@@ -152,7 +181,7 @@ function Repairs({ call, storeId, shopName }: { call: Call; storeId: string; sho
           </table>
         )}
       </div>
-      <div className="hint">لما تحط الجهاز «جاهز»، يفتحلك الواتساب برسالة للزبون. فلوس الصيانة متسجلة هنا في الإيصال، وما تدخلش في الكاشير ولا في تقرير المبيعات.</div>
+      <div className="hint">{W.hint}</div>
     </>
   );
 }
@@ -162,13 +191,17 @@ function RepairRow({ r, open, toggle, update, shopName }: { r: Repair; open: boo
   const [notes, setNotes] = useState(r.notes ?? "");
   const due = repairDue(r);
   const days = Math.floor((Date.now() - Date.parse(r.createdAt)) / 864e5);
+  const kind: Kind = r.kind ?? "repair";
+  const W = WORDS[kind];
+  const [dueAt, setDueAt] = useState(localOf(r.dueAt));
+  const late = !!r.dueAt && !["ready", "delivered", "cancelled"].includes(r.status) && Date.parse(r.dueAt) < Date.now();
   return (
     <>
       <tr onClick={toggle} style={{ cursor: "pointer" }}>
         <td className="num">{r.number}</td>
         <td>{r.customerName}{r.phone && <div className="muted small num">{r.phone}</div>}</td>
         <td>{r.device}<div className="muted small">{r.problem}</div></td>
-        <td>{REPAIR_STATUS_LABELS[r.status]}<div className="muted small">{r.status === "delivered" ? day(r.deliveredAt) : days > 0 ? `من ${days} يوم` : "اليوم"}</div></td>
+        <td>{statusLabel(r.status, kind)}<div className={late ? "small" : "muted small"} style={late ? { color: "var(--danger)" } : undefined}>{r.status === "delivered" ? day(r.deliveredAt) : r.dueAt ? `${late ? "⚠️ تأخرت · " : "⏰ "}${when(r.dueAt)}` : days > 0 ? `من ${days} يوم` : "اليوم"}</div></td>
         <td className="num">{r.status === "cancelled" ? "—" : formatMoney(due)}</td>
         <td>{open ? "▲" : "▼"}</td>
       </tr>
@@ -179,17 +212,21 @@ function RepairRow({ r, open, toggle, update, shopName }: { r: Repair; open: boo
               <div className="muted small">
                 {r.serial && <>IMEI: <span className="num">{r.serial}</span> · </>}
                 {r.accessories && <>معاه: {r.accessories} · </>}
-                {r.technician && <>الفني: {r.technician} · </>}
+                {r.technician && <>{W.who}: {r.technician} · </>}
                 السعر {formatMoney(r.finalMinor ?? r.estimateMinor)} · العربون {formatMoney(r.depositMinor)} · استلام {day(r.createdAt)}
               </div>
               {!["delivered", "cancelled"].includes(r.status) && (
                 <div className="row">
                   <label style={{ width: 150 }}>السعر النهائي<input className="num" value={final} onChange={(e) => setFinal(e.target.value)} /></label>
                   <button onClick={() => void update({ finalMinor: money(final) })}>حفظ السعر</button>
+                  {kind === "order" && <>
+                    <label style={{ width: 210 }}>موعد التسليم<input type="datetime-local" value={dueAt} onChange={(e) => setDueAt(e.target.value)} /></label>
+                    <button onClick={() => void update({ dueAt: isoOf(dueAt) })} disabled={dueAt === localOf(r.dueAt)}>حفظ الموعد</button>
+                  </>}
                 </div>
               )}
               <div className="row">
-                <input style={{ flex: 1 }} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="ملاحظات الفني (القطعة اللي تبدلت…)" />
+                <input style={{ flex: 1 }} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder={W.notesPh} />
                 <button onClick={() => void update({ notes })} disabled={notes === (r.notes ?? "")}>حفظ</button>
               </div>
               <div className="row">
@@ -200,7 +237,7 @@ function RepairRow({ r, open, toggle, update, shopName }: { r: Repair; open: boo
                       if (s === "cancelled" && !confirm("نلغي الإيصال؟ رجّع العربون للزبون لو دفع.")) return;
                       void update({ status: s, ...(s === "ready" || s === "delivered" ? { finalMinor: money(final) } : {}) });
                     }}>
-                    {REPAIR_STATUS_LABELS[s]}
+                    {statusLabel(s, kind)}
                   </button>
                 ))}
                 <span className="spacer" />
@@ -217,6 +254,7 @@ function RepairRow({ r, open, toggle, update, shopName }: { r: Repair; open: boo
 
 function readyText(r: Repair, shop: string) {
   const due = repairDue(r);
+  if (r.kind === "order") return `السلام عليكم، طلبيتك (${r.device}) جاهزة في ${shop}. رقم الطلبية ${r.number}.${due > 0 ? ` المتبقي: ${formatMoney(due)}.` : ""} نستنوك، شكراً.`;
   return repairReadyMessage({ shop, number: r.number, device: r.device, dueText: due > 0 ? formatMoney(due) : "" });
 }
 
@@ -226,11 +264,12 @@ function printTicket(r: Repair, shop: string) {
   if (!w) return;
   const esc = (s: string | null | undefined) => (s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
   const row = (k: string, v: string | null | undefined) => (v ? `<tr><td>${k}</td><td><b>${esc(v)}</b></td></tr>` : "");
+  const W = WORDS[r.kind ?? "repair"];
   const body = `
-    <h2>${esc(shop)}</h2><h3>إيصال صيانة رقم ${r.number}</h3><div>${new Date(r.createdAt).toLocaleString("en-GB")}</div><hr/>
-    <table>${row("الزبون", r.customerName)}${row("التلفون", r.phone)}${row("الجهاز", r.device)}${row("IMEI", r.serial)}${row("العطل", r.problem)}${row("استلمنا معاه", r.accessories)}
+    <h2>${esc(shop)}</h2><h3>${W.ticket} رقم ${r.number}</h3><div>${new Date(r.createdAt).toLocaleString("en-GB")}</div><hr/>
+    <table>${row("الزبون", r.customerName)}${row("التلفون", r.phone)}${row(W.item, r.device)}${row("IMEI", r.serial)}${row(W.detail, r.problem)}${row("موعد التسليم", r.dueAt ? when(r.dueAt) : "")}${row("استلمنا معاه", r.accessories)}
     ${row("السعر المتفق عليه", r.estimateMinor ? formatMoney(r.estimateMinor) : "يتحدد بعد الفحص")}${row("العربون", r.depositMinor ? formatMoney(r.depositMinor) : "")}${row("المتبقي", r.estimateMinor ? formatMoney(repairDue(r)) : "")}</table>
-    <hr/><small>احتفظ بالإيصال هذا لاستلام جهازك. المحل مش مسؤول عن الأجهزة اللي ما تتسلمش خلال 90 يوم.</small>
+    <hr/><small>${W.keep}</small>
     <hr class="cut"/><h3>رقم ${r.number}</h3><div>${esc(r.customerName)} · ${esc(r.phone)}</div><div>${esc(r.device)}</div><div>${esc(r.problem)}</div>`;
   w.document.write(`<!doctype html><html dir="rtl" lang="ar"><head><meta charset="utf-8"><title>إيصال ${r.number}</title><style>
     body{font-family:system-ui,Tahoma,sans-serif;width:72mm;margin:0 auto;padding:4mm;text-align:center;color:#000}

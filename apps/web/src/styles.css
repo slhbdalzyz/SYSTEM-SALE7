@@ -743,3 +743,5 @@ a.btn.primary { background: var(--brand); color: var(--brand-ink); border-color:
 .kit-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; margin: 8px 0; }
 .kit-card { display: grid; gap: 4px; text-align: right; padding: 10px; border-radius: 10px; }
 .tier-tag { display: inline-block; font-size: .75rem; padding: 0 8px; border-radius: 999px; background: var(--brand); color: var(--brand-ink); margin-inline-start: 6px; }
+.tier-prices { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 0 8px; border-bottom: 1px dashed var(--line, #e2e8f0); }
+.tier-prices label { flex: 1; min-width: 130px; font-size: .85rem; }
