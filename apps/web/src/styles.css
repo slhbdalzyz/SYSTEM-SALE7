@@ -745,3 +745,18 @@ a.btn.primary { background: var(--brand); color: var(--brand-ink); border-color:
 .tier-tag { display: inline-block; font-size: .75rem; padding: 0 8px; border-radius: 999px; background: var(--brand); color: var(--brand-ink); margin-inline-start: 6px; }
 .tier-prices { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 0 8px; border-bottom: 1px dashed var(--line, #e2e8f0); }
 .tier-prices label { flex: 1; min-width: 130px; font-size: .85rem; }
+
+/* «🧩 مميزات المحل»: one row per feature with a switch. */
+.features { gap: 4px; }
+.feature { display: flex; align-items: center; gap: 12px; padding: 8px 4px; border-bottom: 1px solid var(--line); color: var(--ink); cursor: pointer; }
+.feature:last-child { border-bottom: 0; }
+.feature-icon { font-size: 1.4rem; width: 32px; text-align: center; opacity: .55; }
+.feature.on .feature-icon { opacity: 1; }
+.feature-text { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.feature-text .muted { font-size: .85rem; }
+.switch { appearance: none; -webkit-appearance: none; width: 44px !important; height: 24px; border-radius: 12px; background: var(--line); position: relative; cursor: pointer; flex: none; padding: 0; border: 0; transition: background .15s; }
+.switch::after { content: ""; position: absolute; top: 3px; inset-inline-start: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / .3); transition: inset-inline-start .15s; }
+.switch:checked { background: var(--brand); }
+.switch:checked::after { inset-inline-start: 23px; }
+.switch:disabled { opacity: .6; }
+.switch:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }

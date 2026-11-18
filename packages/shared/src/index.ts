@@ -21,3 +21,4 @@ export * from "./butcher";
 export * from "./restaurant";
 export * from "./electronics";
 export * from "./business";
+export * from "./modules";

@@ -34,12 +34,14 @@ import { Zakat } from "./Zakat";
 import { AuditLog } from "./AuditLog";
 import { SecurityCard } from "./Security";
 import { FromPaper } from "./FromPaper";
-import { ROLE_NAMES, type Feature, type Permission } from "@pos/shared";
+import { ROLE_NAMES, shopModules, type Feature, type ModuleKey, type Permission } from "@pos/shared";
+import { Features } from "./Features";
+import { TYPES } from "../Setup";
 import { Announcements, Support } from "./Support";
 
 export interface Me {
   user: { id: string; name: string; role: string; job_title?: string | null; permissions: Permission[] };
-  tenant: { id: string; name: string; currency: string; business_type?: string; features?: Record<Feature, boolean>; settings?: { menu?: { hidePaper?: boolean } } };
+  tenant: { id: string; name: string; currency: string; business_type?: string; features?: Record<Feature, boolean>; settings?: { menu?: { hidePaper?: boolean }; modules?: Record<string, boolean> } };
   stores: { id: string; name: string; address: string | null; receipt_footer: string | null; active: boolean }[];
 }
 
@@ -52,7 +54,7 @@ const NAV = [
   { group: "المبيعات", items: { invoices: ["🧾", "المبيعات والفواتير"], customers: ["👥", "العملاء والديون"], offers: ["🎁", "العروض"], quotes: ["📄", "عروض الأسعار"], orders: ["📝", "الطلبيات المسبقة"], installments: ["📆", "الأقساط"], deliveries: ["🚚", "التوصيل"] } },
   { group: "المال", items: { money: ["🏦", "الخزينة والأرصدة"], expenses: ["💸", "المصروفات"], zakat: ["🕌", "الزكاة"] } },
   { group: "الموظفين", items: { staff: ["🧑‍💼", "الموظفين والصلاحيات"], payroll: ["💰", "الرواتب"], mypay: ["💼", "راتبي"] } },
-  { group: "الإدارة", items: { settings: ["⚙️", "الإعدادات"], devices: ["🖥️", "الأجهزة"], audit: ["🕵️", "سجل العمليات"], backup: ["💾", "النسخ الاحتياطي"], subscription: ["⭐", "الاشتراك"], support: ["🛟", "الدعم الفني"] } },
+  { group: "الإدارة", items: { features: ["🧩", "مميزات المحل"], settings: ["⚙️", "الإعدادات"], devices: ["🖥️", "الأجهزة"], audit: ["🕵️", "سجل العمليات"], backup: ["💾", "النسخ الاحتياطي"], subscription: ["⭐", "الاشتراك"], support: ["🛟", "الدعم الفني"] } },
 ] as const;
 type ItemKeys<T> = T extends { items: infer I } ? keyof I : never;
 type Tab = ItemKeys<(typeof NAV)[number]>;
@@ -61,17 +63,13 @@ const TABS = Object.assign({}, ...NAV.map((g) => g.items)) as Record<Tab, readon
 /** What opens each screen. "owner" = the shop owner only; null = everyone (their own pay). */
 const NEEDS: Record<Tab, Permission | "owner" | null> = {
   home: "reports", paper: "owner", reports: "reports", alerts: "alerts", products: "products", purchasing: "purchasing", branches: "branches", counts: "products", labels: "products", quick: "products", butcher: "products", restaurant: "products", electronics: null, blends: "products", kits: "products", quotes: "sales", orders: "sales", installments: "customers", deliveries: "sales",
-  invoices: "sales", settings: "settings", customers: "customers", offers: "offers", expenses: "expenses", money: "money", staff: "staff", payroll: "payroll", mypay: null, devices: "devices",
+  invoices: "sales", features: "settings", settings: "settings", customers: "customers", offers: "offers", expenses: "expenses", money: "money", staff: "staff", payroll: "payroll", mypay: null, devices: "devices",
   backup: "owner", subscription: "owner", audit: "owner", zakat: "owner", support: "settings",
 };
-/** Screens only some kinds of shop have. */
-const SHOP_SCREENS: Partial<Record<Tab, string[]>> = {
-  quotes: ["building", "auto_parts", "wholesale", "furniture", "electronics", "stationery"],
-  orders: ["bakery", "furniture", "auto_parts", "perfume", "stationery", "clothing", "restaurant"],
-  installments: ["furniture", "electronics"],
-  deliveries: ["building", "wholesale", "furniture", "bakery"],
-  kits: ["stationery", "perfume", "building", "bakery", "auto_parts"],
-  blends: ["perfume", "bakery", "electronics", "auto_parts", "furniture"],
+/** Screens that follow one of the shop's features (🧩 مميزات المحل). */
+const MODULE_OF: Partial<Record<Tab, ModuleKey[]>> = {
+  butcher: ["butcher"], restaurant: ["tables"], electronics: ["serials", "repairs"], blends: ["recipes"], kits: ["kits"],
+  quotes: ["quotes"], orders: ["orders"], installments: ["installments"], deliveries: ["delivery"],
 };
 /** Screens the platform can close for a plan or a shop. */
 const FEATURE_OF: Partial<Record<Tab, Feature>> = { zakat: "zakat", quick: "quick_keys", payroll: "payroll", offers: "offers", counts: "counts" };
@@ -139,18 +137,12 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
   const store = open.find((s) => s.id === storeId) ?? open[0] ?? me.stores[0];
 
   const isOwner = me.user.role === "owner";
+  const mods = shopModules(me.tenant.business_type, me.tenant.settings?.modules);
   const can = (t: Tab) => {
-    // Daily prices and cutting carcasses: for butchers, and grocers with a meat and vegetable counter.
-    if (t === "butcher" && !["butcher", "grocery"].includes(me.tenant.business_type ?? "grocery")) return false;
-    if (t === "restaurant" && me.tenant.business_type !== "restaurant") return false;
-    if (t === "electronics") {
-      // Phones, laptops and repairs: for electronics shops, and for anyone selling items by their numbers.
-      if (!["electronics", "other"].includes(me.tenant.business_type ?? "")) return false;
-      return isOwner || ["products", "purchasing", "sales", "customers"].some((p) => me.user.permissions.includes(p as Permission));
-    }
-    // The screens each kind of shop needs; "other" gets them all.
-    const only = SHOP_SCREENS[t];
-    if (only && !only.includes(me.tenant.business_type ?? "grocery") && me.tenant.business_type !== "other") return false;
+    // Screens of a feature the shop turned off (or never needed) stay out of the menu.
+    const need = MODULE_OF[t];
+    if (need && !need.some((k) => mods[k])) return false;
+    if (t === "electronics") return isOwner || ["products", "purchasing", "sales", "customers"].some((p) => me.user.permissions.includes(p as Permission));
     // Put away by the owner once the shop moved off paper; brought back from the settings.
     if (t === "paper" && me.tenant.settings?.menu?.hidePaper) return false;
     const f = FEATURE_OF[t];
@@ -210,7 +202,7 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
         <div className="stack" key={store.id}>
           {shown === "home" && <Home call={call} storeId={store.id} userName={me.user.name} open={setTab} />}
           {shown === "reports" && <Reports call={call} storeId={store.id} stores={open} />}
-          {shown === "products" && <Products call={call} storeId={store.id} onLabels={(d) => { setLabelDraft(d); setTab("labels"); }} />}
+          {shown === "products" && <Products call={call} storeId={store.id} mods={mods} onLabels={(d) => { setLabelDraft(d); setTab("labels"); }} />}
           {shown === "purchasing" && <Purchasing call={call} storeId={store.id} onLabels={(d) => { setLabelDraft(d); setTab("labels"); }} />}
           {shown === "paper" && <FromPaper call={call} storeId={store.id} open={setTab} onHide={async () => { await call("/settings/menu", { method: "PATCH", body: { hidePaper: true } }); await loadMe(); setTab("home"); }} />}
           {shown === "counts" && <Counts call={call} storeId={store.id} canApply={isOwner || me.user.role === "manager"} />}
@@ -219,17 +211,18 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
           {shown === "zakat" && <Zakat call={call} open={setTab} />}
           {shown === "butcher" && <Butcher call={call} storeId={store.id} />}
           {shown === "restaurant" && <Restaurant call={call} storeId={store.id} />}
-          {shown === "electronics" && <Electronics call={call} storeId={store.id} shopName={me.tenant.name} />}
+          {shown === "electronics" && <Electronics call={call} storeId={store.id} shopName={me.tenant.name} repairs={mods.repairs} serials={mods.serials} />}
           {shown === "quotes" && <Quotes call={call} shopName={me.tenant.name} />}
           {shown === "orders" && <Repairs call={call} storeId={store.id} shopName={me.tenant.name} kind="order" />}
           {shown === "installments" && <Installments call={call} shopName={me.tenant.name} />}
           {shown === "deliveries" && <Deliveries call={call} />}
+          {shown === "features" && <Features call={call} mods={mods} typeName={TYPES.find((x) => x.id === (me.tenant.business_type ?? "grocery"))?.name ?? "محل"} onChanged={loadMe} />}
           {shown === "kits" && <Kits call={call} storeId={store.id} type={me.tenant.business_type ?? ""} />}
           {shown === "blends" && <><div className="hint">{me.tenant.business_type === "bakery" ? "حط وصفة كل صنف (دقيق، سكر، زبدة…): البيع ينقص المواد الخام من المخزون وتعرف تكلفة كل قطعة وربحها." : me.tenant.business_type === "perfume" ? "العطر المركب أو البوكس: حط مكوناته (زيوت بالمل، قارورة، علبة)، والبيع ينقص المكونات من المخزون وتعرف تكلفته الحقيقية." : "خدمة تستعمل قطع (مثلاً تركيب شاشة أو تغيير زيت): حط القطع اللي تستعملها، وكل ما تنباع الخدمة تنقص القطع من المخزون وتعرف ربحها الحقيقي."}</div><Recipes call={call} storeId={store.id} label={me.tenant.business_type === "bakery" ? "الصنف (خبز، كيك، حلويات)" : me.tenant.business_type === "perfume" ? "الصنف (عطر مركب أو بوكس)" : "الخدمة (تركيب، صيانة) أو الطقم"} /></>}
           {shown === "labels" && <Labels call={call} storeId={store.id} storeName={me.tenant.name} draft={labelDraft} clearDraft={() => setLabelDraft(null)} />}
           {shown === "branches" && <Branches call={call} storeId={store.id} isOwner={isOwner} onStoresChanged={loadMe} />}
           {shown === "offers" && <Offers call={call} storeId={store.id} stores={me.stores} />}
-          {shown === "customers" && <Customers call={call} isOwner={me.user.role === "owner"} />}
+          {shown === "customers" && <Customers call={call} isOwner={me.user.role === "owner"} tiers={mods.tiers} />}
           {shown === "invoices" && <Invoices call={call} storeId={store.id} stores={open} />}
           {shown === "settings" && <><ShopSettings call={call} storeName={store.name} onSaved={loadMe} openAlerts={() => setTab("alerts")} />{me.tenant.features?.loyalty !== false && <LoyaltyCard call={call} isOwner={me.user.role === "owner"} />}<SecurityCard call={call} /></>}
           {shown === "mypay" && !can("settings") && <SecurityCard call={call} />}

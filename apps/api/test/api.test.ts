@@ -1572,6 +1572,17 @@ describe("moving a shop from paper", () => {
     expect((await call("PATCH", "/settings/menu", cashierToken, { hidePaper: true })).status).toBe(403);
   });
 
+  it("turns the shop's features on and off, kept when the settings page is saved", async () => {
+    const r = await call("PATCH", "/settings/modules", t, { variants: true, expiry: false });
+    expect(r.body.modules).toMatchObject({ variants: true, expiry: false });
+    await call("PUT", "/settings", t, { name: "بقالة الحاج", settings: { phone: "0910000000" } });
+    const me = (await call("GET", "/me", t)).body;
+    expect(me.tenant.settings.modules).toMatchObject({ variants: true, expiry: false });
+    expect((await call("PATCH", "/settings/modules", t, { nonsense: true })).status).toBe(400);
+    expect((await call("PATCH", "/settings/modules", cashierToken, { variants: false })).status).toBe(403);
+    await call("PATCH", "/settings/modules", t, { variants: false, expiry: true });
+  });
+
   it("brings in customers with what they already owe, counted in their balance and statement", async () => {
     const r = await call("POST", "/import/customers", t, { rows: [
       { name: "محمد الطاهر", phone: "091 234 5678", balanceMinor: 125500 },

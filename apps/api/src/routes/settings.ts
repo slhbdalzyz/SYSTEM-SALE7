@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { readShopSettings, shopSettingsSchema } from "@pos/shared";
+import { MODULES, readShopSettings, shopSettingsSchema, type ModuleKey } from "@pos/shared";
 import { audit } from "../db";
 import { HttpError, authenticate, requirePerm } from "../auth";
 
@@ -44,8 +44,23 @@ export async function settingsRoutes(app: FastifyInstance) {
     return { menu: s.menu };
   });
 
+  /** Turns the shop's features on or off (sizes and colours, recipes, quotes…). Nothing is deleted when one is off. */
+  app.patch("/settings/modules", { preHandler: requirePerm("settings") }, async (req) => {
+    const keys = MODULES.map((m) => m.key) as [ModuleKey, ...ModuleKey[]];
+    const b = z.record(z.enum(keys), z.boolean()).parse(req.body);
+    const t = (await app.db.query(`SELECT settings FROM tenants WHERE id = $1`, [req.user.tid])).rows[0];
+    const s = readShopSettings(t?.settings);
+    s.modules = { ...s.modules, ...b };
+    await app.db.query(`UPDATE tenants SET settings = $2 WHERE id = $1`, [req.user.tid, JSON.stringify(s)]);
+    await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "settings.update", entity: "tenant", entityId: req.user.tid, data: { modules: b } });
+    return { modules: s.modules };
+  });
+
   app.put("/settings", { preHandler: requirePerm("settings") }, async (req) => {
     const b = z.object({ name: z.string().trim().min(2).max(120), settings: shopSettingsSchema }).parse(req.body);
+    // The shop's features have their own page; saving the settings page never resets them.
+    const old = readShopSettings((await app.db.query(`SELECT settings FROM tenants WHERE id = $1`, [req.user.tid])).rows[0]?.settings);
+    b.settings.modules = old.modules;
     await app.db.query(`UPDATE tenants SET name = $2, settings = $3 WHERE id = $1`, [req.user.tid, b.name, JSON.stringify(b.settings)]);
     await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "settings.update", entity: "tenant", entityId: req.user.tid, data: { name: b.name } });
     return { name: b.name, settings: b.settings };

@@ -8,9 +8,6 @@ import { sendText } from "../whatsapp";
 import { lineFor, type CartLine, type Deal } from "./cart";
 import { Modal } from "./dialogs";
 
-/** Shops that sell big orders to known customers: quotes, building sites, deliveries. */
-export const DEAL_SHOPS = ["building", "auto_parts", "wholesale", "furniture", "electronics", "stationery", "other"];
-
 export interface Quote extends QuoteDoc { id: string; customerId: string | null; status: string; saleNumber: string | null; lines: (QuoteDoc["lines"][number] & { productId: string; unitId: string; taxBp?: number })[] }
 export interface Kit { id: string; name: string; active: boolean; items: { productId: string; unitId: string; name: string; unitName: string; qtyMilli: number; priceMinor: number }[] }
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { toMinor, type CatalogProduct } from "@pos/shared";
+import { shopModules, toMinor, type CatalogProduct, type Modules } from "@pos/shared";
 import { Modal } from "../pos/dialogs";
 import type { Call } from "./Admin";
 
@@ -70,7 +70,6 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
   const [partNumber, setPartNumber] = useState("");
   const [fits, setFits] = useState("");
   const [location, setLocation] = useState("");
-  const [type, setType] = useState("");
   // A service (software, fitting, installing): no stock, no barcode; its price is set here or typed at the till.
   const [service, setService] = useState(false);
   const [price, setPrice] = useState("");
@@ -80,14 +79,20 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
   const [colors, setColors] = useState<string[]>([]);
   const [sizeSet, setSizeSet] = useState(0);
   useEffect(() => void call<Dept[]>("/categories").then(setCats), [call]);
-  useEffect(() => void call<{ tenant: { business_type?: string } }>("/me").then((m) => {
-    setType(m.tenant.business_type ?? "");
-    if (m.tenant.business_type === "auto_parts") { setParts(true); setExpiry(false); }
-    if (["building", "furniture", "stationery"].includes(m.tenant.business_type ?? "")) setExpiry(false);
-    if (m.tenant.business_type === "furniture") { setElectronics(true); setWarranty("12"); }
-    if (m.tenant.business_type === "clothing") { setVariants(true); setExpiry(false); }
-    if (m.tenant.business_type === "electronics") { setElectronics(true); setExpiry(false); }
-    if (m.tenant.business_type === "pharmacy") { setPharmacy(true); setExpiry(true); setBase("شريط"); setPacks([{ name: "علبة", qty: "", barcode: "" }]); }
+  // What the card asks follows the shop's features (⚙️ مميزات المحل), not only its kind.
+  const [mods, setMods] = useState<Modules>(() => shopModules("other"));
+  useEffect(() => void call<{ tenant: { business_type?: string; settings?: { modules?: Record<string, boolean> } } }>("/me").then((m) => {
+    const t = m.tenant.business_type ?? "";
+    const f = shopModules(t, m.tenant.settings?.modules);
+    setMods(f);
+    setParts(f.parts);
+    setElectronics(f.serials);
+    setPharmacy(f.pharmacy);
+    // No expiry dates in the shop, or kinds of shop whose goods don't go off: don't ask.
+    if (!f.expiry || ["auto_parts", "building", "furniture", "stationery", "clothing", "electronics"].includes(t)) setExpiry(false);
+    if (t === "furniture" && f.serials) setWarranty("12");
+    if (t === "clothing" && f.variants) setVariants(true);
+    if (t === "pharmacy" && f.pharmacy) { setExpiry(f.expiry); setBase("شريط"); setPacks([{ name: "علبة", qty: "", barcode: "" }]); }
   }).catch(() => {}), [call]);
   const combos = Math.max(sizes.length, 1) * Math.max(colors.length, 1);
 
@@ -173,11 +178,11 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
           </div>
         )}
         {electronics && serialized && !service && <div className="hint">الكاشير يطلب رقم الجهاز وقت البيع، ويطبعه في الفاتورة مع تاريخ نهاية الضمان. الأرقام تدخلها من «📱 الأجهزة والصيانة».</div>}
-        {(parts || type === "building" || type === "wholesale") && !variants && !service && (
+        {(parts || mods.location) && !variants && !service && (
           <div className="row" style={{ alignItems: "end" }}>
             {parts && <label style={{ flex: 1, minWidth: 150 }}>رقم القطعة (OEM)<input className="num" value={partNumber} onChange={(e) => setPartNumber(e.target.value)} placeholder="مثلاً: 26300-35505" /></label>}
             {parts && <label style={{ flex: 2, minWidth: 200 }}>تركب على<input value={fits} onChange={(e) => setFits(e.target.value)} placeholder="مثلاً: هيونداي أكسنت 2012-2017، كيا ريو" /></label>}
-            <label style={{ width: 140 }}>مكانه في المخزن<input value={location} onChange={(e) => setLocation(e.target.value)} placeholder="رف A3" /></label>
+            {mods.location && <label style={{ width: 140 }}>مكانه في المخزن<input value={location} onChange={(e) => setLocation(e.target.value)} placeholder="رف A3" /></label>}
           </div>
         )}
         {parts && partNumber.trim() && <div className="hint">في الكاشير تقدر تكتب رقم القطعة أو اسم السيارة، وزر «🔁 البدائل» يطلع كل القطع اللي عندها نفس الرقم من ماركات ثانية.</div>}
@@ -193,7 +198,7 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
               <button type="button" onClick={addDept} aria-label="قسم جديد">+</button>
             </div>
           </label>
-{!service && (
+{!service && (mods.weighed || weighted) && (
           <label>طريقة البيع
             <div className="seg">
               <button type="button" className={!weighted ? "active" : ""} onClick={() => setWeighted(false)}>بالعدد</button>
@@ -203,11 +208,11 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
           )}
         </div>
 
-        <div className="seg" role="group" aria-label="نوع الصنف">
+        {(mods.variants || mods.services) && <div className="seg" role="group" aria-label="نوع الصنف">
           <button type="button" className={!variants && !service ? "active" : ""} onClick={() => { setVariants(false); setService(false); }}>صنف واحد</button>
-          <button type="button" className={variants ? "active" : ""} onClick={() => { setVariants(true); setService(false); setWeighted(false); }}>👕 مقاسات وألوان</button>
-          <button type="button" className={service ? "active" : ""} onClick={() => { setService(true); setVariants(false); setWeighted(false); }}>🛠️ خدمة (بدون مخزون)</button>
-        </div>
+          {mods.variants && <button type="button" className={variants ? "active" : ""} onClick={() => { setVariants(true); setService(false); setWeighted(false); }}>👕 مقاسات وألوان</button>}
+          {mods.services && <button type="button" className={service ? "active" : ""} onClick={() => { setService(true); setVariants(false); setWeighted(false); }}>🛠️ خدمة (بدون مخزون)</button>}
+        </div>}
 
         {service ? (
           <fieldset className="item-box stack">
@@ -275,7 +280,7 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
           )}
         </fieldset>}
 
-        {!variants && !service && <div className="row" style={{ alignItems: "center" }}>
+        {!variants && !service && mods.expiry && <div className="row" style={{ alignItems: "center" }}>
           <span>خاضع للصلاحية؟</span>
           <div className="seg">
             <button type="button" className={expiry === true ? "active" : ""} onClick={() => setExpiry(true)}>نعم</button>

@@ -49,15 +49,19 @@ const today = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Tripoli
 const money = (s: string) => toMinor(Number(s.replace(",", ".")) || 0);
 
 /** An electronics or phone shop's own screen: devices in for repair, a phone's history by its IMEI, and the numbers in stock. */
-export function Electronics({ call, storeId, shopName }: { call: Call; storeId: string; shopName: string }) {
-  const [tab, setTab] = useState<"repairs" | "lookup" | "serials">("repairs");
+export function Electronics({ call, storeId, shopName, repairs = true, serials = true }: { call: Call; storeId: string; shopName: string; repairs?: boolean; serials?: boolean }) {
+  const [tab, setTab] = useState<"repairs" | "lookup" | "serials">(repairs ? "repairs" : "lookup");
   return (
     <div className="stack">
-      <div className="seg" role="tablist">
+      {repairs && serials && <div className="seg" role="tablist">
         <button className={tab === "repairs" ? "active" : ""} onClick={() => setTab("repairs")}>🔧 الصيانة</button>
         <button className={tab === "lookup" ? "active" : ""} onClick={() => setTab("lookup")}>🔎 بحث برقم الجهاز</button>
         <button className={tab === "serials" ? "active" : ""} onClick={() => setTab("serials")}>📥 أرقام الأجهزة في المخزن</button>
-      </div>
+      </div>}
+      {!repairs && <div className="seg" role="tablist">
+        <button className={tab === "lookup" ? "active" : ""} onClick={() => setTab("lookup")}>🔎 بحث برقم الجهاز</button>
+        <button className={tab === "serials" ? "active" : ""} onClick={() => setTab("serials")}>📥 أرقام الأجهزة في المخزن</button>
+      </div>}
       {tab === "repairs" && <Repairs call={call} storeId={storeId} shopName={shopName} />}
       {tab === "lookup" && <Lookup call={call} />}
       {tab === "serials" && <Serials call={call} storeId={storeId} />}

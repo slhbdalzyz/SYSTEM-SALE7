@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { foldVariants, formatMoney, formatQty, toMinor, variantBaseName, type CatalogProduct } from "@pos/shared";
+import { foldVariants, formatMoney, formatQty, shopModules, toMinor, variantBaseName, type CatalogProduct, type Modules } from "@pos/shared";
 import { Modal } from "../pos/dialogs";
 import type { Call } from "./Admin";
 import { ItemCard } from "./ItemCard";
@@ -47,7 +47,7 @@ function toForm(p: CatalogProduct): Form {
   };
 }
 
-export function Products({ call, storeId, onLabels }: { call: Call; storeId: string; onLabels?: (d: LabelDraft[]) => void }) {
+export function Products({ call, storeId, onLabels, mods = shopModules("other") }: { call: Call; storeId: string; onLabels?: (d: LabelDraft[]) => void; mods?: Modules }) {
   const [rows, setRows] = useState<Row[]>([]);
   const [cats, setCats] = useState<Dept[]>([]);
   const [q, setQ] = useState("");
@@ -148,45 +148,45 @@ export function Products({ call, storeId, onLabels }: { call: Call; storeId: str
               <button type="button" onClick={addCategory}>+</button>
             </div>
           </label>
-          <label>الاسم العلمي (للأدوية)<input value={form.genericName} onChange={(e) => setForm({ ...form, genericName: e.target.value })} placeholder="باراسيتامول…" /></label>
-          <label>رقم القطعة (OEM)<input className="num" value={form.partNumber} onChange={(e) => setForm({ ...form, partNumber: e.target.value })} placeholder="لقطع الغيار" /></label>
-          <label>تركب على<input value={form.fits} onChange={(e) => setForm({ ...form, fits: e.target.value })} placeholder="السيارات (لقطع الغيار)" /></label>
-          <label>مكانه في المخزن<input value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="رف A3" /></label>
+          {(mods.pharmacy || form.genericName) && <label>الاسم العلمي (للأدوية)<input value={form.genericName} onChange={(e) => setForm({ ...form, genericName: e.target.value })} placeholder="باراسيتامول…" /></label>}
+          {(mods.parts || form.partNumber) && <label>رقم القطعة (OEM)<input className="num" value={form.partNumber} onChange={(e) => setForm({ ...form, partNumber: e.target.value })} placeholder="لقطع الغيار" /></label>}
+          {(mods.parts || form.fits) && <label>تركب على<input value={form.fits} onChange={(e) => setForm({ ...form, fits: e.target.value })} placeholder="السيارات (لقطع الغيار)" /></label>}
+          {(mods.location || form.location) && <label>مكانه في المخزن<input value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="رف A3" /></label>}
           <label>كود داخلي (SKU)<input value={form.sku} onChange={(e) => setForm({ ...form, sku: e.target.value })} /></label>
           <label>التكلفة للوحدة الأساسية<input className="num" value={form.cost} onChange={(e) => setForm({ ...form, cost: e.target.value })} title="تتحدث تلقائياً من فواتير التوريد" /></label>
           <label>حد التنبيه بالنقص<input className="num" value={form.minStock} onChange={(e) => setForm({ ...form, minStock: e.target.value })} /></label>
         </div>
         <div className="row">
-          <label className="row" style={{ color: "var(--ink)" }}>
-            <input type="checkbox" style={{ width: "auto" }} checked={form.isWeighted} onChange={(e) => setForm({ ...form, isWeighted: e.target.checked, units: e.target.checked ? [{ ...form.units.find((u) => u.isBase)!, name: "كيلو", factor: "1" }] : form.units })} />
-            يباع بالوزن (ميزان)
-          </label>
+          {(mods.weighed || form.isWeighted) && (<label className="row" style={{ color: "var(--ink)" }}>
+              <input type="checkbox" style={{ width: "auto" }} checked={form.isWeighted} onChange={(e) => setForm({ ...form, isWeighted: e.target.checked, units: e.target.checked ? [{ ...form.units.find((u) => u.isBase)!, name: "كيلو", factor: "1" }] : form.units })} />
+              يباع بالوزن (ميزان)
+            </label>)}
           {form.isWeighted && (
             <label style={{ width: 200 }}>كود الصنف في الميزان<input className="num" value={form.scaleCode} onChange={(e) => setForm({ ...form, scaleCode: e.target.value.replace(/\D/g, "") })} /></label>
           )}
-          <label className="row" style={{ color: "var(--ink)" }} title="ما تنقصش من المخزون، وما تدخلش الجرد ولا تنبيه النقص">
-            <input type="checkbox" style={{ width: "auto" }} checked={form.isService} onChange={(e) => setForm({ ...form, isService: e.target.checked, isWeighted: e.target.checked ? false : form.isWeighted })} />
-            🛠️ خدمة (بدون مخزون)
-          </label>
+          {(mods.services || form.isService) && (<label className="row" style={{ color: "var(--ink)" }} title="ما تنقصش من المخزون، وما تدخلش الجرد ولا تنبيه النقص">
+              <input type="checkbox" style={{ width: "auto" }} checked={form.isService} onChange={(e) => setForm({ ...form, isService: e.target.checked, isWeighted: e.target.checked ? false : form.isWeighted })} />
+              🛠️ خدمة (بدون مخزون)
+            </label>)}
           <label className="row" style={{ color: "var(--ink)" }}>
             <input type="checkbox" style={{ width: "auto" }} checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })} />
             فعال
           </label>
-          <label className="row" style={{ color: "var(--ink)" }}>
-            <input type="checkbox" style={{ width: "auto" }} checked={form.trackExpiry} onChange={(e) => setForm({ ...form, trackExpiry: e.target.checked })} />
-            خاضع للصلاحية
-          </label>
-          <label className="row" style={{ color: "var(--ink)" }}>
-            <input type="checkbox" style={{ width: "auto" }} checked={form.rx} onChange={(e) => setForm({ ...form, rx: e.target.checked })} />
-            💊 بوصفة طبية
-          </label>
-          <label className="row" style={{ color: "var(--ink)" }} title="الكاشير يطلب رقم الجهاز وقت البيع">
-            <input type="checkbox" style={{ width: "auto" }} checked={!!form.serialized} onChange={(e) => setForm({ ...form, serialized: e.target.checked })} />
-            📱 كل حبة برقمها (IMEI)
-          </label>
-          <label className="row" style={{ color: "var(--ink)" }}>
-            الضمان <input className="num" style={{ width: 60 }} value={form.warranty ?? "0"} onChange={(e) => setForm({ ...form, warranty: e.target.value })} /> شهر
-          </label>
+          {(mods.expiry || form.trackExpiry) && (<label className="row" style={{ color: "var(--ink)" }}>
+              <input type="checkbox" style={{ width: "auto" }} checked={form.trackExpiry} onChange={(e) => setForm({ ...form, trackExpiry: e.target.checked })} />
+              خاضع للصلاحية
+            </label>)}
+          {(mods.pharmacy || form.rx) && (<label className="row" style={{ color: "var(--ink)" }}>
+              <input type="checkbox" style={{ width: "auto" }} checked={form.rx} onChange={(e) => setForm({ ...form, rx: e.target.checked })} />
+              💊 بوصفة طبية
+            </label>)}
+          {(mods.serials || !!form.serialized) && (<label className="row" style={{ color: "var(--ink)" }} title="الكاشير يطلب رقم الجهاز وقت البيع">
+              <input type="checkbox" style={{ width: "auto" }} checked={!!form.serialized} onChange={(e) => setForm({ ...form, serialized: e.target.checked })} />
+              📱 كل حبة برقمها (IMEI)
+            </label>)}
+          {(mods.serials || mods.services || Number(form.warranty) > 0) && (<label className="row" style={{ color: "var(--ink)" }}>
+              الضمان <input className="num" style={{ width: 60 }} value={form.warranty ?? "0"} onChange={(e) => setForm({ ...form, warranty: e.target.value })} /> شهر
+            </label>)}
           <label className="row" style={{ color: "var(--ink)" }} title="يطلع زر في شاشة الكاشير، للأصناف اللي ما عندهاش باركود">
             <input type="checkbox" style={{ width: "auto" }} checked={form.quick} onChange={(e) => setForm({ ...form, quick: e.target.checked })} />
             ⭐ زر سريع في الكاشير <span className="muted">(ترتيبه ومجموعاته من «🔘 أزرار الكاشير»)</span>
@@ -213,10 +213,10 @@ export function Products({ call, storeId, onLabels }: { call: Call; storeId: str
             )}
           </div>
         ))}
-        <label className="row" style={{ color: "var(--ink)" }}>
+        {(mods.tiers || tiers) && <label className="row" style={{ color: "var(--ink)" }}>
           <input type="checkbox" style={{ width: "auto" }} checked={tiers} onChange={(e) => setTiers(e.target.checked)} />
           أسعار خاصة للجملة والمقاولين والورش <span className="muted">(فاضي = السعر العادي)</span>
-        </label>
+        </label>}
         {!form.isWeighted && (
           <div><button onClick={() => setForm({ ...form, units: [...form.units, { name: "كرتونة", factor: "12", price: "", barcodes: "", isBase: false }] })}>+ وحدة (كرتونة، شد…)</button></div>
         )}
