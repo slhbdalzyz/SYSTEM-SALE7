@@ -22,6 +22,11 @@ const productRow = z.object({
   qtyMilli: z.number().int().min(0).max(1e12).default(0),
   minStockMilli: z.number().int().min(0).max(1e12).default(0),
   weighted: z.boolean().default(false),
+  /** A bigger packing sold too: a box of 24, at its own price (or 24 × the piece). */
+  packUnit: text(40).min(1).optional(),
+  packFactorMilli: z.number().int().min(2000).max(100_000_000).optional(),
+  packPriceMinor: z.number().int().min(0).max(1e12).optional(),
+  packBarcode: text(64).optional(),
 });
 const customerRow = z.object({ name: text(120).min(1), phone: text(40).optional(), balanceMinor: money.default(0), creditLimitMinor: z.number().int().min(0).max(1e12).nullable().optional() });
 const supplierRow = z.object({ name: text(120).min(1), phone: text(40).optional(), balanceMinor: money.default(0) });
@@ -44,6 +49,8 @@ export async function importRoutes(app: FastifyInstance) {
       for (const [i, r] of b.rows.entries()) {
         const code = r.barcode?.replace(/\s/g, "") || "";
         if (code && codes.has(code)) { skipped.push({ row: i + 1, reason: `الباركود ${code} موجود` }); continue; }
+        const pack = r.packUnit && r.packFactorMilli && !r.weighted ? { name: r.packUnit, factor: r.packFactorMilli, code: r.packBarcode?.replace(/\s/g, "") || "" } : null;
+        if (pack?.code && (codes.has(pack.code) || pack.code === code)) { skipped.push({ row: i + 1, reason: `باركود العبوة ${pack.code} موجود` }); continue; }
         if (!code && names.has(r.name.toLowerCase())) { skipped.push({ row: i + 1, reason: "صنف بنفس الاسم موجود" }); continue; }
         let categoryId: string | null = null;
         if (r.category) {
@@ -56,9 +63,13 @@ export async function importRoutes(app: FastifyInstance) {
         }
         const pid = await saveProduct(tx, tid, null, {
           name: r.name, categoryId, isWeighted: r.weighted, autoCode: true, costMinor: r.costMinor, minStockMilli: r.minStockMilli,
-          units: [{ name: r.unit || (r.weighted ? "كيلو" : "حبة"), factorMilli: 1000, priceMinor: r.priceMinor, isBase: true, barcodes: code && !r.weighted ? [code] : [] }],
+          units: [
+            { name: r.unit || (r.weighted ? "كيلو" : "حبة"), factorMilli: 1000, priceMinor: r.priceMinor, isBase: true, barcodes: code && !r.weighted ? [code] : [] },
+            ...(pack ? [{ name: pack.name, factorMilli: pack.factor, priceMinor: r.packPriceMinor ?? Math.round((r.priceMinor * pack.factor) / 1000), isBase: false, barcodes: pack.code ? [pack.code] : [] }] : []),
+          ],
         });
         if (code) codes.add(code);
+        if (pack?.code) codes.add(pack.code);
         names.add(r.name.toLowerCase());
         created++;
         if (r.qtyMilli > 0) {

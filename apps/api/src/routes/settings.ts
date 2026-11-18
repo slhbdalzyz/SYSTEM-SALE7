@@ -33,6 +33,17 @@ export async function settingsRoutes(app: FastifyInstance) {
     };
   });
 
+  /** Puts a side-menu page away (or brings it back) without touching the rest of the settings. */
+  app.patch("/settings/menu", { preHandler: requirePerm("settings") }, async (req) => {
+    const b = z.object({ hidePaper: z.boolean() }).parse(req.body);
+    const t = (await app.db.query(`SELECT settings FROM tenants WHERE id = $1`, [req.user.tid])).rows[0];
+    const s = readShopSettings(t?.settings);
+    s.menu = { ...s.menu, ...b };
+    await app.db.query(`UPDATE tenants SET settings = $2 WHERE id = $1`, [req.user.tid, JSON.stringify(s)]);
+    await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "settings.update", entity: "tenant", entityId: req.user.tid, data: { menu: b } });
+    return { menu: s.menu };
+  });
+
   app.put("/settings", { preHandler: requirePerm("settings") }, async (req) => {
     const b = z.object({ name: z.string().trim().min(2).max(120), settings: shopSettingsSchema }).parse(req.body);
     await app.db.query(`UPDATE tenants SET name = $2, settings = $3 WHERE id = $1`, [req.user.tid, b.name, JSON.stringify(b.settings)]);
