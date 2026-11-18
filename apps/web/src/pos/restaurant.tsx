@@ -58,17 +58,17 @@ export function TablesDialog({ tables, busy, onPick, onClose }: {
 }
 
 /** How the customer wants the dish: tap the usual ones or type it. */
-export function NoteDialog({ name, initial, onDone, onClose }: { name: string; initial: string; onDone: (note: string) => void; onClose: () => void }) {
+export function NoteDialog({ name, initial, onDone, onClose, chips = QUICK_NOTES, placeholder = "مثلاً: بدون طماطم" }: { name: string; initial: string; onDone: (note: string) => void; onClose: () => void; chips?: readonly string[]; placeholder?: string }) {
   const [text, setText] = useState(initial);
   const parts = text.split("،").map((x) => x.trim()).filter(Boolean);
   const toggle = (n: string) => setText((parts.includes(n) ? parts.filter((x) => x !== n) : [...parts, n]).join("، "));
   return (
     <Modal title={`📝 ملاحظة على «${name}»`} onClose={onClose}>
       <div className="chips">
-        {QUICK_NOTES.map((n) => <button key={n} className={parts.includes(n) ? "active" : ""} onClick={() => toggle(n)}>{n}</button>)}
+        {chips.map((n) => <button key={n} className={parts.includes(n) ? "active" : ""} onClick={() => toggle(n)}>{n}</button>)}
       </div>
       <label>الملاحظة
-        <input autoFocus value={text} maxLength={200} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && onDone(text.trim())} placeholder="مثلاً: بدون طماطم" />
+        <input autoFocus value={text} maxLength={200} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && onDone(text.trim())} placeholder={placeholder} />
       </label>
       <div className="row">
         {initial && <button className="danger" onClick={() => onDone("")}>شيل الملاحظة</button>}

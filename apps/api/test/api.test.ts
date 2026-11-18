@@ -2478,6 +2478,38 @@ describe("more kinds of shop: customer prices, quotes, lists, orders, instalment
     expect((await call("GET", "/deliveries?status=out", t)).body[0].delivery).toMatchObject({ status: "out", driver: "عادل" });
   });
 
+  it("sells a service with nothing taken from stock, unless it has parts in a recipe", async () => {
+    const stockOf = async (pid: string) => Number((await db.query(`SELECT COALESCE(sum(qty_milli),0) AS q FROM stock_movements WHERE product_id = $1`, [pid])).rows[0].q);
+    const sw = await call("POST", "/products", t, { name: "تفليش سوفتوير", isService: true, minStockMilli: 5000, trackExpiry: true, units: [{ name: "خدمة", priceMinor: 30000, isBase: true }] });
+    expect(sw.status).toBe(200);
+    const synced = (await call("GET", "/sync/catalog", till)).body.products.find((p: { id: string }) => p.id === sw.body.id);
+    expect(synced).toMatchObject({ isService: true, minStockMilli: 0, trackExpiry: false });
+    // Fitting uses a bag of cement each time: the recipe takes the part, the service itself has no stock.
+    const fit = await call("POST", "/products", t, { name: "تركيب", isService: true, units: [{ name: "خدمة", priceMinor: 50000, isBase: true }] });
+    await call("PUT", `/recipes/${fit.body.id}`, t, { lines: [{ ingredientId: cement.id, qtyMilli: 1000 }] });
+    const before = await stockOf(cement.id);
+    const s = sale("S-1", [
+      { productId: sw.body.id, unitId: sw.body.units[0].id, name: "تفليش سوفتوير", qtyMilli: 1000, priceMinor: 30000, note: "آيفون 11" },
+      { productId: fit.body.id, unitId: fit.body.units[0].id, name: "تركيب", qtyMilli: 2000, priceMinor: 50000 },
+    ], 130000);
+    expect((await call("POST", "/sales/batch", till, { sales: [s] })).body.results[0].status).toBe("accepted");
+    expect(await stockOf(sw.body.id)).toBe(0);
+    expect(await stockOf(fit.body.id)).toBe(0);
+    expect(await stockOf(cement.id)).toBe(before - 2000);
+    // Taking the service back puts nothing on the shelf.
+    const orig = (await call("GET", "/sales/lookup?number=S-1", till)).body;
+    const line = orig.lines.find((l: { name: string }) => l.name === "تفليش سوفتوير");
+    const r = await call("POST", "/returns", till, { id: randomUUID(), number: "S-R1", originalSaleId: orig.id, shiftId: shift, lines: [{ saleLineId: line.id, qtyMilli: 1000 }], refundMethod: "cash", reason: "ما زبطش" });
+    expect(r.status).toBe(200);
+    expect(await stockOf(sw.body.id)).toBe(0);
+    // A stock count does not list services.
+    const c = (await call("POST", "/counts", t, { storeId: store })).body;
+    const sheet = (await call("GET", `/counts/${c.id}`, t)).body;
+    const names = [...(sheet.lines ?? []), ...(sheet.left ?? [])].map((l: { name: string }) => l.name);
+    expect(names).toContain("أسمنت");
+    expect(names).not.toContain("تفليش سوفتوير");
+  });
+
   it("makes a quote at the till, opens it again by number, and marks it sold", async () => {
     const q = await call("POST", "/quotes", till, { customerId: contractor, project: "عمارة", lines: [{ productId: cement.id, unitId: cement.bag, name: "أسمنت", qtyMilli: 100000, priceMinor: 37000, discountMinor: 20000 }], validDays: 10 });
     expect(q.body).toMatchObject({ number: 1, totalMinor: 3_680_000, customerName: "شركة البناء", status: "open" });

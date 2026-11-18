@@ -33,6 +33,8 @@ export interface CartLine {
   warrantyMonths?: number;
   /** The cashier chose to sell it without scanning the number. */
   noSerial?: boolean;
+  /** A service: nothing from stock; the cashier can note what was done (the program, the device). */
+  service?: boolean;
 }
 
 export function lineFor(product: CatalogProduct, unit: CatalogUnit, qtyMilli: number, tier: CustomerTier | null = null): CartLine {
@@ -53,6 +55,7 @@ export function lineFor(product: CatalogProduct, unit: CatalogUnit, qtyMilli: nu
     ...(product.rx ? { rx: true } : {}),
     ...(product.serialized ? { serialized: true, serials: [] } : {}),
     ...(product.warrantyMonths ? { warrantyMonths: product.warrantyMonths } : {}),
+    ...(product.isService ? { service: true } : {}),
     ...(product.units.length > 1 && !product.isWeighted
       ? { units: product.units.map((u) => ({ id: u.id, name: u.name, priceMinor: u.priceMinor, isBase: u.isBase, ...(u.tierPrices ? { tierPrices: u.tierPrices } : {}) })), productName: product.name }
       : {}),

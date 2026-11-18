@@ -128,7 +128,7 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
 
   const unitIds = [...new Set(s.lines.map((l) => l.unitId))];
   const units = await app.db.query(
-    `SELECT u.id, u.product_id, u.factor_milli, u.price_minor, u.is_base, p.cost_minor, p.name, p.category_id, p.is_weighted, p.rx, p.serialized, p.warranty_months
+    `SELECT u.id, u.product_id, u.factor_milli, u.price_minor, u.is_base, p.cost_minor, p.name, p.category_id, p.is_weighted, p.rx, p.serialized, p.warranty_months, p.is_service
      FROM product_units u JOIN products p ON p.id = u.product_id WHERE u.tenant_id = $1 AND u.id = ANY($2)`,
     [tid, unitIds],
   );
@@ -215,7 +215,9 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
             l.offerId && knownOffers.has(l.offerId) ? l.offerId : null, l.note || null, serials.length ? serials : null, warranty],
         );
         if (u.serialized || serials.length) await sellSerials(tx, { tid, who, saleId: s.id, number: s.number, at: s.createdAt, productId: l.productId, name: l.name, pieces: Math.round(baseQty / 1000), serials, warranty });
-        for (const [productId, qty] of recipeUsage([{ productId: l.productId, baseMilli: baseQty }], recipes)) {
+        // A service takes nothing from stock, unless it has a recipe of the parts it uses.
+        const usage = u.is_service && !recipe ? [] : recipeUsage([{ productId: l.productId, baseMilli: baseQty }], recipes);
+        for (const [productId, qty] of usage) {
           await tx.query(
             // Dated when the sale was made, not when an offline till sent it, so a stock count
             // taken in between compares with the right figure.

@@ -112,6 +112,8 @@ export const productInputSchema = z.object({
   fits: z.string().trim().max(300).nullable().optional(),
   /** Where it sits in the store room (shelf, box). */
   location: z.string().trim().max(60).nullable().optional(),
+  /** A service (software, fitting, installing): sold with no stock; parts it uses go through a recipe. */
+  isService: z.boolean().default(false),
   units: z.array(unitInputSchema).min(1).max(10),
 });
 export type ProductInput = z.infer<typeof productInputSchema>;
@@ -172,6 +174,7 @@ export interface CatalogProduct {
   partNumber?: string | null;
   fits?: string | null;
   location?: string | null;
+  isService?: boolean;
   updatedAt: string;
   units: CatalogUnit[];
 }
