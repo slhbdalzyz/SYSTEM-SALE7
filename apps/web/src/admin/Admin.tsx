@@ -71,7 +71,7 @@ const SHOP_SCREENS: Partial<Record<Tab, string[]>> = {
   installments: ["furniture", "electronics"],
   deliveries: ["building", "wholesale", "furniture", "bakery"],
   kits: ["stationery", "perfume", "building", "bakery", "auto_parts"],
-  blends: ["perfume", "bakery"],
+  blends: ["perfume", "bakery", "electronics", "auto_parts", "furniture"],
 };
 /** Screens the platform can close for a plan or a shop. */
 const FEATURE_OF: Partial<Record<Tab, Feature>> = { zakat: "zakat", quick: "quick_keys", payroll: "payroll", offers: "offers", counts: "counts" };
@@ -225,7 +225,7 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
           {shown === "installments" && <Installments call={call} shopName={me.tenant.name} />}
           {shown === "deliveries" && <Deliveries call={call} />}
           {shown === "kits" && <Kits call={call} storeId={store.id} type={me.tenant.business_type ?? ""} />}
-          {shown === "blends" && <><div className="hint">{me.tenant.business_type === "bakery" ? "حط وصفة كل صنف (دقيق، سكر، زبدة…): البيع ينقص المواد الخام من المخزون وتعرف تكلفة كل قطعة وربحها." : "العطر المركب أو البوكس: حط مكوناته (زيوت بالمل، قارورة، علبة)، والبيع ينقص المكونات من المخزون وتعرف تكلفته الحقيقية."}</div><Recipes call={call} storeId={store.id} label={me.tenant.business_type === "bakery" ? "الصنف (خبز، كيك، حلويات)" : "الصنف (عطر مركب أو بوكس)"} /></>}
+          {shown === "blends" && <><div className="hint">{me.tenant.business_type === "bakery" ? "حط وصفة كل صنف (دقيق، سكر، زبدة…): البيع ينقص المواد الخام من المخزون وتعرف تكلفة كل قطعة وربحها." : me.tenant.business_type === "perfume" ? "العطر المركب أو البوكس: حط مكوناته (زيوت بالمل، قارورة، علبة)، والبيع ينقص المكونات من المخزون وتعرف تكلفته الحقيقية." : "خدمة تستعمل قطع (مثلاً تركيب شاشة أو تغيير زيت): حط القطع اللي تستعملها، وكل ما تنباع الخدمة تنقص القطع من المخزون وتعرف ربحها الحقيقي."}</div><Recipes call={call} storeId={store.id} label={me.tenant.business_type === "bakery" ? "الصنف (خبز، كيك، حلويات)" : me.tenant.business_type === "perfume" ? "الصنف (عطر مركب أو بوكس)" : "الخدمة (تركيب، صيانة) أو الطقم"} /></>}
           {shown === "labels" && <Labels call={call} storeId={store.id} storeName={me.tenant.name} draft={labelDraft} clearDraft={() => setLabelDraft(null)} />}
           {shown === "branches" && <Branches call={call} storeId={store.id} isOwner={isOwner} onStoresChanged={loadMe} />}
           {shown === "offers" && <Offers call={call} storeId={store.id} stores={me.stores} />}

@@ -71,6 +71,9 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
   const [fits, setFits] = useState("");
   const [location, setLocation] = useState("");
   const [type, setType] = useState("");
+  // A service (software, fitting, installing): no stock, no barcode; its price is set here or typed at the till.
+  const [service, setService] = useState(false);
+  const [price, setPrice] = useState("");
   // Clothing and shoes: one item per colour and size, each with its own barcode and stock.
   const [variants, setVariants] = useState(false);
   const [sizes, setSizes] = useState<string[]>([]);
@@ -92,7 +95,9 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
   const setPack = (i: number, patch: Partial<Pack>) => setPacks((ps) => ps.map((p, j) => (j === i ? { ...p, ...patch } : p)));
   const packOk = packs.every((p) => p.name.trim() && Number(p.qty) > 1);
   const alertFactor = alert.unit >= 0 ? Number(packs[alert.unit]?.qty) || 1 : 1;
-  const ok = variants
+  const ok = service
+    ? name.trim().length >= 2
+    : variants
     ? name.trim().length >= 2 && sizes.length + colors.length > 0 && combos <= 100 && (!alert.on || Number(alert.qty) > 0)
     : name.trim().length >= 2 && packOk && expiry !== null && (!alert.on || Number(alert.qty) > 0);
 
@@ -113,6 +118,13 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
           body: { name: name.trim(), categoryId: dept || null, sizes, colors, unitName: base.trim() || "حبة", minStockMilli: alert.on ? toMinor(Number(alert.qty) || 0) : 0 },
         });
         onCreated(made[0]);
+        return;
+      }
+      if (service) {
+        const p = await call<CatalogProduct>("/products", {
+          body: { name: name.trim(), categoryId: dept || null, isService: true, quick, warrantyMonths: Number(warranty) || 0, units: [{ name: base.trim() && base.trim() !== "حبة" ? base.trim() : "خدمة", factorMilli: 1000, priceMinor: toMinor(Number(price) || 0), isBase: true, barcodes: [] }] },
+        });
+        onCreated(p);
         return;
       }
       const p = await call<CatalogProduct>("/products", {
@@ -148,7 +160,7 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
             </label>
           </div>
         )}
-        {electronics && !variants && (
+        {electronics && !variants && !service && (
           <div className="row" style={{ alignItems: "end" }}>
             <label className="row" style={{ color: "var(--ink)", flex: 1, minWidth: 220 }}>
               <input type="checkbox" style={{ width: "auto" }} checked={serialized} onChange={(e) => setSerialized(e.target.checked)} /> 📱 كل حبة برقمها (IMEI أو رقم تسلسلي)
@@ -160,8 +172,8 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
             </label>
           </div>
         )}
-        {electronics && serialized && <div className="hint">الكاشير يطلب رقم الجهاز وقت البيع، ويطبعه في الفاتورة مع تاريخ نهاية الضمان. الأرقام تدخلها من «📱 الأجهزة والصيانة».</div>}
-        {(parts || type === "building" || type === "wholesale") && !variants && (
+        {electronics && serialized && !service && <div className="hint">الكاشير يطلب رقم الجهاز وقت البيع، ويطبعه في الفاتورة مع تاريخ نهاية الضمان. الأرقام تدخلها من «📱 الأجهزة والصيانة».</div>}
+        {(parts || type === "building" || type === "wholesale") && !variants && !service && (
           <div className="row" style={{ alignItems: "end" }}>
             {parts && <label style={{ flex: 1, minWidth: 150 }}>رقم القطعة (OEM)<input className="num" value={partNumber} onChange={(e) => setPartNumber(e.target.value)} placeholder="مثلاً: 26300-35505" /></label>}
             {parts && <label style={{ flex: 2, minWidth: 200 }}>تركب على<input value={fits} onChange={(e) => setFits(e.target.value)} placeholder="مثلاً: هيونداي أكسنت 2012-2017، كيا ريو" /></label>}
@@ -181,20 +193,38 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
               <button type="button" onClick={addDept} aria-label="قسم جديد">+</button>
             </div>
           </label>
+{!service && (
           <label>طريقة البيع
             <div className="seg">
               <button type="button" className={!weighted ? "active" : ""} onClick={() => setWeighted(false)}>بالعدد</button>
               <button type="button" className={weighted ? "active" : ""} onClick={() => { setWeighted(true); setVariants(false); }}>بالوزن ⚖️</button>
             </div>
           </label>
+          )}
         </div>
 
         <div className="seg" role="group" aria-label="نوع الصنف">
-          <button type="button" className={!variants ? "active" : ""} onClick={() => setVariants(false)}>صنف واحد</button>
-          <button type="button" className={variants ? "active" : ""} onClick={() => { setVariants(true); setWeighted(false); }}>👕 مقاسات وألوان</button>
+          <button type="button" className={!variants && !service ? "active" : ""} onClick={() => { setVariants(false); setService(false); }}>صنف واحد</button>
+          <button type="button" className={variants ? "active" : ""} onClick={() => { setVariants(true); setService(false); setWeighted(false); }}>👕 مقاسات وألوان</button>
+          <button type="button" className={service ? "active" : ""} onClick={() => { setService(true); setVariants(false); setWeighted(false); }}>🛠️ خدمة (بدون مخزون)</button>
         </div>
 
-        {variants ? (
+        {service ? (
+          <fieldset className="item-box stack">
+            <legend>الخدمة</legend>
+            <div className="row" style={{ alignItems: "end" }}>
+              <label style={{ width: 160 }}>السعر (د.ل)
+                <input className="num" inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="فاضي = يتحدد وقت البيع" />
+              </label>
+              <label style={{ width: 160 }}>ضمان الخدمة
+                <select value={warranty} onChange={(e) => setWarranty(e.target.value)}>
+                  {[["0", "بدون ضمان"], ["1", "شهر"], ["3", "3 شهور"], ["6", "6 شهور"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                </select>
+              </label>
+            </div>
+            <div className="hint">🛠️ الخدمة تنباع في الكاشير زي أي صنف، لكن ما تنقصش من المخزون وما تحتاجش باركود ولا جرد. لو سعرها يختلف من زبون لزبون اتركه فاضي والكاشير يكتبه وقت البيع. لو تستعمل قطع (مثلاً تركيب شاشة) حط القطع في «🧪 التركيبات والوصفات» وتنقص من المخزون مع كل بيع.</div>
+          </fieldset>
+        ) : variants ? (
           <fieldset className="item-box stack">
             <legend>المقاسات والألوان</legend>
             <div className="row" style={{ gap: 6 }}>
@@ -222,9 +252,9 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
             </label>
           </div>
         )}
-        {!variants && !weighted && !barcode && <div className="hint">🏷️ ما فيش باركود؟ يتعمل له باركود خاص بالمحل تلقائياً وتقدر تطبعه ملصق.</div>}
+        {!service && !variants && !weighted && !barcode && <div className="hint">🏷️ ما فيش باركود؟ يتعمل له باركود خاص بالمحل تلقائياً وتقدر تطبعه ملصق.</div>}
 
-        {!variants && <fieldset className="item-box">
+        {!variants && !service && <fieldset className="item-box">
           <legend>التعبئة</legend>
           {packs.length === 0 && <div className="muted">يجي فرادى. لو يجي في صندوق أو جالون ضيف التعبئة.</div>}
           {packs.map((k, i) => (
@@ -245,7 +275,7 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
           )}
         </fieldset>}
 
-        {!variants && <div className="row" style={{ alignItems: "center" }}>
+        {!variants && !service && <div className="row" style={{ alignItems: "center" }}>
           <span>خاضع للصلاحية؟</span>
           <div className="seg">
             <button type="button" className={expiry === true ? "active" : ""} onClick={() => setExpiry(true)}>نعم</button>
@@ -261,11 +291,11 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
           </label>
         )}
 
-        <label className="row" style={{ color: "var(--ink)" }}>
+        {!service && <label className="row" style={{ color: "var(--ink)" }}>
           <input type="checkbox" style={{ width: "auto" }} checked={alert.on} onChange={(e) => setAlert({ ...alert, on: e.target.checked })} />
           نبهني لما يقل المخزون (اختياري)
-        </label>
-        {alert.on && (
+        </label>}
+        {!service && alert.on && (
           <div className="row" style={{ alignItems: "center" }}>
             <span>لما يوصل</span>
             <input className="num" inputMode="decimal" value={alert.qty} onChange={(e) => setAlert({ ...alert, qty: e.target.value })} style={{ width: 90 }} aria-label="حد التنبيه" autoFocus />
@@ -277,8 +307,8 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
           </div>
         )}
 
-        <div className="hint">💰 الأسعار والكمية تدخلهم في فاتورة التوريد، مش في بطاقة الصنف.</div>
-        {!variants && expiry === null && name.trim().length >= 2 && <div className="muted">اختار إذا كان الصنف خاضع للصلاحية.</div>}
+        {!service && <div className="hint">💰 الأسعار والكمية تدخلهم في فاتورة التوريد، مش في بطاقة الصنف.</div>}
+        {!service && !variants && expiry === null && name.trim().length >= 2 && <div className="muted">اختار إذا كان الصنف خاضع للصلاحية.</div>}
         {error && <div className="error">{error}</div>}
         <div className="row"><span className="spacer" /><button onClick={onClose}>إلغاء</button><button className="primary" disabled={!ok || busy} onClick={save}>حفظ البطاقة</button></div>
       </div>

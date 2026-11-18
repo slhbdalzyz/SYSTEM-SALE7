@@ -12,7 +12,7 @@ const BOOKS_AT = `(SELECT COALESCE(sum(m.qty_milli), 0) FROM stock_movements m W
 /** An item's shelf price for one base unit (a piece, a kilo). */
 export const BASE_PRICE = `COALESCE((SELECT pu.price_minor FROM product_units pu WHERE pu.product_id = p.id ORDER BY pu.is_base DESC, pu.factor_milli LIMIT 1), 0)`;
 /** The items a count covers: the store's active items, or one department's. $1 tenant, $2 category or null. */
-const SCOPE = `p.tenant_id = $1 AND p.active AND ($2::uuid IS NULL OR p.category_id = $2)`;
+const SCOPE = `p.tenant_id = $1 AND p.active AND NOT p.is_service AND ($2::uuid IS NULL OR p.category_id = $2)`;
 
 export async function countRoutes(app: FastifyInstance) {
   const managers = { preHandler: requirePerm("products", "purchasing") };

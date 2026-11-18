@@ -191,6 +191,12 @@ async function addElectronics(db: Q) {
     const qty = imeis.length || stock;
     if (qty) await db.query(`INSERT INTO stock_movements (tenant_id, store_id, product_id, qty_milli, kind) VALUES ($1,$2,$3,$4,'adjust')`, [tid, sid, pid, qty * 1000]);
   }
+  // Services: nothing from stock. Software has a set price; data transfer is priced at the till.
+  const services = await cat("خدمات وسوفتوير", "🛠️", 83);
+  for (const [name, price, quick] of [["تفليش وتحديث سوفتوير", 30000, true], ["تنزيل برامج وألعاب", 10000, true], ["نقل بيانات من جهاز لجهاز", 0, true], ["فك رمز / حساب", 50000, false]] as [string, number, boolean][]) {
+    const pid = (await db.query(`INSERT INTO products (tenant_id, name, category_id, is_service, quick) VALUES ($1,$2,$3,true,$4) RETURNING id`, [tid, name, services, quick])).rows[0].id;
+    await db.query(`INSERT INTO product_units (tenant_id, product_id, name, factor_milli, price_minor, is_base) VALUES ($1,$2,'خدمة',1000,$3,true)`, [tid, pid, price]);
+  }
   // Devices in the workshop: one just in, one waiting for a part, one ready for its owner.
   const repairs: [string, string, string, string | null, string, string, number, number, string, number][] = [
     ["سالم الورفلي", "0912345678", "آيفون 11 أسود", "356938035643809", "الشاشة مكسورة واللمس ما يخدمش", "بدون شاحن", 280000, 100000, "received", 0],

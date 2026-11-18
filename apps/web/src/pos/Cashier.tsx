@@ -882,7 +882,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
               <div className="results">
                 {results.map((p, i) => (
                   <button key={p.id} className={i === activeResult ? "active" : ""} onClick={() => pick(p)}>
-                    <span>{p.variants ? <>{variantBaseName(p)} <small className="muted">👕 {p.variants} مقاس ولون</small></> : p.name}{p.rx && " 💊"}{p.genericName && <small className="muted"> · {p.genericName}</small>}{p.partNumber && <small className="muted num"> · {p.partNumber}</small>}{p.fits && <small className="muted"> · 🚗 {p.fits}</small>}{p.location && <small className="muted"> · 📍 {p.location}</small>}{p.isWeighted && " ⚖️"}</span>
+                    <span>{p.variants ? <>{variantBaseName(p)} <small className="muted">👕 {p.variants} مقاس ولون</small></> : p.name}{p.rx && " 💊"}{p.isService && <small className="muted"> 🛠️ خدمة</small>}{p.genericName && <small className="muted"> · {p.genericName}</small>}{p.partNumber && <small className="muted num"> · {p.partNumber}</small>}{p.fits && <small className="muted"> · 🚗 {p.fits}</small>}{p.location && <small className="muted"> · 📍 {p.location}</small>}{p.isWeighted && " ⚖️"}</span>
                     <span className="num">{formatMoney((p.units.find((u) => u.isBase) ?? p.units[0]).priceMinor)}</span>
                   </button>
                 ))}
@@ -1027,7 +1027,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
             {dealShop && <button onClick={() => setDialog({ kind: "quote" })}>📄 عرض سعر</button>}
             {dealShop && <button onClick={() => setDialog({ kind: "deal" })}>🏗️ مشروع / 🚚 توصيل</button>}
             {hasKits && <button onClick={() => setDialog({ kind: "kit" })}>🎒 قائمة جاهزة</button>}
-            {restaurant && <button onClick={() => selected && setDialog({ kind: "note", key: selected })} disabled={!selected}>📝 ملاحظة <kbd>Alt+M</kbd></button>}
+            {(restaurant || selectedLine?.service) && <button onClick={() => selected && setDialog({ kind: "note", key: selected })} disabled={!selected}>📝 ملاحظة{restaurant && <> <kbd>Alt+M</kbd></>}</button>}
             <button onClick={hold} disabled={!lines.length}>تعليق <kbd>F8</kbd></button>
             <button onClick={async () => setDialog({ kind: "held", carts: await db.held.toArray() })}>الفواتير المعلقة <kbd>F9</kbd></button>
             <button onClick={() => setDialog({ kind: "customer" })}>{customer ? `العميل: ${customer.name}` : "العميل / تسديد"} <kbd>F3</kbd></button>
@@ -1050,6 +1050,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
         <NoteDialog
           name={lines.find((l) => l.key === dialog.key)?.name ?? ""}
           initial={lines.find((l) => l.key === dialog.key)?.note ?? ""}
+          {...(lines.find((l) => l.key === dialog.key)?.service ? { chips: [], placeholder: "مثلاً: تفليش آيفون 11، نسخة iOS 17" } : {})}
           onClose={() => { setDialog(null); focusScan(); }}
           onDone={(note) => { setLines((ls) => ls.map((l) => (l.key === dialog.key ? { ...l, note: note || null } : l))); setDialog(null); focusScan(); }}
         />

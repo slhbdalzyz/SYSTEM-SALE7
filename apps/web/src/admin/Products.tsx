@@ -33,6 +33,7 @@ interface Form {
   partNumber: string;
   fits: string;
   location: string;
+  isService: boolean;
   units: UnitForm[];
 }
 
@@ -40,7 +41,7 @@ function toForm(p: CatalogProduct): Form {
   return {
     id: p.id, name: p.name, sku: p.sku ?? "", categoryId: p.categoryId ?? "", isWeighted: p.isWeighted, scaleCode: p.scaleCode ?? "",
     cost: String(p.costMinor / 1000), minStock: String(p.minStockMilli / 1000), active: p.active, trackExpiry: !!p.trackExpiry, quick: !!p.quick, genericName: p.genericName ?? "", rx: !!p.rx, serialized: !!p.serialized, warranty: String(p.warrantyMonths ?? 0),
-    partNumber: p.partNumber ?? "", fits: p.fits ?? "", location: p.location ?? "",
+    partNumber: p.partNumber ?? "", fits: p.fits ?? "", location: p.location ?? "", isService: !!p.isService,
     units: p.units.map((u) => ({ id: u.id, name: u.name, factor: String(u.factorMilli / 1000), price: String(u.priceMinor / 1000), barcodes: u.barcodes.join(", "), isBase: u.isBase,
       wholesale: tierIn(u.tierPrices?.wholesale), contractor: tierIn(u.tierPrices?.contractor), workshop: tierIn(u.tierPrices?.workshop) })),
   };
@@ -100,6 +101,7 @@ export function Products({ call, storeId, onLabels }: { call: Call; storeId: str
       rx: form.rx,
       serialized: (form.serialized ?? false) && !form.isWeighted,
       warrantyMonths: Math.max(0, Math.min(120, Math.round(Number(form.warranty) || 0))),
+      isService: form.isService,
       partNumber: form.partNumber.trim() || null, fits: form.fits.trim() || null, location: form.location.trim() || null,
       units: form.units.map((u) => ({
         tierPrices: tiers ? { wholesale: tierOut(u.wholesale), contractor: tierOut(u.contractor), workshop: tierOut(u.workshop) } : {},
@@ -162,6 +164,10 @@ export function Products({ call, storeId, onLabels }: { call: Call; storeId: str
           {form.isWeighted && (
             <label style={{ width: 200 }}>كود الصنف في الميزان<input className="num" value={form.scaleCode} onChange={(e) => setForm({ ...form, scaleCode: e.target.value.replace(/\D/g, "") })} /></label>
           )}
+          <label className="row" style={{ color: "var(--ink)" }} title="ما تنقصش من المخزون، وما تدخلش الجرد ولا تنبيه النقص">
+            <input type="checkbox" style={{ width: "auto" }} checked={form.isService} onChange={(e) => setForm({ ...form, isService: e.target.checked, isWeighted: e.target.checked ? false : form.isWeighted })} />
+            🛠️ خدمة (بدون مخزون)
+          </label>
           <label className="row" style={{ color: "var(--ink)" }}>
             <input type="checkbox" style={{ width: "auto" }} checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })} />
             فعال
@@ -264,7 +270,7 @@ export function Products({ call, storeId, onLabels }: { call: Call; storeId: str
                   <td className="muted">{catName(p.categoryId) || "—"}</td>
                   <td>{p.units.map((u) => <div key={u.id}>{u.name}{!u.isBase && <span className="muted"> ({formatQty(u.factorMilli, false)})</span>}: {u.priceMinor ? <span className="num">{formatMoney(u.priceMinor)}</span> : <span className="muted">بدون سعر</span>}</div>)}</td>
                   <td className="num">{formatMoney(p.costMinor)}</td>
-                  <td><span className={low ? "badge bad" : ""}><span className="num">{formatQty(p.stockMilli ?? 0, p.isWeighted)}</span></span></td>
+                  <td>{p.isService ? <span className="muted">🛠️ خدمة</span> : <span className={low ? "badge bad" : ""}><span className="num">{formatQty(p.stockMilli ?? 0, p.isWeighted)}</span></span>}</td>
                   <td><button onClick={() => setForm(toForm(p))}>تعديل</button></td>
                 </tr>
               );
