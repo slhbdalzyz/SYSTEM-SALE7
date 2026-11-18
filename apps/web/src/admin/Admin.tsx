@@ -16,7 +16,9 @@ import { Offers } from "./Offers";
 import { Labels, type LabelDraft } from "./Labels";
 import { Butcher } from "./Butcher";
 import { Restaurant } from "./Restaurant";
-import { Electronics } from "./Electronics";
+import { Electronics, Repairs } from "./Electronics";
+import { Recipes } from "./Restaurant";
+import { Deliveries, Installments, Kits, Quotes } from "./Business";
 import { Subscription, subNotice, type Sub } from "./Subscription";
 import { Expenses } from "./Expenses";
 import { Alerts } from "../owner/Alerts";
@@ -46,8 +48,8 @@ export type Call = <T>(path: string, opts?: { method?: string; body?: unknown })
 /** The owner's screens, grouped as they appear in the side menu. */
 const NAV = [
   { group: "", items: { home: ["🏠", "لوحة التحكم"], paper: ["📒", "من الدفتر للنظام"], reports: ["📊", "التقارير"], alerts: ["🔔", "التنبيهات"] } },
-  { group: "المخزون", items: { products: ["📦", "الأصناف والأقسام"], purchasing: ["🚚", "المشتريات والموردين"], branches: ["🏬", "الفروع والتحويلات"], counts: ["📋", "جرد المخزون"], labels: ["🏷️", "ملصقات الباركود"], quick: ["🔘", "أزرار الكاشير"], butcher: ["🔪", "أسعار اليوم والتقطيع"], restaurant: ["🍽️", "المطعم: الطاولات والوصفات"], electronics: ["📱", "الأجهزة والصيانة"] } },
-  { group: "المبيعات", items: { invoices: ["🧾", "المبيعات والفواتير"], customers: ["👥", "العملاء والديون"], offers: ["🎁", "العروض"] } },
+  { group: "المخزون", items: { products: ["📦", "الأصناف والأقسام"], purchasing: ["🚚", "المشتريات والموردين"], branches: ["🏬", "الفروع والتحويلات"], counts: ["📋", "جرد المخزون"], labels: ["🏷️", "ملصقات الباركود"], quick: ["🔘", "أزرار الكاشير"], butcher: ["🔪", "أسعار اليوم والتقطيع"], restaurant: ["🍽️", "المطعم: الطاولات والوصفات"], electronics: ["📱", "الأجهزة والصيانة"], blends: ["🧪", "التركيبات والوصفات"], kits: ["🎒", "القوائم الجاهزة"] } },
+  { group: "المبيعات", items: { invoices: ["🧾", "المبيعات والفواتير"], customers: ["👥", "العملاء والديون"], offers: ["🎁", "العروض"], quotes: ["📄", "عروض الأسعار"], orders: ["📝", "الطلبيات المسبقة"], installments: ["📆", "الأقساط"], deliveries: ["🚚", "التوصيل"] } },
   { group: "المال", items: { money: ["🏦", "الخزينة والأرصدة"], expenses: ["💸", "المصروفات"], zakat: ["🕌", "الزكاة"] } },
   { group: "الموظفين", items: { staff: ["🧑‍💼", "الموظفين والصلاحيات"], payroll: ["💰", "الرواتب"], mypay: ["💼", "راتبي"] } },
   { group: "الإدارة", items: { settings: ["⚙️", "الإعدادات"], devices: ["🖥️", "الأجهزة"], audit: ["🕵️", "سجل العمليات"], backup: ["💾", "النسخ الاحتياطي"], subscription: ["⭐", "الاشتراك"], support: ["🛟", "الدعم الفني"] } },
@@ -58,9 +60,18 @@ const TABS = Object.assign({}, ...NAV.map((g) => g.items)) as Record<Tab, readon
 
 /** What opens each screen. "owner" = the shop owner only; null = everyone (their own pay). */
 const NEEDS: Record<Tab, Permission | "owner" | null> = {
-  home: "reports", paper: "owner", reports: "reports", alerts: "alerts", products: "products", purchasing: "purchasing", branches: "branches", counts: "products", labels: "products", quick: "products", butcher: "products", restaurant: "products", electronics: null,
+  home: "reports", paper: "owner", reports: "reports", alerts: "alerts", products: "products", purchasing: "purchasing", branches: "branches", counts: "products", labels: "products", quick: "products", butcher: "products", restaurant: "products", electronics: null, blends: "products", kits: "products", quotes: "sales", orders: "sales", installments: "customers", deliveries: "sales",
   invoices: "sales", settings: "settings", customers: "customers", offers: "offers", expenses: "expenses", money: "money", staff: "staff", payroll: "payroll", mypay: null, devices: "devices",
   backup: "owner", subscription: "owner", audit: "owner", zakat: "owner", support: "settings",
+};
+/** Screens only some kinds of shop have. */
+const SHOP_SCREENS: Partial<Record<Tab, string[]>> = {
+  quotes: ["building", "auto_parts", "wholesale", "furniture", "electronics", "stationery"],
+  orders: ["bakery", "furniture", "auto_parts", "perfume", "stationery", "clothing", "restaurant"],
+  installments: ["furniture", "electronics"],
+  deliveries: ["building", "wholesale", "furniture", "bakery"],
+  kits: ["stationery", "perfume", "building", "bakery", "auto_parts"],
+  blends: ["perfume", "bakery"],
 };
 /** Screens the platform can close for a plan or a shop. */
 const FEATURE_OF: Partial<Record<Tab, Feature>> = { zakat: "zakat", quick: "quick_keys", payroll: "payroll", offers: "offers", counts: "counts" };
@@ -137,6 +148,9 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
       if (!["electronics", "other"].includes(me.tenant.business_type ?? "")) return false;
       return isOwner || ["products", "purchasing", "sales", "customers"].some((p) => me.user.permissions.includes(p as Permission));
     }
+    // The screens each kind of shop needs; "other" gets them all.
+    const only = SHOP_SCREENS[t];
+    if (only && !only.includes(me.tenant.business_type ?? "grocery") && me.tenant.business_type !== "other") return false;
     // Put away by the owner once the shop moved off paper; brought back from the settings.
     if (t === "paper" && me.tenant.settings?.menu?.hidePaper) return false;
     const f = FEATURE_OF[t];
@@ -206,6 +220,12 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
           {shown === "butcher" && <Butcher call={call} storeId={store.id} />}
           {shown === "restaurant" && <Restaurant call={call} storeId={store.id} />}
           {shown === "electronics" && <Electronics call={call} storeId={store.id} shopName={me.tenant.name} />}
+          {shown === "quotes" && <Quotes call={call} shopName={me.tenant.name} />}
+          {shown === "orders" && <Repairs call={call} storeId={store.id} shopName={me.tenant.name} kind="order" />}
+          {shown === "installments" && <Installments call={call} shopName={me.tenant.name} />}
+          {shown === "deliveries" && <Deliveries call={call} />}
+          {shown === "kits" && <Kits call={call} storeId={store.id} type={me.tenant.business_type ?? ""} />}
+          {shown === "blends" && <><div className="hint">{me.tenant.business_type === "bakery" ? "حط وصفة كل صنف (دقيق، سكر، زبدة…): البيع ينقص المواد الخام من المخزون وتعرف تكلفة كل قطعة وربحها." : "العطر المركب أو البوكس: حط مكوناته (زيوت بالمل، قارورة، علبة)، والبيع ينقص المكونات من المخزون وتعرف تكلفته الحقيقية."}</div><Recipes call={call} storeId={store.id} label={me.tenant.business_type === "bakery" ? "الصنف (خبز، كيك، حلويات)" : "الصنف (عطر مركب أو بوكس)"} /></>}
           {shown === "labels" && <Labels call={call} storeId={store.id} storeName={me.tenant.name} draft={labelDraft} clearDraft={() => setLabelDraft(null)} />}
           {shown === "branches" && <Branches call={call} storeId={store.id} isOwner={isOwner} onStoresChanged={loadMe} />}
           {shown === "offers" && <Offers call={call} storeId={store.id} stores={me.stores} />}

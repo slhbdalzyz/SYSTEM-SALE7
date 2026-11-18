@@ -110,6 +110,50 @@ export async function seedDemo(db: Q) {
   await addButcher(db);
   await addRestaurant(db);
   await addElectronics(db);
+  await addBuilding(db);
+}
+
+/**
+ * A building-materials corner (the demo bar switches the type): cement, steel, pipes and tiles with
+ * contractor prices, a contractor on account, a bathroom set and a quote waiting to be sold.
+ */
+async function addBuilding(db: Q) {
+  if ((await db.query(`SELECT 1 FROM quotes LIMIT 1`)).rows.length) return;
+  const dev = (await db.query(`SELECT tenant_id AS tid, store_id AS sid FROM devices WHERE kind = 'pos' ORDER BY created_at LIMIT 1`)).rows[0];
+  if (!dev) return;
+  const { tid, sid } = dev;
+  const cat = async (name: string, icon: string, sort: number) =>
+    (await db.query(`INSERT INTO categories (tenant_id, name, icon, sort) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING RETURNING id`, [tid, name, icon, sort])).rows[0]?.id
+      ?? (await db.query(`SELECT id FROM categories WHERE tenant_id = $1 AND name = $2`, [tid, name])).rows[0].id;
+  const cement = await cat("أسمنت وحديد", "🧱", 70);
+  const pipes = await cat("مواسير وتمديدات", "🔧", 71);
+  const sanit = await cat("أدوات صحية", "🚿", 72);
+  // name, department, unit, price, contractor price, cost, stock, shelf
+  const items: [string, string, string, number, number, number, number, string][] = [
+    ["أسمنت بورتلاندي 50 كغ", cement, "شكارة", 42000, 39000, 35000, 400, "الحوش"],
+    ["حديد تسليح 12 مم", cement, "قضيب", 38000, 35500, 31000, 300, "الحوش"],
+    ["ماسورة PPR 25 مم", pipes, "متر", 6500, 5800, 4000, 500, "رف B1"],
+    ["كوع PPR 25 مم", pipes, "حبة", 1500, 1200, 700, 800, "رف B2"],
+    ["خلاط مغسلة كروم", sanit, "حبة", 95000, 85000, 65000, 25, "رف C1"],
+    ["مرحاض أرضي أبيض", sanit, "حبة", 180000, 165000, 130000, 12, "المخزن"],
+  ];
+  const ids: Record<string, { pid: string; uid: string; price: number }> = {};
+  for (const [name, category, unit, price, contractor, cost, stock, shelf] of items) {
+    const pid = (await db.query(`INSERT INTO products (tenant_id, name, category_id, cost_minor, location) VALUES ($1,$2,$3,$4,$5) RETURNING id`, [tid, name, category, cost, shelf])).rows[0].id;
+    const uid = (await db.query(`INSERT INTO product_units (tenant_id, product_id, name, factor_milli, price_minor, is_base) VALUES ($1,$2,$3,1000,$4,true) RETURNING id`, [tid, pid, unit, price])).rows[0].id;
+    await db.query(`INSERT INTO unit_prices (unit_id, tenant_id, tier, price_minor) VALUES ($1,$2,'contractor',$3)`, [uid, tid, contractor]);
+    await db.query(`INSERT INTO stock_movements (tenant_id, store_id, product_id, qty_milli, kind) VALUES ($1,$2,$3,$4,'adjust')`, [tid, sid, pid, stock * 1000]);
+    ids[name] = { pid, uid, price };
+  }
+  const cust = (await db.query(`INSERT INTO customers (tenant_id, name, phone, credit_limit_minor, price_tier) VALUES ($1,'شركة البناء الحديث','0915550101',50000000,'contractor') RETURNING id`, [tid])).rows[0].id;
+  const kit = ["ماسورة PPR 25 مم", "كوع PPR 25 مم", "خلاط مغسلة كروم", "مرحاض أرضي أبيض"].map((n, i) => ({ productId: ids[n].pid, unitId: ids[n].uid, qtyMilli: [20, 10, 1, 1][i] * 1000 }));
+  await db.query(`INSERT INTO kits (tenant_id, name, lines) VALUES ($1,'طقم حمام كامل',$2)`, [tid, JSON.stringify(kit)]);
+  const lines = [["أسمنت بورتلاندي 50 كغ", 100], ["حديد تسليح 12 مم", 60]].map(([n, q]) => ({ productId: ids[n as string].pid, unitId: ids[n as string].uid, name: n, qtyMilli: (q as number) * 1000, priceMinor: 39000 + (n === "حديد تسليح 12 مم" ? -3500 : 0), discountMinor: 0, taxBp: 0 }));
+  const total = lines.reduce((a, l) => a + (l.qtyMilli / 1000) * l.priceMinor, 0);
+  await db.query(
+    `INSERT INTO quotes (tenant_id, store_id, number, customer_id, customer_name, phone, project, lines, total_minor, valid_until, note) VALUES ($1,$2,1,$3,'شركة البناء الحديث','0915550101','عمارة السراج',$4,$5,current_date + 7,'التوصيل مجاني داخل طرابلس')`,
+    [tid, sid, cust, JSON.stringify(lines), total],
+  );
 }
 
 /**

@@ -99,10 +99,10 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
   const totals = computeTotals(s.lines, s.invoiceDiscountMinor);
   if (totals.total !== s.totalMinor) throw new Reject(`الإجمالي غير مطابق (${s.totalMinor} ≠ ${totals.total})`);
   const credit = s.payments.filter((p) => p.method === "credit").reduce((a, p) => a + p.amountMinor, 0);
-  let customer: { name: string; credit_limit_minor: number | null; balance_minor: number } | undefined;
+  let customer: { name: string; credit_limit_minor: number | null; balance_minor: number; price_tier: string } | undefined;
   if (s.customerId) {
     customer = (await app.db.query(
-      `SELECT c.name, c.credit_limit_minor, b.balance_minor FROM customers c JOIN customer_balances b ON b.customer_id = c.id WHERE c.id = $1 AND c.tenant_id = $2`,
+      `SELECT c.name, c.credit_limit_minor, c.price_tier, b.balance_minor FROM customers c JOIN customer_balances b ON b.customer_id = c.id WHERE c.id = $1 AND c.tenant_id = $2`,
       [s.customerId, tid],
     )).rows[0];
     if (!customer) throw new Reject("العميل غير موجود");
@@ -137,6 +137,14 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
     const u = byUnit.get(l.unitId);
     if (!u || u.product_id !== l.productId) throw new Reject(`الصنف غير موجود: ${l.name}`);
   }
+  // A contractor or a workshop pays its own price: not an override.
+  const tierPrices = new Map<string, number>();
+  if (customer && customer.price_tier !== "retail") {
+    const tp = await app.db.query(`SELECT unit_id, price_minor FROM unit_prices WHERE tenant_id = $1 AND tier = $2 AND unit_id = ANY($3::uuid[])`, [tid, customer.price_tier, unitIds]);
+    for (const r of tp.rows) tierPrices.set(r.unit_id, Number(r.price_minor));
+  }
+  // The quote it was opened from, still open.
+  const quote = s.quoteId ? (await app.db.query(`SELECT id, number FROM quotes WHERE id = $1 AND tenant_id = $2 AND status = 'open'`, [s.quoteId, tid])).rows[0] : undefined;
 
   // The device works out offers offline. Redo it here with the offers as the server knows them;
   // a difference means the device had an old list, so the sale stands and gets flagged.
@@ -180,10 +188,11 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
   try {
     await inTx(app.db, async (tx) => {
       await tx.query(
-        `INSERT INTO sales (id, tenant_id, store_id, device_id, shift_id, user_id, number, subtotal_minor, discount_minor, tax_minor, total_minor, paid_minor, change_minor, created_at, customer_id, employee_id, prescription, order_type, table_name)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+        `INSERT INTO sales (id, tenant_id, store_id, device_id, shift_id, user_id, number, subtotal_minor, discount_minor, tax_minor, total_minor, paid_minor, change_minor, created_at, customer_id, employee_id, prescription, order_type, table_name, quote_id, project, delivery)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
         [s.id, tid, who.sid, who.did, s.shiftId ?? null, who.sub, s.number, totals.subtotal, totals.discount, totals.tax, totals.total, paid, change, s.createdAt, s.customerId ?? null, onSalary > 0 ? s.employeeId : null,
-          rxNames.length ? JSON.stringify(s.prescription ?? {}) : null, s.orderType ?? null, s.tableName || null],
+          rxNames.length ? JSON.stringify(s.prescription ?? {}) : null, s.orderType ?? null, s.tableName || null,
+          quote?.id ?? null, s.project || null, s.delivery ? JSON.stringify({ ...s.delivery, status: "pending" }) : null],
       );
       const overrides: { name: string; catalog: number; sold: number }[] = [];
       const taken = new Map<string, number>();
@@ -215,8 +224,9 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
           );
           taken.set(productId, (taken.get(productId) ?? 0) + qty);
         }
-        if (l.priceMinor !== u.price_minor && !openPrice.has(l.productId)) overrides.push({ name: l.name, catalog: u.price_minor, sold: l.priceMinor });
+        if (l.priceMinor !== u.price_minor && l.priceMinor !== tierPrices.get(l.unitId) && !openPrice.has(l.productId)) overrides.push({ name: l.name, catalog: u.price_minor, sold: l.priceMinor });
       }
+      if (quote) await tx.query(`UPDATE quotes SET status = 'sold', sale_id = $2 WHERE id = $1`, [quote.id, s.id]);
       for (const p of s.payments) {
         await tx.query(`INSERT INTO payments (tenant_id, sale_id, method, amount_minor) VALUES ($1,$2,$3,$4)`, [tid, s.id, p.method, p.amountMinor]);
       }

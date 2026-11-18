@@ -2426,3 +2426,101 @@ describe("electronics: phones by IMEI, warranty and repairs", () => {
     expect((await call("GET", `/serials/lookup?q=${B}`, t)).body.repairs[0]).toMatchObject({ number: 1, status: "delivered" });
   });
 });
+
+describe("more kinds of shop: customer prices, quotes, lists, orders, instalments, deliveries", () => {
+  let t: string;
+  let till: string;
+  let shift: string;
+  let store: string;
+  let cement: { id: string; bag: string };
+  let contractor: string;
+  const fresh = async (url: string, body: unknown) => (await app.inject({ method: "POST", url, payload: body as object, remoteAddress: "10.0.2.99" })).json();
+  const sale = (number: string, lines: object[], total: number, extra: object = {}) => ({
+    id: randomUUID(), number, shiftId: shift, createdAt: new Date().toISOString(), lines, payments: [{ method: "cash", amountMinor: total }], totalMinor: total, ...extra,
+  });
+
+  it("opens a building materials shop with its departments", async () => {
+    const r = await fresh("/auth/register", { businessName: "مواد البناء الحديثة", storeName: "الرئيسي", ownerName: "فرج", email: "build@test.ly", password: "password123", businessType: "building" });
+    t = r.token;
+    store = r.storeId;
+    expect((await call("GET", "/categories", t)).body.map((c: { name: string }) => c.name)).toEqual(expect.arrayContaining(["أسمنت وحديد", "كوابل وأسلاك"]));
+    for (const type of ["auto_parts", "stationery", "perfume", "bakery", "furniture", "wholesale"]) {
+      const x = (await app.inject({ method: "POST", url: "/auth/register", remoteAddress: `10.0.3.${type.length}${type.charCodeAt(1) % 10}`, payload: { businessName: `محل ${type}`, storeName: "الرئيسي", ownerName: "سالم", email: `${type}@test.ly`, password: "password123", businessType: type } })).json();
+      expect((await call("GET", "/categories", x.token)).body.length).toBeGreaterThan(5);
+    }
+    const d = await call("POST", "/devices", t, { storeId: store, name: "كاشير" });
+    const u = await call("POST", "/users", t, { name: "مدير", role: "manager", pin: "2468" });
+    till = (await fresh("/auth/pin", { deviceToken: d.body.deviceToken, userId: u.body.id, pin: "2468" })).token;
+    shift = randomUUID();
+    await call("POST", "/shifts/open", till, { id: shift, openingCashMinor: 0 });
+  });
+
+  it("gives a contractor his own price, and the till sells at it without a flag", async () => {
+    const x = await call("POST", "/products", t, { name: "أسمنت", partNumber: "CEM-42", location: "ساحة A", units: [{ name: "شوال", priceMinor: 40000, isBase: true, tierPrices: { contractor: 37000, wholesale: 0 } }] });
+    cement = { id: x.body.id, bag: x.body.units[0].id };
+    const synced = (await call("GET", "/sync/catalog", till)).body.products.find((p: { id: string }) => p.id === cement.id);
+    expect(synced).toMatchObject({ partNumber: "CEM-42", location: "ساحة A", units: [{ priceMinor: 40000, tierPrices: { contractor: 37000 } }] });
+    const c = await call("POST", "/customers", t, { name: "شركة البناء", phone: "0911111111", priceTier: "contractor", creditLimitMinor: 10_000_000 });
+    contractor = c.body.id;
+    expect(c.body.priceTier).toBe("contractor");
+    const s = sale("B-1", [{ productId: cement.id, unitId: cement.bag, name: "أسمنت", qtyMilli: 10000, priceMinor: 37000 }], 370000,
+      { customerId: contractor, project: "فيلا حي الأندلس", delivery: { address: "حي الأندلس، قرب الجامع", phone: "0911111111" }, payments: [{ method: "credit", amountMinor: 370000 }] });
+    expect((await call("POST", "/sales/batch", till, { sales: [s] })).body.results[0].status).toBe("accepted");
+    const flagged = await db.query(`SELECT 1 FROM audit_log WHERE entity_id = $1 AND action = 'sale.price_mismatch'`, [s.id]);
+    expect(flagged.rowCount).toBe(0);
+    // Saving the item without prices for kinds of customer keeps the ones it had.
+    const projects = (await call("GET", `/customers/${contractor}/projects`, t)).body;
+    expect(projects[0]).toMatchObject({ project: "فيلا حي الأندلس", sales: 1, creditMinor: 370000 });
+    const del = (await call("GET", "/deliveries", t)).body;
+    expect(del[0]).toMatchObject({ number: "B-1", customerName: "شركة البناء", delivery: { address: "حي الأندلس، قرب الجامع", status: "pending" } });
+    await call("PATCH", `/deliveries/${s.id}`, t, { status: "out", driver: "عادل" });
+    expect((await call("GET", "/deliveries", t)).body).toHaveLength(0);
+    expect((await call("GET", "/deliveries?status=out", t)).body[0].delivery).toMatchObject({ status: "out", driver: "عادل" });
+  });
+
+  it("makes a quote at the till, opens it again by number, and marks it sold", async () => {
+    const q = await call("POST", "/quotes", till, { customerId: contractor, project: "عمارة", lines: [{ productId: cement.id, unitId: cement.bag, name: "أسمنت", qtyMilli: 100000, priceMinor: 37000, discountMinor: 20000 }], validDays: 10 });
+    expect(q.body).toMatchObject({ number: 1, totalMinor: 3_680_000, customerName: "شركة البناء", status: "open" });
+    expect((await call("GET", "/quotes/1", till)).body.lines).toHaveLength(1);
+    const s = sale("B-2", [{ productId: cement.id, unitId: cement.bag, name: "أسمنت", qtyMilli: 100000, priceMinor: 37000, discountMinor: 20000 }], 3_680_000, { customerId: contractor, quoteId: q.body.id });
+    await call("POST", "/sales/batch", till, { sales: [s] });
+    expect((await call("GET", "/quotes/1", till)).status).toBe(400);
+    expect((await call("GET", "/quotes?status=sold", t)).body[0]).toMatchObject({ number: 1, saleNumber: "B-2" });
+    const q2 = await call("POST", "/quotes", t, { customerName: "زبون", lines: [{ productId: cement.id, unitId: cement.bag, name: "أسمنت", qtyMilli: 1000, priceMinor: 40000 }] });
+    await call("PATCH", `/quotes/${q2.body.id}`, t, { status: "cancelled" });
+    expect((await call("GET", "/quotes/2", till)).body.error).toContain("ملغي");
+  });
+
+  it("keeps ready-made lists for the till", async () => {
+    const pen = await call("POST", "/products", t, { name: "قلم", units: [{ name: "حبة", priceMinor: 500, isBase: true }] });
+    const k = await call("POST", "/kits", t, { name: "قائمة الصف الأول", lines: [{ productId: pen.body.id, unitId: pen.body.units[0].id, qtyMilli: 3000 }, { productId: cement.id, unitId: cement.bag, qtyMilli: 1000 }] });
+    expect(k.status).toBe(200);
+    expect((await call("POST", "/kits", t, { name: "قائمة الصف الأول", lines: [{ productId: pen.body.id, unitId: pen.body.units[0].id, qtyMilli: 1000 }] })).status).toBe(409);
+    const kits = (await call("GET", "/kits", till)).body;
+    expect(kits[0]).toMatchObject({ name: "قائمة الصف الأول", items: [{ name: "قلم", qtyMilli: 3000, priceMinor: 500 }, { name: "أسمنت" }] });
+  });
+
+  it("takes an order ahead with a deposit, numbered apart from repairs", async () => {
+    const due = new Date(Date.now() + 2 * 864e5).toISOString();
+    const o = await call("POST", "/repairs", t, { kind: "order", customerName: "مريم", phone: "0922222222", device: "تورتة عيد ميلاد 2 كيلو", problem: "مكتوب عليها: عيد ميلاد سعيد يا ليان", estimateMinor: 120000, depositMinor: 50000, dueAt: due });
+    expect(o.body).toMatchObject({ kind: "order", number: 1 });
+    const r = await call("POST", "/repairs", t, { customerName: "سالم", device: "شاشة", problem: "عطل" });
+    expect(r.body.number).toBe(1);
+    const list = (await call("GET", "/repairs?kind=order", t)).body;
+    expect(list.rows).toHaveLength(1);
+    expect(list.stats).toMatchObject({ dueSoon: 0, depositsMinor: 50000 });
+  });
+
+  it("follows an instalment plan with what the customer pays", async () => {
+    const c = await call("POST", "/customers", t, { name: "علي الأقساط", phone: "0933333333", creditLimitMinor: 5_000_000 });
+    const plan = await call("POST", "/installments", t, { customerId: c.body.id, title: "غرفة نوم", totalMinor: 3_000_000, downMinor: 600_000, count: 6, firstDue: "2026-01-10" });
+    expect(plan.body).toMatchObject({ eachMinor: 400_000, paidMinor: 0, remainingMinor: 2_400_000 });
+    expect(plan.body.rows[5]).toMatchObject({ n: 6, due: "2026-06-10", amountMinor: 400_000 });
+    expect(plan.body.lateMinor).toBe(2_400_000);
+    await call("POST", `/customers/${c.body.id}/payments`, till, { id: randomUUID(), method: "cash", amountMinor: 900_000 });
+    const after = (await call("GET", `/installments?customerId=${c.body.id}`, t)).body[0];
+    expect(after.paidMinor).toBe(900_000);
+    expect(after.rows.map((r: { state: string }) => r.state).slice(0, 3)).toEqual(["paid", "paid", "late"]);
+    expect((await call("POST", "/installments", t, { customerId: c.body.id, title: "x", totalMinor: 100, downMinor: 100, count: 1, firstDue: "2026-01-01" })).status).toBe(400);
+  });
+});

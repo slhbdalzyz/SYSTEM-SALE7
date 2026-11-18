@@ -62,6 +62,12 @@ export const saleInputSchema = z.object({
   /** Restaurants: eaten in, taken away or delivered, and at which table. */
   orderType: z.enum(["dine_in", "takeaway", "delivery"]).nullable().optional(),
   tableName: z.string().trim().max(60).nullable().optional(),
+  /** The quote this sale was opened from. */
+  quoteId: z.string().uuid().nullable().optional(),
+  /** Building materials: the site or job the goods are for, on the customer's account. */
+  project: z.string().trim().max(80).nullable().optional(),
+  /** Goods to be taken to the customer. */
+  delivery: z.object({ address: z.string().trim().min(2).max(200), phone: z.string().trim().max(30).optional(), note: z.string().trim().max(200).optional() }).nullable().optional(),
 });
 export type SaleInput = z.infer<typeof saleInputSchema>;
 export type SaleLineInput = z.infer<typeof saleLineSchema>;
@@ -73,6 +79,8 @@ export const unitInputSchema = z.object({
   priceMinor: posMinor,
   isBase: z.boolean().default(false),
   barcodes: z.array(z.string().min(1).max(64)).default([]),
+  /** Prices for wholesale, contractor and workshop customers; left out = the normal price. */
+  tierPrices: z.object({ wholesale: z.number().int().nonnegative().nullable().optional(), contractor: z.number().int().nonnegative().nullable().optional(), workshop: z.number().int().nonnegative().nullable().optional() }).optional(),
 });
 
 export const productInputSchema = z.object({
@@ -99,6 +107,11 @@ export const productInputSchema = z.object({
   serialized: z.boolean().default(false),
   /** Months of warranty from the day it is sold (0 = none). */
   warrantyMonths: z.number().int().min(0).max(120).default(0),
+  /** Car parts: the maker's part number (alternatives share it) and the cars it fits. */
+  partNumber: z.string().trim().max(80).nullable().optional(),
+  fits: z.string().trim().max(300).nullable().optional(),
+  /** Where it sits in the store room (shelf, box). */
+  location: z.string().trim().max(60).nullable().optional(),
   units: z.array(unitInputSchema).min(1).max(10),
 });
 export type ProductInput = z.infer<typeof productInputSchema>;
@@ -110,6 +123,7 @@ export interface CatalogUnit {
   priceMinor: number;
   isBase: boolean;
   barcodes: string[];
+  tierPrices?: Partial<Record<"wholesale" | "contractor" | "workshop", number>>;
 }
 
 export const offerInputSchema = z.object({
@@ -155,6 +169,9 @@ export interface CatalogProduct {
   warrantyMonths?: number;
   /** The serial numbers / IMEIs of the pieces in stock, so the till finds the phone by its own number. */
   serials?: string[];
+  partNumber?: string | null;
+  fits?: string | null;
+  location?: string | null;
   updatedAt: string;
   units: CatalogUnit[];
 }
@@ -187,6 +204,7 @@ export const customerInputSchema = z.object({
   note: z.string().max(300).nullable().optional(),
   creditLimitMinor: z.number().int().nonnegative().nullable().optional(),
   active: z.boolean().optional(),
+  priceTier: z.enum(["retail", "wholesale", "contractor", "workshop"]).optional(),
 });
 
 export interface CatalogCustomer {
@@ -197,6 +215,8 @@ export interface CatalogCustomer {
   balanceMinor: number;
   /** Loyalty points held (when the shop has points switched on). */
   points?: number;
+  /** Retail, wholesale, contractor or workshop: the prices this customer pays. */
+  priceTier?: "retail" | "wholesale" | "contractor" | "workshop";
   active: boolean;
 }
 

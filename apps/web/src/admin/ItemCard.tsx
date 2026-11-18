@@ -65,6 +65,12 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
   const [electronics, setElectronics] = useState(false);
   const [serialized, setSerialized] = useState(false);
   const [warranty, setWarranty] = useState("0");
+  // Car parts: the maker's part number, the cars it fits and the shelf it sits on.
+  const [parts, setParts] = useState(false);
+  const [partNumber, setPartNumber] = useState("");
+  const [fits, setFits] = useState("");
+  const [location, setLocation] = useState("");
+  const [type, setType] = useState("");
   // Clothing and shoes: one item per colour and size, each with its own barcode and stock.
   const [variants, setVariants] = useState(false);
   const [sizes, setSizes] = useState<string[]>([]);
@@ -72,6 +78,10 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
   const [sizeSet, setSizeSet] = useState(0);
   useEffect(() => void call<Dept[]>("/categories").then(setCats), [call]);
   useEffect(() => void call<{ tenant: { business_type?: string } }>("/me").then((m) => {
+    setType(m.tenant.business_type ?? "");
+    if (m.tenant.business_type === "auto_parts") { setParts(true); setExpiry(false); }
+    if (["building", "furniture", "stationery"].includes(m.tenant.business_type ?? "")) setExpiry(false);
+    if (m.tenant.business_type === "furniture") { setElectronics(true); setWarranty("12"); }
     if (m.tenant.business_type === "clothing") { setVariants(true); setExpiry(false); }
     if (m.tenant.business_type === "electronics") { setElectronics(true); setExpiry(false); }
     if (m.tenant.business_type === "pharmacy") { setPharmacy(true); setExpiry(true); setBase("شريط"); setPacks([{ name: "علبة", qty: "", barcode: "" }]); }
@@ -108,6 +118,7 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
       const p = await call<CatalogProduct>("/products", {
         body: {
           name: name.trim(), categoryId: dept || null, isWeighted: weighted, autoCode: true, trackExpiry: !!expiry, quick, genericName: generic.trim() || null, rx, serialized: serialized && !weighted, warrantyMonths: Number(warranty) || 0,
+          partNumber: partNumber.trim() || null, fits: fits.trim() || null, location: location.trim() || null,
           minStockMilli: alert.on ? toMinor((Number(alert.qty) || 0) * alertFactor) : 0,
           units: [
             { name: baseName, factorMilli: 1000, priceMinor: 0, isBase: true, barcodes: !weighted && barcode ? [barcode] : [] },
@@ -150,6 +161,14 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
           </div>
         )}
         {electronics && serialized && <div className="hint">الكاشير يطلب رقم الجهاز وقت البيع، ويطبعه في الفاتورة مع تاريخ نهاية الضمان. الأرقام تدخلها من «📱 الأجهزة والصيانة».</div>}
+        {(parts || type === "building" || type === "wholesale") && !variants && (
+          <div className="row" style={{ alignItems: "end" }}>
+            {parts && <label style={{ flex: 1, minWidth: 150 }}>رقم القطعة (OEM)<input className="num" value={partNumber} onChange={(e) => setPartNumber(e.target.value)} placeholder="مثلاً: 26300-35505" /></label>}
+            {parts && <label style={{ flex: 2, minWidth: 200 }}>تركب على<input value={fits} onChange={(e) => setFits(e.target.value)} placeholder="مثلاً: هيونداي أكسنت 2012-2017، كيا ريو" /></label>}
+            <label style={{ width: 140 }}>مكانه في المخزن<input value={location} onChange={(e) => setLocation(e.target.value)} placeholder="رف A3" /></label>
+          </div>
+        )}
+        {parts && partNumber.trim() && <div className="hint">في الكاشير تقدر تكتب رقم القطعة أو اسم السيارة، وزر «🔁 البدائل» يطلع كل القطع اللي عندها نفس الرقم من ماركات ثانية.</div>}
         {pharmacy && generic.trim() && <div className="hint">في الكاشير تقدر تبحث بالاسم العلمي، ويطلعوا كل الأدوية اللي فيها نفس المادة كبدائل.</div>}
 
         <div className="row" style={{ alignItems: "end" }}>

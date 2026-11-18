@@ -6,6 +6,9 @@ import { HttpError, requirePerm } from "../auth";
 
 const money = z.number().int().nonnegative().max(1e12);
 const repairSchema = z.object({
+  /** A device left for repair, or an order taken ahead (a cake, a suit, a part to bring in). */
+  kind: z.enum(["repair", "order"]).default("repair"),
+  dueAt: z.string().datetime({ offset: true }).nullable().optional(),
   storeId: z.string().uuid().nullable().optional(),
   customerName: z.string().trim().min(2).max(120),
   phone: z.string().trim().max(30).nullable().optional(),
@@ -18,17 +21,17 @@ const repairSchema = z.object({
   technician: z.string().trim().max(80).nullable().optional(),
   notes: z.string().trim().max(1000).nullable().optional(),
 });
-const repairPatch = repairSchema.partial().extend({
+const repairPatch = repairSchema.omit({ kind: true }).partial().extend({
   status: z.enum(REPAIR_STATUSES).optional(),
   finalMinor: money.nullable().optional(),
 });
 
-const repairCols = `r.id, r.number, r.store_id, r.customer_name, r.phone, r.device, r.serial, r.problem, r.accessories, r.estimate_minor, r.deposit_minor, r.final_minor,
+const repairCols = `r.id, r.kind, r.due_at, r.number, r.store_id, r.customer_name, r.phone, r.device, r.serial, r.problem, r.accessories, r.estimate_minor, r.deposit_minor, r.final_minor,
   r.status, r.notes, r.technician, r.created_at, r.updated_at, r.ready_at, r.delivered_at, s.name AS store_name`;
 
 function repairOut(r: Record<string, unknown>) {
   return {
-    id: r.id, number: r.number, storeId: r.store_id, storeName: r.store_name, customerName: r.customer_name, phone: r.phone, device: r.device, serial: r.serial,
+    id: r.id, kind: r.kind, dueAt: r.due_at, number: r.number, storeId: r.store_id, storeName: r.store_name, customerName: r.customer_name, phone: r.phone, device: r.device, serial: r.serial,
     problem: r.problem, accessories: r.accessories, estimateMinor: Number(r.estimate_minor), depositMinor: Number(r.deposit_minor),
     finalMinor: r.final_minor === null ? null : Number(r.final_minor), status: r.status, notes: r.notes, technician: r.technician,
     createdAt: r.created_at, updatedAt: r.updated_at, readyAt: r.ready_at, deliveredAt: r.delivered_at,
@@ -157,10 +160,10 @@ export async function electronicsRoutes(app: FastifyInstance) {
   // ---- Repairs ----
 
   app.get("/repairs", repairs, async (req) => {
-    const q = z.object({ status: z.enum(["open", "all", ...REPAIR_STATUSES]).default("open"), q: z.string().trim().max(60).optional() }).parse(req.query);
+    const q = z.object({ kind: z.enum(["repair", "order"]).default("repair"), status: z.enum(["open", "all", ...REPAIR_STATUSES]).default("open"), q: z.string().trim().max(60).optional() }).parse(req.query);
     const tid = req.user.tid;
-    const args: unknown[] = [tid];
-    const where = ["r.tenant_id = $1"];
+    const args: unknown[] = [tid, q.kind];
+    const where = ["r.tenant_id = $1", "r.kind = $2"];
     if (q.status === "open") where.push(`r.status IN ('received', 'working', 'waiting_parts', 'ready')`);
     else if (q.status !== "all") { args.push(q.status); where.push(`r.status = $${args.length}`); }
     if (q.q) {
@@ -169,7 +172,7 @@ export async function electronicsRoutes(app: FastifyInstance) {
     }
     const rows = (await app.db.query(
       `SELECT ${repairCols} FROM repairs r LEFT JOIN stores s ON s.id = r.store_id WHERE ${where.join(" AND ")}
-       ORDER BY CASE r.status WHEN 'ready' THEN 0 WHEN 'received' THEN 1 WHEN 'working' THEN 2 WHEN 'waiting_parts' THEN 3 ELSE 4 END, r.created_at DESC LIMIT 300`,
+       ORDER BY CASE r.status WHEN 'ready' THEN 0 WHEN 'received' THEN 1 WHEN 'working' THEN 2 WHEN 'waiting_parts' THEN 3 ELSE 4 END, r.due_at NULLS LAST, r.created_at DESC LIMIT 300`,
       args,
     )).rows.map(repairOut);
     const st = (await app.db.query(
@@ -177,11 +180,12 @@ export async function electronicsRoutes(app: FastifyInstance) {
          count(*) FILTER (WHERE status = 'ready')::int AS ready,
          COALESCE(sum(COALESCE(final_minor, estimate_minor)) FILTER (WHERE status = 'delivered' AND delivered_at >= date_trunc('month', now())), 0)::bigint AS month_minor,
          count(*) FILTER (WHERE status = 'delivered' AND delivered_at >= date_trunc('month', now()))::int AS month_count,
-         COALESCE(sum(deposit_minor) FILTER (WHERE status IN ('received', 'working', 'waiting_parts', 'ready')), 0)::bigint AS deposits_minor
-       FROM repairs WHERE tenant_id = $1`,
-      [tid],
+         COALESCE(sum(deposit_minor) FILTER (WHERE status IN ('received', 'working', 'waiting_parts', 'ready')), 0)::bigint AS deposits_minor,
+         count(*) FILTER (WHERE status IN ('received', 'working', 'waiting_parts') AND due_at < now() + interval '1 day')::int AS due_soon
+       FROM repairs WHERE tenant_id = $1 AND kind = $2`,
+      [tid, q.kind],
     )).rows[0];
-    return { rows, stats: { inShop: st.in_shop, ready: st.ready, monthMinor: Number(st.month_minor), monthCount: st.month_count, depositsMinor: Number(st.deposits_minor) } };
+    return { rows, stats: { inShop: st.in_shop, ready: st.ready, monthMinor: Number(st.month_minor), monthCount: st.month_count, depositsMinor: Number(st.deposits_minor), dueSoon: st.due_soon } };
   });
 
   app.post("/repairs", repairs, async (req) => {
@@ -190,14 +194,14 @@ export async function electronicsRoutes(app: FastifyInstance) {
     if (b.depositMinor > b.estimateMinor && b.estimateMinor > 0) throw new HttpError(400, "العربون أكبر من السعر المتفق عليه");
     return inTx(app.db, async (tx) => {
       if (b.storeId && !(await tx.query(`SELECT 1 FROM stores WHERE id = $1 AND tenant_id = $2`, [b.storeId, tid])).rowCount) throw new HttpError(404, "الفرع غير موجود");
-      await tx.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`repair:${tid}`]);
-      const n = Number((await tx.query(`SELECT COALESCE(max(number), 0) + 1 AS n FROM repairs WHERE tenant_id = $1`, [tid])).rows[0].n);
+      await tx.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`repair:${tid}:${b.kind}`]);
+      const n = Number((await tx.query(`SELECT COALESCE(max(number), 0) + 1 AS n FROM repairs WHERE tenant_id = $1 AND kind = $2`, [tid, b.kind])).rows[0].n);
       const r = await tx.query(
-        `INSERT INTO repairs (tenant_id, store_id, number, customer_name, phone, device, serial, problem, accessories, estimate_minor, deposit_minor, technician, notes, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
-        [tid, b.storeId ?? null, n, b.customerName, b.phone || null, b.device, b.serial ? normSerial(b.serial) : null, b.problem, b.accessories || null, b.estimateMinor, b.depositMinor, b.technician || null, b.notes || null, req.user.sub],
+        `INSERT INTO repairs (tenant_id, store_id, number, customer_name, phone, device, serial, problem, accessories, estimate_minor, deposit_minor, technician, notes, created_by, kind, due_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
+        [tid, b.storeId ?? null, n, b.customerName, b.phone || null, b.device, b.serial ? normSerial(b.serial) : null, b.problem, b.accessories || null, b.estimateMinor, b.depositMinor, b.technician || null, b.notes || null, req.user.sub, b.kind, b.dueAt ?? null],
       );
-      await audit(tx, { tenantId: tid, userId: req.user.sub, action: "repair.create", entity: "repair", entityId: r.rows[0].id, data: { number: n, device: b.device, deposit: b.depositMinor } });
+      await audit(tx, { tenantId: tid, userId: req.user.sub, action: `${b.kind}.create`, entity: "repair", entityId: r.rows[0].id, data: { number: n, device: b.device, deposit: b.depositMinor } });
       const row = (await tx.query(`SELECT ${repairCols} FROM repairs r LEFT JOIN stores s ON s.id = r.store_id WHERE r.id = $1`, [r.rows[0].id])).rows[0];
       return repairOut(row);
     });
@@ -216,7 +220,7 @@ export async function electronicsRoutes(app: FastifyInstance) {
       const args: unknown[] = [id];
       const put = (col: string, v: unknown) => { args.push(v); set.push(`${col} = $${args.length}`); };
       const cols: [keyof typeof b, string][] = [["customerName", "customer_name"], ["phone", "phone"], ["device", "device"], ["problem", "problem"], ["accessories", "accessories"],
-        ["estimateMinor", "estimate_minor"], ["depositMinor", "deposit_minor"], ["finalMinor", "final_minor"], ["technician", "technician"], ["notes", "notes"], ["status", "status"]];
+        ["estimateMinor", "estimate_minor"], ["depositMinor", "deposit_minor"], ["finalMinor", "final_minor"], ["technician", "technician"], ["notes", "notes"], ["status", "status"], ["dueAt", "due_at"]];
       for (const [k, col] of cols) if (b[k] !== undefined) put(col, b[k] === "" ? null : b[k]);
       if (b.serial !== undefined) put("serial", b.serial ? normSerial(b.serial) : null);
       if (b.status === "ready" && was.status !== "ready") set.push("ready_at = now()");

@@ -15,7 +15,7 @@ export async function customerRoutes(app: FastifyInstance) {
 
   async function list(tenantId: string, q?: string, id?: string): Promise<CatalogCustomer[]> {
     const r = await app.db.query(
-      `SELECT c.id, c.name, c.phone, c.credit_limit_minor, c.active, b.balance_minor,
+      `SELECT c.id, c.name, c.phone, c.credit_limit_minor, c.active, c.price_tier, b.balance_minor,
          COALESCE((SELECT sum(e.points) FROM loyalty_entries e WHERE e.customer_id = c.id), 0)::bigint AS points
        FROM customers c JOIN customer_balances b ON b.customer_id = c.id
        WHERE c.tenant_id = $1 AND ($2::text IS NULL OR c.name ILIKE '%' || $2 || '%' OR c.phone LIKE '%' || $2 || '%')
@@ -23,7 +23,7 @@ export async function customerRoutes(app: FastifyInstance) {
        ORDER BY c.name LIMIT 1000`,
       [tenantId, q ?? null, id ?? null],
     );
-    return r.rows.map((c) => ({ id: c.id, name: c.name, phone: c.phone, creditLimitMinor: c.credit_limit_minor, balanceMinor: c.balance_minor, points: Number(c.points), active: c.active }));
+    return r.rows.map((c) => ({ id: c.id, name: c.name, phone: c.phone, creditLimitMinor: c.credit_limit_minor, balanceMinor: c.balance_minor, points: Number(c.points), active: c.active, priceTier: c.price_tier }));
   }
 
   /** Devices keep this list for picking a customer and checking credit while offline. */
@@ -38,8 +38,8 @@ export async function customerRoutes(app: FastifyInstance) {
     const limit = req.user.role === "cashier" ? 0 : (b.creditLimitMinor ?? null);
     try {
       const r = await app.db.query(
-        `INSERT INTO customers (tenant_id, name, phone, note, credit_limit_minor) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
-        [req.user.tid, b.name, b.phone ?? null, b.note ?? null, limit],
+        `INSERT INTO customers (tenant_id, name, phone, note, credit_limit_minor, price_tier) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+        [req.user.tid, b.name, b.phone ?? null, b.note ?? null, limit, req.user.role === "cashier" ? "retail" : (b.priceTier ?? "retail")],
       );
       await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, deviceId: req.user.did, action: "customer.create", entity: "customer", entityId: r.rows[0].id, data: { name: b.name, creditLimit: limit } });
       return (await list(req.user.tid, undefined, r.rows[0].id))[0];
@@ -56,9 +56,9 @@ export async function customerRoutes(app: FastifyInstance) {
     try {
       await app.db.query(
         `UPDATE customers SET name = COALESCE($3, name), phone = CASE WHEN $4 THEN $5 ELSE phone END, note = COALESCE($6, note),
-           credit_limit_minor = CASE WHEN $7 THEN $8 ELSE credit_limit_minor END, active = COALESCE($9, active), updated_at = now()
+           credit_limit_minor = CASE WHEN $7 THEN $8 ELSE credit_limit_minor END, active = COALESCE($9, active), price_tier = COALESCE($10, price_tier), updated_at = now()
          WHERE id = $1 AND tenant_id = $2`,
-        [id, req.user.tid, b.name ?? null, "phone" in b, b.phone ?? null, b.note ?? null, "creditLimitMinor" in b, b.creditLimitMinor ?? null, b.active ?? null],
+        [id, req.user.tid, b.name ?? null, "phone" in b, b.phone ?? null, b.note ?? null, "creditLimitMinor" in b, b.creditLimitMinor ?? null, b.active ?? null, b.priceTier ?? null],
       );
     } catch (e) {
       conflict(e);
