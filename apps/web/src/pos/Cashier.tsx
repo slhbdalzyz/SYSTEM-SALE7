@@ -11,7 +11,8 @@ import { loadExpiry, loadOffers, loadTables, onSync, refreshCounts, startSyncLoo
 import { NoteDialog, OrderBar, TablesDialog, type Order } from "./restaurant";
 import { autoBackupIfDue } from "../owner/backup";
 import type { Screen } from "../App";
-import { addLine, cartTotals, lineFor, lineTotal, priceCart, switchUnit, toSaleInput, type CartLine } from "./cart";
+import { addLine, cartTotals, lineFor, lineTotal, priceCart, repriceFor, switchUnit, toSaleInput, type CartLine, type Deal } from "./cart";
+import { DEAL_SHOPS, DealBox, DealDialog, KitDialog, QuoteDialog, loadKits, tierLabel } from "./business";
 import { AmountDialog, DrawerDialog, Modal, PayDialog, type Employee } from "./dialogs";
 import { applyPrefs, loadPrefs, savePrefs, sound, type TillPrefs } from "./feel";
 import { MyPay } from "../admin/MyPay";
@@ -50,6 +51,9 @@ type Dialog =
   | { kind: "serial"; key: string; paying?: boolean }
   | { kind: "tables" }
   | { kind: "note"; key: string }
+  | { kind: "quote" }
+  | { kind: "kit" }
+  | { kind: "deal" }
   | null;
 
 /** A customer being served. Several can be open at once, one tab each. */
@@ -57,6 +61,8 @@ interface Tab {
   id: string; n: number; lines: CartLine[]; invoiceDiscount: number; customer: CatalogCustomer | null; selected: string | null; prescription?: Prescription | null;
   /** Restaurants: how the order goes out, and what the kitchen has already been told. */
   order?: Order | null; sent?: Record<string, SentLine>;
+  /** The quote it came from, the building site, a delivery. */
+  deal?: Deal;
 }
 const emptyTab = (n: number, order: Order | null = null): Tab => ({ id: crypto.randomUUID(), n, lines: [], invoiceDiscount: 0, customer: null, selected: null, prescription: null, order, sent: {} });
 const DEFAULT_ORDER: Order = { type: "takeaway" };
@@ -95,6 +101,9 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   /** Restaurants: this customer's order type and table, and what the kitchen already has. */
   const [order, setOrder] = useState<Order>(DEFAULT_ORDER);
   const [sent, setSent] = useState<Record<string, SentLine>>({});
+  const [deal, setDeal] = useState<Deal>({});
+  /** Whether this shop has ready-made lists, to show the key only then. */
+  const [hasKits, setHasKits] = useState(false);
   const [tables, setTables] = useState<DiningTable[]>([]);
   /** A kitchen slip being printed: shown in place of the receipt until it is out. */
   const [slip, setSlip] = useState<ReceiptData | null>(null);
@@ -106,6 +115,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   const [shop, setShop] = useState<Shop | null>(null);
   const till = (shop?.settings ?? readShopSettings({})).till;
   const restaurant = shop?.type === "restaurant";
+  const dealShop = DEAL_SHOPS.includes(shop?.type ?? "");
   const scanRef = useRef<HTMLInputElement>(null);
   const device = session.device;
   const [prefs, setPrefs] = useState<TillPrefs>(loadPrefs);
@@ -217,6 +227,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
       setQGroup((g) => (g && q.groups.some((x) => x.id === g) ? g : null));
     })();
   }, [sync?.lastSync, catalogSize]);
+  useEffect(() => void loadKits().then((k) => setHasKits(k.length > 0)), [sync?.lastSync]);
 
   /** A key: the set unit and quantity, or the scale, or the price typed now (open price). */
   function pressKey(k: QuickKey, p: CatalogProduct) {
@@ -304,6 +315,8 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   }, [lines, priced, totals, customer, receipt, display, device?.storeName]);
 
   function put(line: CartLine) {
+    // A contractor, wholesale or workshop customer pays their own price for the unit.
+    line = repriceFor([line], null, customer?.priceTier ?? null)[0];
     // Dated goods: the batch on the shelf may be past its date. Asked once, when the item first goes in.
     const exp = expiry.get(line.productId);
     const isNew = !lines.some((l) => l.productId === line.productId);
@@ -411,6 +424,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     setPrescription(null);
     setOrder(DEFAULT_ORDER);
     setSent({});
+    setDeal({});
   }
 
   // ---- Several customers at once, one tab each ----
@@ -422,8 +436,9 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     setPrescription(t.prescription ?? null);
     setOrder(t.order ?? DEFAULT_ORDER);
     setSent(t.sent ?? {});
+    setDeal(t.deal ?? {});
   }
-  const current = (): Tab => ({ ...(tabs.find((t) => t.id === activeTab) ?? emptyTab(1)), lines, invoiceDiscount, customer, selected, prescription, order, sent });
+  const current = (): Tab => ({ ...(tabs.find((t) => t.id === activeTab) ?? emptyTab(1)), lines, invoiceDiscount, customer, selected, prescription, order, sent, deal });
   function switchTab(id: string) {
     if (id === activeTab) return;
     if (exchange) return flash("كمّل التبديل أول، أو ألغيه", true);
@@ -464,7 +479,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   useEffect(() => {
     const t = setTimeout(() => void setMeta("tabs", { active: activeTab, tabs: tabs.map((x) => (x.id === activeTab ? current() : x)) }), 400);
     return () => clearTimeout(t);
-  }, [tabs, activeTab, lines, invoiceDiscount, customer, order, sent]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tabs, activeTab, lines, invoiceDiscount, customer, order, sent, deal]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** This cashier's sales today on this till: shown in the status bar. */
   async function countMine() {
@@ -491,6 +506,8 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   }
 
   function pickCustomer(c: CatalogCustomer | null) {
+    const from = customer?.priceTier ?? null, to = c?.priceTier ?? null;
+    if (from !== to) setLines((ls) => repriceFor(ls, from, to));
     setCustomer(c);
     if (c && c.creditLimitMinor !== null && c.creditLimitMinor > 0 && c.balanceMinor >= c.creditLimitMinor * 0.8) {
       flash(c.balanceMinor >= c.creditLimitMinor ? `⛔ ${c.name} وصل حد الدين` : `⚠️ ${c.name} قرّب من حد الدين`, true);
@@ -503,7 +520,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     if (restaurant && pendingKitchen.length) await sendKitchen();
     const id = crypto.randomUUID();
     const number = await nextInvoiceNumber(device.prefix);
-    const sale = toSaleInput({ id, number, shiftId: shift?.id ?? null, lines, offers, invoiceDiscountMinor: invoiceDiscount, payments, customerId: customer?.id, employeeId, prescription: lines.some((l) => l.rx) ? prescription : null,
+    const sale = toSaleInput({ id, number, shiftId: shift?.id ?? null, lines, offers, invoiceDiscountMinor: invoiceDiscount, payments, customerId: customer?.id, employeeId, prescription: lines.some((l) => l.rx) ? prescription : null, deal,
       ...(restaurant ? { orderType: order.type, tableName: order.type === "dine_in" ? order.table ?? null : null } : {}) });
     const credit = payments.filter((p) => p.method === "credit").reduce((a, p) => a + p.amountMinor, 0);
     const paid = payments.reduce((a, p) => a + p.amountMinor, 0);
@@ -565,12 +582,13 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   async function showAlternatives() {
     const l = lines.find((x) => x.key === selected);
     const p = l && (await db.products.get(l.productId));
-    if (!p?.genericName) return flash("الصنف هذا ما عندهش اسم علمي", true);
+    const key = p?.partNumber || p?.genericName;
+    if (!p || !key) return flash(p ? "الصنف هذا ما عندهش اسم علمي ولا رقم قطعة" : "اختار صنف", true);
     const alts = await alternatives(p);
-    if (!alts.length) return flash(`ما فيش بدائل لـ«${p.genericName}»`, true);
+    if (!alts.length) return flash(`ما فيش بدائل لـ«${key}»`, true);
     setResults(alts);
     setActiveResult(0);
-    flash(`بدائل ${p.genericName}: ${alts.length}`);
+    flash(`بدائل ${key}: ${alts.length}`);
     focusScan();
   }
 
@@ -799,7 +817,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   const selectedLine = lines.find((l) => l.key === selected);
   // Only shops with medicines (scientific names) get the alternatives key.
   const [hasGeneric, setHasGeneric] = useState(false);
-  useEffect(() => void db.products.filter((p) => !!p.genericName).first().then((p) => setHasGeneric(!!p)), [catalogSize, sync?.lastSync]);
+  useEffect(() => void db.products.filter((p) => !!p.genericName || !!p.partNumber).first().then((p) => setHasGeneric(!!p)), [catalogSize, sync?.lastSync]);
   const boss = role === "owner" || role === "manager";
   const canOverride = boss || till.cashierPriceChange;
   /** The biggest invoice discount this person may give, in percent of the bill. */
@@ -864,7 +882,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
               <div className="results">
                 {results.map((p, i) => (
                   <button key={p.id} className={i === activeResult ? "active" : ""} onClick={() => pick(p)}>
-                    <span>{p.variants ? <>{variantBaseName(p)} <small className="muted">👕 {p.variants} مقاس ولون</small></> : p.name}{p.rx && " 💊"}{p.genericName && <small className="muted"> · {p.genericName}</small>}{p.isWeighted && " ⚖️"}</span>
+                    <span>{p.variants ? <>{variantBaseName(p)} <small className="muted">👕 {p.variants} مقاس ولون</small></> : p.name}{p.rx && " 💊"}{p.genericName && <small className="muted"> · {p.genericName}</small>}{p.partNumber && <small className="muted num"> · {p.partNumber}</small>}{p.fits && <small className="muted"> · 🚗 {p.fits}</small>}{p.location && <small className="muted"> · 📍 {p.location}</small>}{p.isWeighted && " ⚖️"}</span>
                     <span className="num">{formatMoney((p.units.find((u) => u.isBase) ?? p.units[0]).priceMinor)}</span>
                   </button>
                 ))}
@@ -924,7 +942,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
                             {l.units.map((u) => (
                               <button key={u.id} type="button" className={u.id === l.unitId ? "active" : ""} disabled={!u.priceMinor && u.id !== l.unitId}
                                 title={u.priceMinor ? formatMoney(u.priceMinor) : "ما عندهاش سعر"}
-                                onClick={(e) => { e.stopPropagation(); setLines((ls) => ls.map((x) => (x.key === l.key ? switchUnit(x, u.id) : x))); setSelected(l.key); }}>{u.name}</button>
+                                onClick={(e) => { e.stopPropagation(); setLines((ls) => ls.map((x) => (x.key === l.key ? switchUnit(x, u.id, customer?.priceTier ?? null) : x))); setSelected(l.key); }}>{u.name}</button>
                             ))}
                           </div>
                         )}
@@ -991,7 +1009,8 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
                 💊 {prescription ? `الوصفة: ${[prescription.doctor && `د. ${prescription.doctor}`, prescription.number && `رقم ${prescription.number}`].filter(Boolean).join(" · ") || "تم التأكيد"}` : "فيه دواء بوصفة: سجّل الوصفة"}
               </button>
             )}
-            {customer && <CustomerBox c={customer} rules={rules} onClear={() => setCustomer(null)} />}
+            {customer && <CustomerBox c={customer} rules={rules} onClear={() => pickCustomer(null)} />}
+            <DealBox deal={deal} onEdit={() => setDialog({ kind: "deal" })} onClearQuote={() => setDeal((d) => ({ ...d, quoteId: null, quoteNumber: null }))} />
             {message && lines.length > 0 && <div className={message.bad ? "error" : "badge ok"} style={{ textAlign: "center" }}>{message.text}</div>}
             {receipt?.sale && !lines.length && (shop?.settings.whatsapp.offerAfterSale ?? true) && (
               <button className="wa-offer" onClick={() => setDialog({ kind: "wa" })}>
@@ -1004,7 +1023,10 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
             <button onClick={() => selected && setDialog({ kind: "price", key: selected })} disabled={!selected || !canOverride}>تعديل السعر <kbd>F5</kbd></button>
             <button onClick={() => setDialog({ kind: "discount" })} disabled={!lines.length || maxDiscount <= 0}>خصم على الفاتورة <kbd>F6</kbd></button>
             <button onClick={() => selectedLine && removeLine(selectedLine.key)} disabled={!selected} className="danger">حذف الصنف <kbd>Del</kbd></button>
-            {hasGeneric && <button onClick={() => void showAlternatives()} disabled={!selected}>💊 البدائل</button>}
+            {hasGeneric && <button onClick={() => void showAlternatives()} disabled={!selected}>{shop?.type === "auto_parts" ? "🔁 البدائل" : "💊 البدائل"}</button>}
+            {dealShop && <button onClick={() => setDialog({ kind: "quote" })}>📄 عرض سعر</button>}
+            {dealShop && <button onClick={() => setDialog({ kind: "deal" })}>🏗️ مشروع / 🚚 توصيل</button>}
+            {hasKits && <button onClick={() => setDialog({ kind: "kit" })}>🎒 قائمة جاهزة</button>}
             {restaurant && <button onClick={() => selected && setDialog({ kind: "note", key: selected })} disabled={!selected}>📝 ملاحظة <kbd>Alt+M</kbd></button>}
             <button onClick={hold} disabled={!lines.length}>تعليق <kbd>F8</kbd></button>
             <button onClick={async () => setDialog({ kind: "held", carts: await db.held.toArray() })}>الفواتير المعلقة <kbd>F9</kbd></button>
@@ -1033,6 +1055,24 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
         />
       )}
 
+      {dialog?.kind === "quote" && (
+        <QuoteDialog lines={priced.lines} customer={customer} deal={deal} shopName={shop?.name ?? device?.storeName ?? ""} shop={{}}
+          onClose={() => { setDialog(null); focusScan(); }}
+          onOpen={({ quote, lines: ls, customer: c }) => {
+            if (lines.length && !confirm("الفاتورة اللي على الشاشة تتبدل بعرض السعر. نكمّل؟")) return;
+            setLines(ls); setSelected(null); setInvoiceDiscount(0);
+            setCustomer(c);
+            setDeal({ quoteId: quote.id, quoteNumber: quote.number, project: quote.project ?? null, delivery: null });
+            setDialog(null); flash(`📄 عرض السعر ${quote.number}: ${ls.length} أصناف`); focusScan();
+          }} />
+      )}
+      {dialog?.kind === "kit" && (
+        <KitDialog onClose={() => { setDialog(null); focusScan(); }}
+          onPick={(ls, name) => { setDialog(null); setLines((cur) => repriceFor(ls, null, customer?.priceTier ?? null).reduce((acc, l) => addLine(acc, l).lines, cur)); setLastPaid(null); flash(`🎒 ${name}: ${ls.length} أصناف`); focusScan(); }} />
+      )}
+      {dialog?.kind === "deal" && (
+        <DealDialog deal={deal} customer={customer} onClose={() => { setDialog(null); focusScan(); }} onDone={(d) => { setDeal(d); setDialog(null); focusScan(); }} />
+      )}
       {dialog?.kind === "printer" && <PrinterDialog onClose={() => { setDialog(null); focusScan(); }} />}
       {dialog?.kind === "mypay" && (
         <Modal title="راتبي" onClose={() => { setDialog(null); focusScan(); }}>
@@ -1291,7 +1331,7 @@ function CustomerBox({ c, rules, onClear }: { c: CatalogCustomer; rules: Loyalty
   const level = limit === null || limit <= 0 ? "" : c.balanceMinor >= limit ? "over" : pct >= 80 ? "near" : "";
   return (
     <div className={`cust-box ${level}`}>
-      <div className="cust-head"><b>👤 {c.name}</b>{c.phone && <span className="muted num">{c.phone}</span>}<button className="ghost" onClick={onClear} aria-label="شيل العميل">✕</button></div>
+      <div className="cust-head"><b>👤 {c.name}{tierLabel(c) && <span className="tier-tag">{tierLabel(c)}</span>}</b>{c.phone && <span className="muted num">{c.phone}</span>}<button className="ghost" onClick={onClear} aria-label="شيل العميل">✕</button></div>
       <div className="line"><span>عليه دين</span><b className="num">{formatMoney(c.balanceMinor)}</b></div>
       {rules?.enabled && <div className="line"><span>⭐ نقاطه</span><span><b className="num">{c.points ?? 0}</b> <span className="muted num">({formatMoney((c.points ?? 0) * rules.pointValueMinor)})</span></span></div>}
       {limit !== null && limit > 0 && <>

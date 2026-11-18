@@ -28,3 +28,8 @@ export function sendSupplierOrder(o: { shopName: string; supplierName?: string |
   ].join("\n");
   window.open(waLink(o.phone, text), "_blank", "noopener");
 }
+
+/** Opens WhatsApp with any ready message (a quote, an instalment reminder, an order that is ready). */
+export function sendText(phone: string | null | undefined, text: string) {
+  window.open(waLink(phone, text), "_blank", "noopener");
+}

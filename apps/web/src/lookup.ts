@@ -40,6 +40,12 @@ export async function findByCode(code: string, scale: ScaleBarcodeConfig = DEFAU
     if (bySerial?.active) return { product: bySerial, unit: bySerial.units.find((u) => u.isBase) ?? bySerial.units[0], serial: sn };
   }
   const bySku = await db.products.where("sku").equals(c).first();
+  if (!bySku) {
+    // A part number typed or scanned off the old part.
+    const pn = c.toUpperCase().replace(/\s+/g, "");
+    const byPart = pn.length >= 4 ? await db.products.filter((p) => p.active && !!p.partNumber && p.partNumber.toUpperCase().replace(/\s+/g, "") === pn).first() : undefined;
+    if (byPart) return { product: byPart, unit: byPart.units.find((u) => u.isBase) ?? byPart.units[0] };
+  }
   if (bySku?.active) return { product: bySku, unit: bySku.units.find((u) => u.isBase) ?? bySku.units[0] };
   return null;
 }
@@ -57,7 +63,8 @@ export async function searchProducts(text: string, limit = 12): Promise<Found[]>
   // The scientific name counts too: "باراسيتامول" finds every brand that has it.
   const hits = await db.products.filter((p) => {
     if (!p.active) return false;
-    const hay = p.genericName ? `${norm(p.name)} ${norm(p.genericName)}` : norm(p.name);
+    // Car parts: the part number and the cars it fits count too ("فلتر زيت هيونداي", "26300-35505").
+    const hay = [p.name, p.genericName, p.partNumber, p.fits].filter(Boolean).map((x) => norm(x!)).join(" ");
     return words.every((w) => hay.includes(w));
   }).limit(limit * 8).toArray();
   return foldVariants(hits).slice(0, limit).map(({ item, count }) => (count > 1 ? { ...item, variants: count } : item));
@@ -70,6 +77,11 @@ export async function modelPieces(groupId: string): Promise<CatalogProduct[]> {
 
 /** Other medicines with the same scientific name, for when this one is out or too dear. */
 export async function alternatives(p: CatalogProduct): Promise<CatalogProduct[]> {
+  // A car part: other makers' parts with the same part number.
+  if (p.partNumber) {
+    const pn = p.partNumber.toUpperCase().replace(/\s+/g, "");
+    return db.products.filter((x) => x.active && x.id !== p.id && !!x.partNumber && x.partNumber.toUpperCase().replace(/\s+/g, "") === pn).toArray();
+  }
   if (!p.genericName) return [];
   const g = norm(p.genericName).trim();
   return db.products.filter((x) => x.active && x.id !== p.id && !!x.genericName && norm(x.genericName).trim() === g).toArray();

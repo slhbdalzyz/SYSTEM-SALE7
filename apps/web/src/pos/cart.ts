@@ -1,4 +1,4 @@
-import { applyOffers, computeLine, computeTotals, type CatalogProduct, type CatalogUnit, type Offer, type SaleInput } from "@pos/shared";
+import { applyOffers, computeLine, computeTotals, tierPrice, type CatalogProduct, type CatalogUnit, type CustomerTier, type Offer, type PriceTier, type SaleInput } from "@pos/shared";
 
 export interface CartLine {
   key: string;
@@ -14,7 +14,10 @@ export interface CartLine {
   categoryId?: string | null;
   isBaseUnit?: boolean;
   /** The item's other packings (piece, box…), so the cashier can switch the one sold. Only when it has several. */
-  units?: { id: string; name: string; priceMinor: number; isBase: boolean }[];
+  units?: { id: string; name: string; priceMinor: number; isBase: boolean; tierPrices?: Partial<Record<PriceTier, number>> }[];
+  /** The unit's normal price and its prices for kinds of customer, so the price follows the customer picked. */
+  listPriceMinor?: number;
+  tierPrices?: Partial<Record<PriceTier, number>>;
   productName?: string;
   /** Filled in by priceCart from the running offers; never stored on the line itself. */
   promoMinor?: number;
@@ -32,16 +35,17 @@ export interface CartLine {
   noSerial?: boolean;
 }
 
-export function lineFor(product: CatalogProduct, unit: CatalogUnit, qtyMilli: number): CartLine {
+export function lineFor(product: CatalogProduct, unit: CatalogUnit, qtyMilli: number, tier: CustomerTier | null = null): CartLine {
   return {
     key: crypto.randomUUID(),
     productId: product.id,
     unitId: unit.id,
     name: product.units.length > 1 ? `${product.name} (${unit.name})` : product.name,
     unitName: unit.name,
-    priceMinor: unit.priceMinor,
+    priceMinor: tierPrice(unit, tier),
     qtyMilli,
     discountMinor: 0,
+    ...(unit.tierPrices ? { listPriceMinor: unit.priceMinor, tierPrices: unit.tierPrices } : {}),
     taxBp: product.taxBp,
     isWeighted: product.isWeighted,
     categoryId: product.categoryId,
@@ -50,19 +54,32 @@ export function lineFor(product: CatalogProduct, unit: CatalogUnit, qtyMilli: nu
     ...(product.serialized ? { serialized: true, serials: [] } : {}),
     ...(product.warrantyMonths ? { warrantyMonths: product.warrantyMonths } : {}),
     ...(product.units.length > 1 && !product.isWeighted
-      ? { units: product.units.map((u) => ({ id: u.id, name: u.name, priceMinor: u.priceMinor, isBase: u.isBase })), productName: product.name }
+      ? { units: product.units.map((u) => ({ id: u.id, name: u.name, priceMinor: u.priceMinor, isBase: u.isBase, ...(u.tierPrices ? { tierPrices: u.tierPrices } : {}) })), productName: product.name }
       : {}),
   };
 }
 
 /** The same line sold in another of the item's packings (a box instead of a piece), at that packing's price. */
-export function switchUnit(line: CartLine, unitId: string): CartLine {
+export function switchUnit(line: CartLine, unitId: string, tier: CustomerTier | null = null): CartLine {
   const u = line.units?.find((x) => x.id === unitId);
   if (!u || u.id === line.unitId) return line;
   return {
-    ...line, unitId: u.id, unitName: u.name, priceMinor: u.priceMinor, isBaseUnit: u.isBase, discountMinor: 0,
+    ...line, unitId: u.id, unitName: u.name, priceMinor: tierPrice(u, tier), isBaseUnit: u.isBase, discountMinor: 0,
+    listPriceMinor: u.priceMinor, tierPrices: u.tierPrices,
     name: `${line.productName ?? line.name.replace(/ \([^)]*\)$/, "")} (${u.name})`,
   };
+}
+
+/**
+ * The customer changed (a contractor picked, or taken off): lines still at the old customer's price
+ * move to the new one's. A price the cashier typed stays as it is.
+ */
+export function repriceFor(lines: CartLine[], from: CustomerTier | null, to: CustomerTier | null): CartLine[] {
+  return lines.map((l) => {
+    if (!l.tierPrices) return l;
+    const unit = { priceMinor: l.listPriceMinor ?? l.priceMinor, tierPrices: l.tierPrices };
+    return l.priceMinor === tierPrice(unit, from) ? { ...l, priceMinor: tierPrice(unit, to) } : l;
+  });
 }
 
 /** Adds a line, or raises the quantity of the same counted item already in the cart. */
@@ -101,7 +118,7 @@ export function lineTotal(l: CartLine) {
 }
 
 export function toSaleInput(
-  a: { id: string; number: string; shiftId: string | null; lines: CartLine[]; offers: Offer[]; invoiceDiscountMinor: number; payments: SaleInput["payments"]; customerId?: string | null; employeeId?: string | null; prescription?: SaleInput["prescription"]; orderType?: SaleInput["orderType"]; tableName?: string | null },
+  a: { id: string; number: string; shiftId: string | null; lines: CartLine[]; offers: Offer[]; invoiceDiscountMinor: number; payments: SaleInput["payments"]; customerId?: string | null; employeeId?: string | null; prescription?: SaleInput["prescription"]; orderType?: SaleInput["orderType"]; tableName?: string | null; deal?: Deal | null },
 ): SaleInput {
   const at = new Date();
   const lines = priceCart(a.lines, a.offers, at).lines;
@@ -133,5 +150,16 @@ export function toSaleInput(
     customerId: a.customerId ?? null,
     ...(a.prescription ? { prescription: a.prescription } : {}),
     ...(a.orderType ? { orderType: a.orderType, tableName: a.tableName ?? null } : {}),
+    ...(a.deal?.quoteId ? { quoteId: a.deal.quoteId } : {}),
+    ...(a.deal?.project ? { project: a.deal.project } : {}),
+    ...(a.deal?.delivery ? { delivery: a.deal.delivery } : {}),
   };
+}
+
+/** What goes with a bill beyond its lines: the quote it came from, the building site, a delivery. */
+export interface Deal {
+  quoteId?: string | null;
+  quoteNumber?: number | null;
+  project?: string | null;
+  delivery?: { address: string; phone?: string; note?: string } | null;
 }
