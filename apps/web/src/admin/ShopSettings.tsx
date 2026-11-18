@@ -77,6 +77,7 @@ export function ShopSettings({ call, storeName, onSaved, openAlerts }: { call: C
   const bank = (patch: Partial<Settings["bank"]>) => up({ bank: { ...s.bank, ...patch } });
   const rc = (patch: Partial<Settings["receipt"]>) => up({ receipt: { ...s.receipt, ...patch } });
   const till = (patch: Partial<Settings["till"]>) => up({ till: { ...s.till, ...patch } });
+  const menu = (patch: Partial<Settings["menu"]>) => up({ menu: { ...s.menu, ...patch } });
   const wa = (patch: Partial<Settings["whatsapp"]>) => up({ whatsapp: { ...s.whatsapp, ...patch } });
   const field = (label: string, value: string, set: (v: string) => void, extra: { max?: number; ph?: string; wide?: boolean; num?: boolean } = {}) => (
     <label style={extra.wide ? { gridColumn: "1 / -1" } : undefined}>
@@ -197,6 +198,13 @@ export function ShopSettings({ call, storeName, onSaved, openAlerts }: { call: C
           %
           <span className="muted">{s.till.cashierMaxDiscountPct === 0 ? "ما يقدرش يعطي خصم" : ""}</span>
         </label>
+      </section>
+
+      <section className="card stack">
+        <b>📋 القائمة</b>
+        <div className="checks col">
+          <Check on={!s.menu.hidePaper} set={(v) => menu({ hidePaper: !v })}>اعرض «📒 من الدفتر للنظام» في القائمة <small className="muted">(اخفيها لما تخلص نقل الدفتر)</small></Check>
+        </div>
       </section>
 
       <section className="card stack">
