@@ -27,14 +27,15 @@ export function DemoBar() {
     session.staffToken = null;
     location.reload();
   }
-  let restaurant = false;
+  let type: "grocery" | "restaurant" | "electronics" = "grocery";
   try {
-    restaurant = localStorage.getItem("pos.demoType") === "restaurant";
+    const t = localStorage.getItem("pos.demoType");
+    if (t === "restaurant" || t === "electronics") type = t;
   } catch {
     /* storage blocked */
   }
-  async function switchType() {
-    const next = restaurant ? "grocery" : "restaurant";
+  const restaurant = type === "restaurant";
+  async function switchType(next: typeof type) {
     const { setDemoBusiness } = await import("./server");
     await setDemoBusiness(next);
     try {
@@ -42,7 +43,7 @@ export function DemoBar() {
     } catch {
       /* storage blocked */
     }
-    if (next === "grocery" && kitchen) return switchDevice("pos");
+    if (next !== "restaurant" && kitchen) return switchDevice("pos");
     location.reload();
   }
   const q = new URLSearchParams(location.search);
@@ -60,12 +61,14 @@ export function DemoBar() {
         <span>
           الكاشير: <b>أحمد</b> رقمه <b className="num">1234</b> · المالك رقمه <b className="num">9999</b> · الإدارة:{" "}
           <b className="num">owner@demo.ly</b> / <b className="num">demo12345</b> (المحاسبة: <b className="num">mona@demo.ly</b>، مدخل البيانات: <b className="num">khaled@demo.ly</b>، بنفس كلمة السر) · باركودات للتجربة: <b className="num">6191234500042</b> (كرتونة بيبسي)،{" "}
-          <b className="num">2000101012504</b> (ميزان: طماطم 1.250 كغ)
+          <b className="num">2000101012504</b> (ميزان: طماطم 1.250 كغ){type === "electronics" && <> · IMEI للتجربة: <b className="num">354678110000010</b> (سامسونج A15)</>}
         </span>
       )}
       <span className="spacer" />
       <a href={platform ? location.pathname : "?app=platform"}><button type="button">{platform ? "شاشة المحل" : "لوحة المنصة"}</button></a>
-      {!platform && <button onClick={() => void switchType()}>{restaurant ? "🛒 رجوع للسوبرماركت" : "🍽️ جرّب كمطعم"}</button>}
+      {!platform && type !== "grocery" && <button onClick={() => void switchType("grocery")}>🛒 رجوع للسوبرماركت</button>}
+      {!platform && type !== "restaurant" && <button onClick={() => void switchType("restaurant")}>🍽️ جرّب كمطعم</button>}
+      {!platform && type !== "electronics" && <button onClick={() => void switchType("electronics")}>📱 جرّب كمحل هواتف</button>}
       {!platform && restaurant && <button onClick={() => switchDevice(kitchen ? "pos" : "kitchen")}>{kitchen ? "رجوع للكاشير" : "👨‍🍳 شاشة المطبخ"}</button>}
       {!platform && !kitchen && <button onClick={() => switchDevice(checker ? "pos" : "price_checker")}>{checker ? "رجوع للكاشير" : "جرّب قارئ الأسعار"}</button>}
       <button onClick={() => setOpen(!open)}>{open ? "إخفاء" : "عرض"}</button>

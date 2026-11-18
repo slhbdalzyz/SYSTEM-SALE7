@@ -2293,3 +2293,108 @@ describe("restaurant: tables, notes, the kitchen screen and recipes", () => {
     expect(r.kitchen.avgMinutes).toBe(0);
   });
 });
+
+describe("electronics: phones by IMEI, warranty and repairs", () => {
+  let t: string;
+  let till: string;
+  let shift: string;
+  let store: string;
+  let phone: { id: string; unit: string };
+  const fresh = async (url: string, body: unknown) => (await app.inject({ method: "POST", url, payload: body as object, remoteAddress: "10.0.2.98" })).json();
+  const A = "490154203237518";
+  const B = "352099001761481";
+
+  it("gives a new phone shop its departments", async () => {
+    const r = await fresh("/auth/register", { businessName: "هواتف النجم", storeName: "الرئيسي", ownerName: "أنس", email: "phones@test.ly", password: "password123", businessType: "electronics" });
+    t = r.token;
+    store = r.storeId;
+    const names = (await call("GET", "/categories", t)).body.map((c: { name: string }) => c.name);
+    expect(names).toEqual(expect.arrayContaining(["هواتف", "شواحن وكوابل", "قطع غيار صيانة"]));
+    const d = await call("POST", "/devices", t, { storeId: store, name: "كاشير" });
+    const u = await call("POST", "/users", t, { name: "مدير المحل", role: "manager", pin: "4321" });
+    till = (await fresh("/auth/pin", { deviceToken: d.body.deviceToken, userId: u.body.id, pin: "4321" })).token;
+    shift = randomUUID();
+    await call("POST", "/shifts/open", till, { id: shift, openingCashMinor: 0 });
+  });
+
+  it("takes in phones by their numbers, and the till gets the numbers in stock", async () => {
+    const x = await call("POST", "/products", t, { name: "سامسونج A15", serialized: true, warrantyMonths: 12, costMinor: 450000, units: [{ name: "حبة", priceMinor: 550000, isBase: true }] });
+    expect(x.status).toBe(200);
+    phone = { id: x.body.id, unit: x.body.units[0].id };
+    const add = await call("POST", "/serials", t, { productId: phone.id, serials: [A, `${B.slice(0, 2)}-${B.slice(2)}`, A], storeId: store, addStock: true });
+    expect(add.body).toEqual({ added: [A, B], existing: [] });
+    expect((await call("POST", "/serials", t, { productId: phone.id, serials: [A] })).body.existing).toEqual([{ serial: A, product: "سامسونج A15", status: "in_stock" }]);
+    const synced = (await call("GET", "/sync/catalog", till)).body.products.find((p: { id: string }) => p.id === phone.id);
+    expect(synced).toMatchObject({ serialized: true, warrantyMonths: 12, serials: [A, B] });
+    const sum = (await call("GET", "/serials/summary", t)).body;
+    expect(sum).toEqual([{ id: phone.id, name: "سامسونج A15", warrantyMonths: 12, inStock: 2, sold: 0, stockMilli: 2000 }]);
+  });
+
+  it("sells a phone by its IMEI with a year's warranty, and flags a sale without the number", async () => {
+    const at = "2026-11-18T10:00:00.000Z";
+    const sale = (number: string, serials?: string[]) => ({
+      id: randomUUID(), number, shiftId: shift, createdAt: at,
+      lines: [{ productId: phone.id, unitId: phone.unit, name: "سامسونج A15", qtyMilli: 1000, priceMinor: 550000, ...(serials ? { serials } : {}) }],
+      payments: [{ method: "cash", amountMinor: 550000 }], totalMinor: 550000,
+    });
+    const s1 = sale("E-1", [A]);
+    expect((await call("POST", "/sales/batch", till, { sales: [s1] })).body.results[0].status).toBe("accepted");
+    const line = (await db.query(`SELECT serials, warranty_until::text AS w FROM sale_lines WHERE sale_id = $1`, [s1.id])).rows[0];
+    expect(line).toEqual({ serials: [A], w: "2027-11-18" });
+    const look = (await call("GET", `/serials/lookup?q=${A.slice(-6)}`, t)).body;
+    expect(look.pieces[0]).toMatchObject({ serial: A, status: "sold", product: "سامسونج A15", warrantyUntil: "2027-11-18", sale: { number: "E-1", priceMinor: 550000 } });
+    const synced = (await call("GET", "/sync/catalog", till)).body.products.find((p: { id: string }) => p.id === phone.id);
+    expect(synced.serials).toEqual([B]);
+
+    // The same phone sold again, and one sold without its number: kept, and logged for the owner.
+    await call("POST", "/sales/batch", till, { sales: [sale("E-2", [A]), sale("E-3")] });
+    const logged = (await db.query(`SELECT action FROM audit_log WHERE tenant_id = (SELECT tenant_id FROM sales WHERE id = $1) AND action LIKE 'sale.serial%' ORDER BY id`, [s1.id])).rows.map((r) => r.action);
+    expect(logged).toEqual(["sale.serial_twice", "sale.serial_missing"]);
+
+    // Returned: the phone goes back in stock under the same number.
+    const l1 = (await db.query(`SELECT id FROM sale_lines WHERE sale_id = $1`, [s1.id])).rows[0].id;
+    const ret = await call("POST", "/returns", till, { id: randomUUID(), number: "E-R1", originalSaleId: s1.id, shiftId: shift, lines: [{ saleLineId: l1, qtyMilli: 1000 }], refundMethod: "cash", reason: "عيب مصنع" });
+    expect(ret.status).toBe(200);
+    // E-2 sold the same number later, so the row now points at E-2 and stays sold; B was never sold.
+    const rows = (await call("GET", `/serials?productId=${phone.id}`, t)).body.map((r: { serial: string; status: string }) => [r.serial, r.status]);
+    expect(rows).toEqual(expect.arrayContaining([[B, "in_stock"], [A, "sold"]]));
+  });
+
+  it("puts a phone sold once back on the shelf when it is returned", async () => {
+    const C = "356938035643809";
+    await call("POST", "/serials", t, { productId: phone.id, serials: [C], storeId: store, addStock: true });
+    const s = { id: randomUUID(), number: "E-9", shiftId: shift, createdAt: new Date().toISOString(),
+      lines: [{ productId: phone.id, unitId: phone.unit, name: "سامسونج A15", qtyMilli: 1000, priceMinor: 550000, serials: [C] }],
+      payments: [{ method: "cash", amountMinor: 550000 }], totalMinor: 550000 };
+    await call("POST", "/sales/batch", till, { sales: [s] });
+    const l = (await db.query(`SELECT id FROM sale_lines WHERE sale_id = $1`, [s.id])).rows[0].id;
+    await call("POST", "/returns", till, { id: randomUUID(), number: "E-R9", originalSaleId: s.id, shiftId: shift, lines: [{ saleLineId: l, qtyMilli: 1000 }], refundMethod: "cash", reason: "غير رأيه" });
+    const look = (await call("GET", `/serials/lookup?q=${C}`, t)).body.pieces[0];
+    expect(look).toMatchObject({ serial: C, status: "in_stock", sale: null });
+    expect(look.returnedAt).toBeTruthy();
+    // Only a piece in stock can be taken off the list.
+    expect((await call("DELETE", `/serials/${look.id}`, t)).status).toBe(200);
+  });
+
+  it("takes a device in for repair and follows it to the customer", async () => {
+    const r = await call("POST", "/repairs", t, { storeId: store, customerName: "سالم", phone: "0912345678", device: "آيفون 11", serial: B, problem: "الشاشة مكسورة", accessories: "بدون شاحن", estimateMinor: 150000, depositMinor: 50000 });
+    expect(r.body).toMatchObject({ number: 1, status: "received", serial: B, depositMinor: 50000 });
+    expect((await call("POST", "/repairs", t, { customerName: "علي", device: "لابتوب", problem: "ما يشتغلش", estimateMinor: 1000, depositMinor: 5000 })).status).toBe(400);
+    const id = r.body.id;
+    expect((await call("PATCH", `/repairs/${id}`, t, { status: "delivered" })).status).toBe(400);
+    await call("PATCH", `/repairs/${id}`, t, { status: "working", technician: "محمود" });
+    const ready = await call("PATCH", `/repairs/${id}`, t, { status: "ready", finalMinor: 120000 });
+    expect(ready.body).toMatchObject({ status: "ready", finalMinor: 120000, technician: "محمود" });
+    expect(ready.body.readyAt).toBeTruthy();
+    let list = (await call("GET", "/repairs", t)).body;
+    expect(list.stats).toMatchObject({ inShop: 0, ready: 1, depositsMinor: 50000 });
+    expect((await call("GET", "/repairs?q=0912", t)).body.rows).toHaveLength(1);
+    await call("PATCH", `/repairs/${id}`, t, { status: "delivered" });
+    list = (await call("GET", "/repairs", t)).body;
+    expect(list.rows).toHaveLength(0);
+    expect(list.stats).toMatchObject({ monthMinor: 120000, monthCount: 1 });
+    expect((await call("PATCH", `/repairs/${id}`, t, { estimateMinor: 5 })).status).toBe(400);
+    // The phone's number brings up its repair too.
+    expect((await call("GET", `/serials/lookup?q=${B}`, t)).body.repairs[0]).toMatchObject({ number: 1, status: "delivered" });
+  });
+});

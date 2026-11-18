@@ -1,4 +1,4 @@
-import { DEFAULT_SCALE_CONFIG, foldVariants, parseScaleBarcode, type CatalogProduct, type CatalogUnit, type ScaleBarcodeConfig } from "@pos/shared";
+import { DEFAULT_SCALE_CONFIG, foldVariants, normSerial, parseScaleBarcode, type CatalogProduct, type CatalogUnit, type ScaleBarcodeConfig } from "@pos/shared";
 import { db } from "./localdb";
 
 export interface Hit {
@@ -6,6 +6,8 @@ export interface Hit {
   unit: CatalogUnit;
   /** Set when the code itself carried a weight (scale label). */
   qtyMilli?: number;
+  /** Set when the code was the IMEI / serial of one piece in stock. */
+  serial?: string;
 }
 
 /**
@@ -30,6 +32,12 @@ export async function findByCode(code: string, scale: ScaleBarcodeConfig = DEFAU
       if (s.mode === "weight") return { product, unit, qtyMilli: s.qtyMilli };
       if (unit.priceMinor > 0) return { product, unit, qtyMilli: Math.round((s.priceMinor * 1000) / unit.priceMinor) };
     }
+  }
+  // A phone's own IMEI or serial, as printed on its box.
+  const sn = normSerial(c);
+  if (sn.length >= 5) {
+    const bySerial = await db.products.where("serials").equals(sn).first();
+    if (bySerial?.active) return { product: bySerial, unit: bySerial.units.find((u) => u.isBase) ?? bySerial.units[0], serial: sn };
   }
   const bySku = await db.products.where("sku").equals(c).first();
   if (bySku?.active) return { product: bySku, unit: bySku.units.find((u) => u.isBase) ?? bySku.units[0] };

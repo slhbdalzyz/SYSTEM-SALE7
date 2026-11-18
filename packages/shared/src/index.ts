@@ -19,3 +19,4 @@ export * from "./variants";
 export * from "./pharmacy";
 export * from "./butcher";
 export * from "./restaurant";
+export * from "./electronics";

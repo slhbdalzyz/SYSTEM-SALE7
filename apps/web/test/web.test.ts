@@ -252,3 +252,35 @@ describe("reading an .xlsx file", async () => {
     expect(mapSheet("customers", rows).rows).toEqual([{ name: "محمد & أولاده", balanceMinor: 125500 }, { name: "سالم", balanceMinor: 40000 }]);
   });
 });
+
+describe("phones by IMEI", async () => {
+  const { toSaleInput } = await import("../src/pos/cart");
+  const { receiptRows } = await import("../src/hardware/receiptImage");
+  const phone: CatalogProduct = {
+    ...water, id: "61111111-1111-4111-8111-111111111111", name: "سامسونج A15", sku: null, serialized: true, warrantyMonths: 12, serials: ["354678110000010", "354678110000028"],
+    units: [{ id: "71111111-1111-4111-8111-111111111111", name: "حبة", factorMilli: 1000, priceMinor: 650000, isBase: true, barcodes: [] }],
+  };
+
+  it("finds the phone by the IMEI on its box, and keeps each number once on the line", async () => {
+    await storeCatalog([water, phone], false);
+    const hit = await findByCode("35-467811-000001-0");
+    expect(hit).toMatchObject({ serial: "354678110000010", product: { id: phone.id } });
+    let r = addLine([], { ...lineFor(phone, phone.units[0], 1000), serials: ["354678110000010"] });
+    r = addLine(r.lines, { ...lineFor(phone, phone.units[0], 1000), serials: ["354678110000028"] });
+    expect(r.lines).toHaveLength(1);
+    expect(r.lines[0]).toMatchObject({ qtyMilli: 2000, serialized: true, serials: ["354678110000010", "354678110000028"] });
+    // A number sold no longer comes up once the till has the new stock list.
+    await storeCatalog([{ ...phone, serials: ["354678110000028"] }], false);
+    expect(await findByCode("354678110000010")).toBeNull();
+  });
+
+  it("prints each IMEI and the warranty's last day on the receipt", () => {
+    const line = { ...lineFor(phone, phone.units[0], 1000), serials: ["354678110000010"] };
+    const sale = toSaleInput({ id: phone.id, number: "P1-0100", shiftId: null, lines: [line], offers: [], invoiceDiscountMinor: 0, payments: [{ method: "cash", amountMinor: 650000 }] });
+    expect(sale.lines[0]).toMatchObject({ serials: ["354678110000010"], warrantyMonths: 12 });
+    const t = JSON.stringify(receiptRows({ storeName: "المحل", deviceName: "كاشير 1", cashierName: "أحمد", sale: { ...sale, createdAt: "2026-11-18T10:00:00Z" } }));
+    expect(t).toContain("354678110000010");
+    expect(t).toContain("ضمان سنة");
+    expect(t).toContain("حتى 18/11/2027");
+  });
+});

@@ -61,6 +61,10 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
   const [pharmacy, setPharmacy] = useState(false);
   const [generic, setGeneric] = useState("");
   const [rx, setRx] = useState(false);
+  // Electronics: each phone has its own serial / IMEI, and a warranty from the day it is sold.
+  const [electronics, setElectronics] = useState(false);
+  const [serialized, setSerialized] = useState(false);
+  const [warranty, setWarranty] = useState("0");
   // Clothing and shoes: one item per colour and size, each with its own barcode and stock.
   const [variants, setVariants] = useState(false);
   const [sizes, setSizes] = useState<string[]>([]);
@@ -69,6 +73,7 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
   useEffect(() => void call<Dept[]>("/categories").then(setCats), [call]);
   useEffect(() => void call<{ tenant: { business_type?: string } }>("/me").then((m) => {
     if (m.tenant.business_type === "clothing") { setVariants(true); setExpiry(false); }
+    if (m.tenant.business_type === "electronics") { setElectronics(true); setExpiry(false); }
     if (m.tenant.business_type === "pharmacy") { setPharmacy(true); setExpiry(true); setBase("شريط"); setPacks([{ name: "علبة", qty: "", barcode: "" }]); }
   }).catch(() => {}), [call]);
   const combos = Math.max(sizes.length, 1) * Math.max(colors.length, 1);
@@ -102,7 +107,7 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
       }
       const p = await call<CatalogProduct>("/products", {
         body: {
-          name: name.trim(), categoryId: dept || null, isWeighted: weighted, autoCode: true, trackExpiry: !!expiry, quick, genericName: generic.trim() || null, rx,
+          name: name.trim(), categoryId: dept || null, isWeighted: weighted, autoCode: true, trackExpiry: !!expiry, quick, genericName: generic.trim() || null, rx, serialized: serialized && !weighted, warrantyMonths: Number(warranty) || 0,
           minStockMilli: alert.on ? toMinor((Number(alert.qty) || 0) * alertFactor) : 0,
           units: [
             { name: baseName, factorMilli: 1000, priceMinor: 0, isBase: true, barcodes: !weighted && barcode ? [barcode] : [] },
@@ -132,6 +137,19 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
             </label>
           </div>
         )}
+        {electronics && !variants && (
+          <div className="row" style={{ alignItems: "end" }}>
+            <label className="row" style={{ color: "var(--ink)", flex: 1, minWidth: 220 }}>
+              <input type="checkbox" style={{ width: "auto" }} checked={serialized} onChange={(e) => setSerialized(e.target.checked)} /> 📱 كل حبة برقمها (IMEI أو رقم تسلسلي)
+            </label>
+            <label style={{ width: 160 }}>الضمان
+              <select value={warranty} onChange={(e) => setWarranty(e.target.value)}>
+                {[["0", "بدون ضمان"], ["1", "شهر"], ["3", "3 شهور"], ["6", "6 شهور"], ["12", "سنة"], ["24", "سنتين"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            </label>
+          </div>
+        )}
+        {electronics && serialized && <div className="hint">الكاشير يطلب رقم الجهاز وقت البيع، ويطبعه في الفاتورة مع تاريخ نهاية الضمان. الأرقام تدخلها من «📱 الأجهزة والصيانة».</div>}
         {pharmacy && generic.trim() && <div className="hint">في الكاشير تقدر تبحث بالاسم العلمي، ويطلعوا كل الأدوية اللي فيها نفس المادة كبدائل.</div>}
 
         <div className="row" style={{ alignItems: "end" }}>

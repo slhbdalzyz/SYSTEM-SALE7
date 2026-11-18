@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { creditRoom, formatMoney, formatQty, pointsEarned, pointsFor, readShopSettings, type CatalogCustomer, type CatalogProduct, type LoyaltySettings, type Offer, type PaymentMethod, type QuickGroup, type QuickKey, type ShopSettings, expiryState, variantBaseName, type Prescription, kitchenDelta, sentSnapshot, ORDER_TYPE_LABELS, ORDER_TYPE_ICONS, type OrderType, type SentLine } from "@pos/shared";
+import { creditRoom, formatMoney, formatQty, pointsEarned, pointsFor, readShopSettings, type CatalogCustomer, type CatalogProduct, type LoyaltySettings, type Offer, type PaymentMethod, type QuickGroup, type QuickKey, type ShopSettings, expiryState, variantBaseName, type Prescription, kitchenDelta, sentSnapshot, ORDER_TYPE_LABELS, ORDER_TYPE_ICONS, type OrderType, type SentLine, serialsMissing } from "@pos/shared";
 import { api } from "../api";
 import { db, getMeta, nextInvoiceNumber, setMeta, type HeldCart, type LocalShift } from "../localdb";
 import { alternatives, findByCode, searchProducts, type Found } from "../lookup";
 import { VariantPicker } from "./VariantPicker";
 import { RxDialog } from "./RxDialog";
+import { SerialDialog } from "./SerialDialog";
 import { session, tokenClaims } from "../session";
 import { loadExpiry, loadOffers, loadTables, onSync, refreshCounts, startSyncLoop, syncNow, type DiningTable, type SyncState } from "../sync";
 import { NoteDialog, OrderBar, TablesDialog, type Order } from "./restaurant";
@@ -46,6 +47,7 @@ type Dialog =
   | { kind: "prefs" }
   | { kind: "variant"; groupId: string; times: number }
   | { kind: "rx" }
+  | { kind: "serial"; key: string; paying?: boolean }
   | { kind: "tables" }
   | { kind: "note"; key: string }
   | null;
@@ -320,11 +322,16 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
       setDialog({ kind: "price", key: line.key, required: true });
       return;
     }
+    // A phone sold by its own number: the same number twice is the same phone.
+    if (line.serials?.length && lines.some((l) => l.serials?.some((x) => line.serials!.includes(x)))) return flash(`الجهاز ${line.serials[0]} موجود في الفاتورة`, true);
     const r = addLine(lines, line);
     setLines(r.lines);
     setSelected(r.key);
     sound("ok", prefs.sound);
     setLastPaid(null);
+    // Its number was not scanned: ask for it now, while the box is in the cashier's hand.
+    const added = r.lines.find((l) => l.key === r.key);
+    if (added?.serialized && !added.noSerial && serialsMissing(added) > 0) setTimeout(() => setDialog({ kind: "serial", key: r.key }), 0);
   }
 
   async function scan(raw: string) {
@@ -339,7 +346,8 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     }
     const hit = await findByCode(text);
     if (hit) {
-      if (hit.qtyMilli) put(lineFor(hit.product, hit.unit, hit.qtyMilli));
+      if (hit.serial) put({ ...lineFor(hit.product, hit.unit, 1000), serials: [hit.serial] });
+      else if (hit.qtyMilli) put(lineFor(hit.product, hit.unit, hit.qtyMilli));
       else if (hit.product.isWeighted) setDialog({ kind: "weight", product: hit.product });
       else put(lineFor(hit.product, hit.unit, Math.round(times * 1000)));
       setCode("");
@@ -376,7 +384,8 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   }
 
   function changeQty(key: string, delta: number) {
-    setLines((ls) => ls.flatMap((l) => (l.key !== key ? [l] : l.qtyMilli + delta <= 0 ? [] : [{ ...l, qtyMilli: l.qtyMilli + delta }])));
+    // Fewer phones: the last numbers scanned come off with them.
+    setLines((ls) => ls.flatMap((l) => (l.key !== key ? [l] : l.qtyMilli + delta <= 0 ? [] : [{ ...l, qtyMilli: l.qtyMilli + delta, ...(l.serials ? { serials: l.serials.slice(0, Math.max(0, Math.round((l.qtyMilli + delta) / 1000))) } : {}) }])));
   }
 
   function removeLine(key: string) {
@@ -623,6 +632,8 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   function startPay() {
     if (!lines.length || !shift) return;
     if (lines.some((l) => l.rx) && !prescription) return setDialog({ kind: "rx" });
+    const noNumber = lines.find((l) => l.serialized && !l.noSerial && serialsMissing(l) > 0);
+    if (noNumber) return setDialog({ kind: "serial", key: noNumber.key, paying: true });
     if (exchange && totals.total <= exchange.creditMinor) return void pay([{ method: "cash", amountMinor: totals.total }]);
     setDialog({ kind: "pay" });
   }
@@ -918,6 +929,11 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
                           </div>
                         )}
                         {l.note && <div className="line-note">📝 {l.note}</div>}
+                        {l.serialized && (
+                          <button type="button" className="ghost small serial-tag" onClick={(e) => { e.stopPropagation(); setDialog({ kind: "serial", key: l.key }); }}>
+                            📱 {l.serials?.length ? l.serials.join("، ") : l.noSerial ? "بدون رقم" : "امسح رقم الجهاز"}{serialsMissing(l) > 0 && l.serials?.length ? ` (ناقص ${serialsMissing(l)})` : ""}
+                          </button>
+                        )}
                         {restaurant && sent[l.key] && sent[l.key].qtyMilli === l.qtyMilli && (sent[l.key].note || null) === (l.note || null) && <div className="muted small">👨‍🍳 في المطبخ</div>}
                         {l.discountMinor > 0 && <div className="muted">خصم {formatMoney(l.discountMinor)}</div>}
                         {(l.promoMinor ?? 0) > 0 && <div className="offer-tag">🏷 {l.offerName} −{formatMoney(l.promoMinor!)}</div>}
@@ -1131,6 +1147,29 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
           onRemove={() => { setLines((ls) => ls.filter((l) => !l.rx)); setSelected(null); setDialog(null); flash("شلنا الأدوية اللي تحتاج وصفة"); focusScan(); }}
           onClose={() => { setDialog(null); focusScan(); }} />
       )}
+      {dialog?.kind === "serial" && (() => {
+        const line = lines.find((l) => l.key === dialog.key);
+        if (!line) return null;
+        const close = () => { setDialog(null); focusScan(); };
+        const after = (patch: Partial<CartLine>) => {
+          const next = lines.map((l) => (l.key === line.key ? { ...l, ...patch } : l));
+          setLines(next);
+          setDialog(null);
+          // Paying: go on to the next phone without a number, then to the payment.
+          if (dialog.paying) {
+            const more = next.find((l) => l.serialized && !l.noSerial && serialsMissing(l) > 0);
+            if (more) return setDialog({ kind: "serial", key: more.key, paying: true });
+            if (exchange) { focusScan(); return flash("كل الأجهزة عليها أرقام، اضغط دفع"); }
+            return setDialog({ kind: "pay" });
+          }
+          focusScan();
+        };
+        return (
+          <SerialDialog line={line} taken={lines.filter((l) => l.key !== line.key).flatMap((l) => l.serials ?? [])} onClose={close}
+            onSave={(serials) => after({ serials, noSerial: false })}
+            onSkip={() => after({ noSerial: true })} />
+        );
+      })()}
       {dialog?.kind === "variant" && (
         <VariantPicker groupId={dialog.groupId} onClose={() => { setDialog(null); focusScan(); }}
           onPick={(p) => { const times = dialog.times; setDialog(null); pick(p, times); }} />

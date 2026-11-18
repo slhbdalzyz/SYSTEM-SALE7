@@ -35,6 +35,8 @@ export const BACKUP_TABLES: { name: string; key: "uuid" | "bigint"; omit?: strin
   { name: "stock_transfers", key: "uuid" },
   { name: "stock_transfer_lines", key: "uuid" },
   { name: "stock_movements", key: "uuid" },
+  { name: "product_serials", key: "uuid" },
+  { name: "repairs", key: "uuid" },
   { name: "expenses", key: "uuid" },
   { name: "payroll_months", key: "uuid" },
   { name: "payroll_entries", key: "uuid" },

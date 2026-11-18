@@ -735,3 +735,4 @@ a.btn.primary { background: var(--brand); color: var(--brand-ink); border-color:
 .ticket .note { color: var(--warn); font-size: .95rem; text-decoration: none; }
 .ticket button { padding: 12px; font-size: 1.05rem; }
 .kitchen-done { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.serial-tag { display: block; padding: 2px 6px; margin-top: 2px; font-size: .82rem; color: var(--brand); text-align: start; }

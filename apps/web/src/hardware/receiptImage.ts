@@ -1,6 +1,6 @@
 // Draws a receipt on a canvas the width of the paper. The browser does the Arabic shaping,
 // so the printer only ever gets black and white dots.
-import { METHOD_LABELS, ORDER_TYPE_LABELS, computeLine, computeTotals, formatMoney, formatQty } from "@pos/shared";
+import { METHOD_LABELS, ORDER_TYPE_LABELS, computeLine, computeTotals, formatMoney, formatQty, warrantyLabel, warrantyUntil } from "@pos/shared";
 import type { ReceiptData } from "../pos/Receipt";
 
 export type Row =
@@ -141,12 +141,16 @@ export function receiptRows(d: ReceiptData): Row[] {
     ...(d.customerName ? [{ kind: "pair", right: "العميل", left: d.customerName } as Row, { kind: "rule" } as Row] : []),
     ...(d.employeeName ? [{ kind: "pair", right: "على راتب", left: d.employeeName } as Row, { kind: "rule" } as Row] : []),
     ...(s.orderType ? [{ kind: "pair", right: ORDER_TYPE_LABELS[s.orderType], left: s.tableName ?? "", bold: true } as Row, { kind: "rule" } as Row] : []),
-    ...s.lines.map((l): Row => ({
+    ...s.lines.flatMap((l): Row[] => [{
       kind: "item",
       name: l.note ? `${l.name} («${l.note}»)` : l.name,
       detail: `${formatQty(l.qtyMilli, l.qtyMilli % 1000 !== 0)} × ${formatMoney(l.priceMinor, "")}${l.discountMinor ? ` (خصم ${formatMoney(l.discountMinor, "")})` : ""}${l.promoMinor ? ` (${l.offerName ?? "عرض"} −${formatMoney(l.promoMinor, "")})` : ""}`,
       amount: formatMoney(computeLine(l).total, ""),
-    })),
+    },
+    // Phones: the number of each one sold, and until when it is under warranty.
+    ...(l.serials ?? []).map((sn): Row => ({ kind: "pair", right: "IMEI / S.N", left: sn })),
+    ...(l.warrantyMonths ? [{ kind: "pair", right: warrantyLabel(l.warrantyMonths), left: `حتى ${(warrantyUntil(s.createdAt, l.warrantyMonths) ?? "").split("-").reverse().join("/")}` } as Row] : []),
+    ]),
     { kind: "rule" },
     ...(t.discount - promo > 0 ? [{ kind: "pair", right: "الخصم", left: formatMoney(t.discount - promo) } as Row] : []),
     ...(r?.showSavings !== false && promo > 0 ? [{ kind: "pair", right: "وفّرت من العروض", left: formatMoney(promo) } as Row] : []),
