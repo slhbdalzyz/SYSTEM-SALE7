@@ -1,4 +1,4 @@
-import { effectivePermissions, newTotpSecret, readShopSettings, resolveFeatures, totpUri, verifyTotp } from "@pos/shared";
+import { BUSINESS_TYPES, effectivePermissions, newTotpSecret, readShopSettings, resolveFeatures, totpUri, verifyTotp } from "@pos/shared";
 import type { FastifyInstance } from "fastify";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
@@ -11,7 +11,7 @@ const registerSchema = z.object({
   storeName: z.string().min(2).max(120),
   phone: z.string().max(40).optional(),
   planCode: z.string().max(30).optional(),
-  businessType: z.enum(["grocery", "clothing", "pharmacy", "butcher", "restaurant", "electronics", "other"]).default("grocery"),
+  businessType: z.enum(BUSINESS_TYPES).default("grocery"),
   city: z.string().trim().max(80).optional(),
   ownerName: z.string().min(2).max(120),
   email: z.string().email().max(200),
@@ -50,7 +50,7 @@ export async function authRoutes(app: FastifyInstance) {
         `INSERT INTO users (tenant_id, name, email, password_hash, role) VALUES ($1,$2,$3,$4,'owner') RETURNING id`,
         [tid, b.ownerName, email, hash],
       );
-      const departments = { clothing: "pos_clothing_departments", pharmacy: "pos_pharmacy_departments", butcher: "pos_butcher_departments", restaurant: "pos_restaurant_departments", electronics: "pos_electronics_departments" }[b.businessType as string] ?? "pos_default_departments";
+      const departments = { clothing: "pos_clothing_departments", pharmacy: "pos_pharmacy_departments", butcher: "pos_butcher_departments", restaurant: "pos_restaurant_departments", electronics: "pos_electronics_departments", building: "pos_building_departments", auto_parts: "pos_auto_parts_departments", wholesale: "pos_wholesale_departments", stationery: "pos_stationery_departments", perfume: "pos_perfume_departments", bakery: "pos_bakery_departments", furniture: "pos_furniture_departments" }[b.businessType as string] ?? "pos_default_departments";
       await tx.query(`SELECT ${departments}($1)`, [tid]);
       await audit(tx, { tenantId: tid, userId: u.rows[0].id, action: "tenant.register" });
       return { tid, sid: s.rows[0].id as string, uid: u.rows[0].id as string };
