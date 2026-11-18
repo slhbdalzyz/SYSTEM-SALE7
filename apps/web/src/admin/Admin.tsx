@@ -36,7 +36,7 @@ import { Announcements, Support } from "./Support";
 
 export interface Me {
   user: { id: string; name: string; role: string; job_title?: string | null; permissions: Permission[] };
-  tenant: { id: string; name: string; currency: string; business_type?: string; features?: Record<Feature, boolean> };
+  tenant: { id: string; name: string; currency: string; business_type?: string; features?: Record<Feature, boolean>; settings?: { menu?: { hidePaper?: boolean } } };
   stores: { id: string; name: string; address: string | null; receipt_footer: string | null; active: boolean }[];
 }
 
@@ -131,6 +131,8 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
     // Daily prices and cutting carcasses: for butchers, and grocers with a meat and vegetable counter.
     if (t === "butcher" && !["butcher", "grocery"].includes(me.tenant.business_type ?? "grocery")) return false;
     if (t === "restaurant" && me.tenant.business_type !== "restaurant") return false;
+    // Put away by the owner once the shop moved off paper; brought back from the settings.
+    if (t === "paper" && me.tenant.settings?.menu?.hidePaper) return false;
     const f = FEATURE_OF[t];
     if (f && me.tenant.features && me.tenant.features[f] === false) return false;
     const n = NEEDS[t];
@@ -190,7 +192,7 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
           {shown === "reports" && <Reports call={call} storeId={store.id} stores={open} />}
           {shown === "products" && <Products call={call} storeId={store.id} onLabels={(d) => { setLabelDraft(d); setTab("labels"); }} />}
           {shown === "purchasing" && <Purchasing call={call} storeId={store.id} onLabels={(d) => { setLabelDraft(d); setTab("labels"); }} />}
-          {shown === "paper" && <FromPaper call={call} storeId={store.id} open={setTab} />}
+          {shown === "paper" && <FromPaper call={call} storeId={store.id} open={setTab} onHide={async () => { await call("/settings/menu", { method: "PATCH", body: { hidePaper: true } }); await loadMe(); setTab("home"); }} />}
           {shown === "counts" && <Counts call={call} storeId={store.id} canApply={isOwner || me.user.role === "manager"} />}
           {shown === "audit" && <AuditLog call={call} />}
           {shown === "quick" && <QuickKeys call={call} stores={open} />}

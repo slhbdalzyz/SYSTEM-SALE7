@@ -59,6 +59,11 @@ export const shopSettingsSchema = z.object({
     /** Ask before clearing a cart with items in it. */
     confirmClear: z.boolean().default(true),
   }).default({}),
+  /** Side-menu pages the owner put away once done with them. */
+  menu: z.object({
+    /** «من الدفتر للنظام»: hidden after the shop moved off paper. */
+    hidePaper: z.boolean().default(false),
+  }).default({}),
 });
 export type ShopSettings = z.infer<typeof shopSettingsSchema>;
 

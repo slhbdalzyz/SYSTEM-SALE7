@@ -1544,6 +1544,34 @@ describe("moving a shop from paper", () => {
     expect((await call("POST", "/import/products", cashierToken, { storeId: store, rows })).status).toBe(403);
   });
 
+  it("adds a box of 24 to an item, at its own price or 24 × the piece, with its own barcode", async () => {
+    const r = await call("POST", "/import/products", t, { storeId: store, rows: [
+      { name: "بيبسي علبة", barcode: "6281000000028", unit: "علبة", priceMinor: 1500, qtyMilli: 48000, packUnit: "صندوق", packFactorMilli: 24000, packPriceMinor: 30000, packBarcode: "6281000000035" },
+      { name: "مياه صغيرة", unit: "قنينة", priceMinor: 500, packUnit: "شد", packFactorMilli: 12000 },
+      { name: "بيبسي مكرر", packUnit: "صندوق", packFactorMilli: 24000, packBarcode: "6281000000035" },
+    ] });
+    expect(r.body).toMatchObject({ created: 2, skipped: [{ row: 3, reason: expect.stringContaining("باركود العبوة") }] });
+    const ps = (await call("GET", `/products?storeId=${store}`, t)).body;
+    const pepsi = ps.find((p: { name: string }) => p.name === "بيبسي علبة");
+    expect(pepsi.stockMilli).toBe(48000);
+    expect(pepsi.units).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "علبة", isBase: true, priceMinor: 1500, barcodes: ["6281000000028"] }),
+      expect.objectContaining({ name: "صندوق", isBase: false, factorMilli: 24000, priceMinor: 30000, barcodes: ["6281000000035"] }),
+    ]));
+    const water = ps.find((p: { name: string }) => p.name === "مياه صغيرة");
+    expect(water.units.find((u: { isBase: boolean }) => !u.isBase)).toMatchObject({ name: "شد", factorMilli: 12000, priceMinor: 6000 });
+  });
+
+  it("puts «from paper» away from the menu and brings it back, keeping the other settings", async () => {
+    await call("PUT", "/settings", t, { name: "بقالة الحاج", settings: { phone: "0910000000" } });
+    expect((await call("PATCH", "/settings/menu", t, { hidePaper: true })).body.menu.hidePaper).toBe(true);
+    const me = (await call("GET", "/me", t)).body;
+    expect(me.tenant.settings.menu.hidePaper).toBe(true);
+    expect(me.tenant.settings.phone).toBe("0910000000");
+    expect((await call("PATCH", "/settings/menu", t, { hidePaper: false })).body.menu.hidePaper).toBe(false);
+    expect((await call("PATCH", "/settings/menu", cashierToken, { hidePaper: true })).status).toBe(403);
+  });
+
   it("brings in customers with what they already owe, counted in their balance and statement", async () => {
     const r = await call("POST", "/import/customers", t, { rows: [
       { name: "محمد الطاهر", phone: "091 234 5678", balanceMinor: 125500 },
@@ -1567,7 +1595,7 @@ describe("moving a shop from paper", () => {
     const st = (await call("GET", `/suppliers/${s.id}/statement`, t)).body;
     expect(st.entries[0]).toMatchObject({ type: "opening", balance_minor: 800000 });
     const status = (await call("GET", "/import/status", t)).body;
-    expect(status).toMatchObject({ products: 3, stocked: 3, customers: 2, customers_owe: 100000, suppliers: 1, suppliers_owed: 800000, cash_opening: 0, sales: 0 });
+    expect(status).toMatchObject({ products: 5, stocked: 4, customers: 2, customers_owe: 100000, suppliers: 1, suppliers_owed: 800000, cash_opening: 0, sales: 0 });
   });
 });
 
