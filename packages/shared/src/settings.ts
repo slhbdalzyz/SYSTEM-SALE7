@@ -64,6 +64,8 @@ export const shopSettingsSchema = z.object({
     /** «من الدفتر للنظام»: hidden after the shop moved off paper. */
     hidePaper: z.boolean().default(false),
   }).default({}),
+  /** The shop's features the owner turned on or off (see modules.ts); anything missing follows the kind of shop. */
+  modules: z.record(z.string(), z.boolean()).default({}),
 });
 export type ShopSettings = z.infer<typeof shopSettingsSchema>;
 

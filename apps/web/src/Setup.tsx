@@ -17,7 +17,7 @@ const FEATURES: [string, string, string][] = [
   ["🏬", "الفروع والموظفين", "تحويلات بين الفروع، صلاحيات لكل موظف، والرواتب"],
 ];
 
-const TYPES: { id: string; icon: string; name: string; ready: boolean }[] = [
+export const TYPES: { id: string; icon: string; name: string; ready: boolean }[] = [
   { id: "grocery", icon: "🛒", name: "بقالة / سوبرماركت", ready: true },
   { id: "other", icon: "🏪", name: "محل تجاري آخر", ready: true },
   { id: "clothing", icon: "👕", name: "ملابس وأحذية", ready: true },

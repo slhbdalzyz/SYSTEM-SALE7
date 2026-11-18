@@ -10,7 +10,7 @@ const TYPE = { sale: "فاتورة آجل", return: "مرتجع", payment: "تس
 interface PointsEntry { id: string; points: number; kind: "earn" | "redeem" | "return" | "adjust"; note: string | null; created_at: string; sale_number: string | null; user_name: string | null }
 const POINTS_KIND = { earn: "كسب", redeem: "صرف", return: "مرتجع", adjust: "تعديل يدوي" } as const;
 
-export function Customers({ call, isOwner = false }: { call: Call; isOwner?: boolean }) {
+export function Customers({ call, isOwner = false, tiers = true }: { call: Call; isOwner?: boolean; tiers?: boolean }) {
   // Points show only while the shop has them switched on (in the settings).
   const [loyalty, setLoyalty] = useState(false);
   useEffect(() => void call<LoyaltySettings>("/loyalty/settings").then((r) => setLoyalty(r.enabled)).catch(() => undefined), [call]);
@@ -94,11 +94,11 @@ export function Customers({ call, isOwner = false }: { call: Call; isOwner?: boo
             <input type="checkbox" style={{ width: "auto" }} checked={edit.noLimit} onChange={(e) => setEdit({ ...edit, noLimit: e.target.checked })} />
             آجل بدون حد
           </label>
-          <label>نوع الزبون (الأسعار اللي يدفعها)
+          {(tiers || edit.tier !== "retail") && <label>نوع الزبون (الأسعار اللي يدفعها)
             <select value={edit.tier} onChange={(e) => setEdit({ ...edit, tier: e.target.value as CustomerTier })}>
               {(Object.keys(PRICE_TIER_LABELS) as CustomerTier[]).map((t) => <option key={t} value={t}>{PRICE_TIER_LABELS[t]}</option>)}
             </select>
-          </label>
+          </label>}
           {edit.tier !== "retail" && <div className="hint">الكاشير يحسب له سعر «{PRICE_TIER_LABELS[edit.tier]}» من بطاقة كل صنف (لو محطوط)، وإلا السعر العادي.</div>}
           {!edit.noLimit && <label>حد الآجل (د.ل) — صفر يعني بدون آجل<input className="num" value={edit.limit} onChange={(e) => setEdit({ ...edit, limit: e.target.value })} /></label>}
           {error && <div className="error">{error}</div>}

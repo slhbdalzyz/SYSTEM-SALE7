@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { creditRoom, formatMoney, formatQty, pointsEarned, pointsFor, readShopSettings, type CatalogCustomer, type CatalogProduct, type LoyaltySettings, type Offer, type PaymentMethod, type QuickGroup, type QuickKey, type ShopSettings, expiryState, variantBaseName, type Prescription, kitchenDelta, sentSnapshot, ORDER_TYPE_LABELS, ORDER_TYPE_ICONS, type OrderType, type SentLine, serialsMissing } from "@pos/shared";
+import { creditRoom, formatMoney, formatQty, pointsEarned, pointsFor, readShopSettings, shopModules, type CustomerTier, type CatalogCustomer, type CatalogProduct, type LoyaltySettings, type Offer, type PaymentMethod, type QuickGroup, type QuickKey, type ShopSettings, expiryState, variantBaseName, type Prescription, kitchenDelta, sentSnapshot, ORDER_TYPE_LABELS, ORDER_TYPE_ICONS, type OrderType, type SentLine, serialsMissing } from "@pos/shared";
 import { api } from "../api";
 import { db, getMeta, nextInvoiceNumber, setMeta, type HeldCart, type LocalShift } from "../localdb";
 import { alternatives, findByCode, searchProducts, type Found } from "../lookup";
@@ -12,7 +12,7 @@ import { NoteDialog, OrderBar, TablesDialog, type Order } from "./restaurant";
 import { autoBackupIfDue } from "../owner/backup";
 import type { Screen } from "../App";
 import { addLine, cartTotals, lineFor, lineTotal, priceCart, repriceFor, switchUnit, toSaleInput, type CartLine, type Deal } from "./cart";
-import { DEAL_SHOPS, DealBox, DealDialog, KitDialog, QuoteDialog, loadKits, tierLabel } from "./business";
+import { DealBox, DealDialog, KitDialog, QuoteDialog, loadKits, tierLabel } from "./business";
 import { AmountDialog, DrawerDialog, Modal, PayDialog, type Employee } from "./dialogs";
 import { applyPrefs, loadPrefs, savePrefs, sound, type TillPrefs } from "./feel";
 import { MyPay } from "../admin/MyPay";
@@ -114,8 +114,10 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [shop, setShop] = useState<Shop | null>(null);
   const till = (shop?.settings ?? readShopSettings({})).till;
-  const restaurant = shop?.type === "restaurant";
-  const dealShop = DEAL_SHOPS.includes(shop?.type ?? "");
+  // The till follows the shop's features (🧩 مميزات المحل): tables and kitchen, quotes, delivery, kits, price tiers.
+  const mods = useMemo(() => shopModules(shop?.type, shop?.settings.modules), [shop]);
+  const restaurant = mods.tables;
+  const tierOf = (c: { priceTier?: CustomerTier | null } | null | undefined) => (mods.tiers ? c?.priceTier ?? null : null);
   const scanRef = useRef<HTMLInputElement>(null);
   const device = session.device;
   const [prefs, setPrefs] = useState<TillPrefs>(loadPrefs);
@@ -316,7 +318,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
 
   function put(line: CartLine) {
     // A contractor, wholesale or workshop customer pays their own price for the unit.
-    line = repriceFor([line], null, customer?.priceTier ?? null)[0];
+    line = repriceFor([line], null, tierOf(customer))[0];
     // Dated goods: the batch on the shelf may be past its date. Asked once, when the item first goes in.
     const exp = expiry.get(line.productId);
     const isNew = !lines.some((l) => l.productId === line.productId);
@@ -506,7 +508,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   }
 
   function pickCustomer(c: CatalogCustomer | null) {
-    const from = customer?.priceTier ?? null, to = c?.priceTier ?? null;
+    const from = tierOf(customer), to = tierOf(c);
     if (from !== to) setLines((ls) => repriceFor(ls, from, to));
     setCustomer(c);
     if (c && c.creditLimitMinor !== null && c.creditLimitMinor > 0 && c.balanceMinor >= c.creditLimitMinor * 0.8) {
@@ -942,7 +944,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
                             {l.units.map((u) => (
                               <button key={u.id} type="button" className={u.id === l.unitId ? "active" : ""} disabled={!u.priceMinor && u.id !== l.unitId}
                                 title={u.priceMinor ? formatMoney(u.priceMinor) : "ما عندهاش سعر"}
-                                onClick={(e) => { e.stopPropagation(); setLines((ls) => ls.map((x) => (x.key === l.key ? switchUnit(x, u.id, customer?.priceTier ?? null) : x))); setSelected(l.key); }}>{u.name}</button>
+                                onClick={(e) => { e.stopPropagation(); setLines((ls) => ls.map((x) => (x.key === l.key ? switchUnit(x, u.id, tierOf(customer)) : x))); setSelected(l.key); }}>{u.name}</button>
                             ))}
                           </div>
                         )}
@@ -1024,9 +1026,9 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
             <button onClick={() => setDialog({ kind: "discount" })} disabled={!lines.length || maxDiscount <= 0}>خصم على الفاتورة <kbd>F6</kbd></button>
             <button onClick={() => selectedLine && removeLine(selectedLine.key)} disabled={!selected} className="danger">حذف الصنف <kbd>Del</kbd></button>
             {hasGeneric && <button onClick={() => void showAlternatives()} disabled={!selected}>{shop?.type === "auto_parts" ? "🔁 البدائل" : "💊 البدائل"}</button>}
-            {dealShop && <button onClick={() => setDialog({ kind: "quote" })}>📄 عرض سعر</button>}
-            {dealShop && <button onClick={() => setDialog({ kind: "deal" })}>🏗️ مشروع / 🚚 توصيل</button>}
-            {hasKits && <button onClick={() => setDialog({ kind: "kit" })}>🎒 قائمة جاهزة</button>}
+            {mods.quotes && <button onClick={() => setDialog({ kind: "quote" })}>📄 عرض سعر</button>}
+            {mods.delivery && <button onClick={() => setDialog({ kind: "deal" })}>🏗️ مشروع / 🚚 توصيل</button>}
+            {hasKits && mods.kits && <button onClick={() => setDialog({ kind: "kit" })}>🎒 قائمة جاهزة</button>}
             {(restaurant || selectedLine?.service) && <button onClick={() => selected && setDialog({ kind: "note", key: selected })} disabled={!selected}>📝 ملاحظة{restaurant && <> <kbd>Alt+M</kbd></>}</button>}
             <button onClick={hold} disabled={!lines.length}>تعليق <kbd>F8</kbd></button>
             <button onClick={async () => setDialog({ kind: "held", carts: await db.held.toArray() })}>الفواتير المعلقة <kbd>F9</kbd></button>
@@ -1069,7 +1071,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
       )}
       {dialog?.kind === "kit" && (
         <KitDialog onClose={() => { setDialog(null); focusScan(); }}
-          onPick={(ls, name) => { setDialog(null); setLines((cur) => repriceFor(ls, null, customer?.priceTier ?? null).reduce((acc, l) => addLine(acc, l).lines, cur)); setLastPaid(null); flash(`🎒 ${name}: ${ls.length} أصناف`); focusScan(); }} />
+          onPick={(ls, name) => { setDialog(null); setLines((cur) => repriceFor(ls, null, tierOf(customer)).reduce((acc, l) => addLine(acc, l).lines, cur)); setLastPaid(null); flash(`🎒 ${name}: ${ls.length} أصناف`); focusScan(); }} />
       )}
       {dialog?.kind === "deal" && (
         <DealDialog deal={deal} customer={customer} onClose={() => { setDialog(null); focusScan(); }} onDone={(d) => { setDeal(d); setDialog(null); focusScan(); }} />
