@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 import { getMeta, setMeta } from "../localdb";
 import { session, type DeviceInfo } from "../session";
@@ -16,27 +16,51 @@ export function PinScreen({ go }: { go: (s: Screen) => void }) {
   const [userId, setUserId] = useState<string | null>(null);
   const [pin, setPin] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // True once the server answered: an empty list then means nobody has a PIN yet, not "still loading".
+  const [loaded, setLoaded] = useState(false);
+  const [newPin, setNewPin] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const loadUsers = useCallback(async () => {
+    const cached = await getMeta<StaffUser[]>("staff");
+    if (cached) setUsers(cached);
+    try {
+      const r = await api<{ device: DeviceInfo; users: StaffUser[] }>("/auth/device-users", { body: { deviceToken: session.deviceToken } });
+      setUsers(r.users);
+      setDevice(r.device);
+      session.device = r.device;
+      setLoaded(true);
+      await setMeta("staff", r.users);
+    } catch (e) {
+      if ((e as { status?: number }).status === 401) {
+        // The owner disabled this device.
+        session.deviceToken = null;
+        session.device = null;
+        go("setup");
+      } else if (!cached) setError((e as Error).message);
+    }
+  }, [go]);
 
   useEffect(() => {
-    (async () => {
-      const cached = await getMeta<StaffUser[]>("staff");
-      if (cached) setUsers(cached);
-      try {
-        const r = await api<{ device: DeviceInfo; users: StaffUser[] }>("/auth/device-users", { body: { deviceToken: session.deviceToken } });
-        setUsers(r.users);
-        setDevice(r.device);
-        session.device = r.device;
-        await setMeta("staff", r.users);
-      } catch (e) {
-        if ((e as { status?: number }).status === 401) {
-          // The owner disabled this device.
-          session.deviceToken = null;
-          session.device = null;
-          go("setup");
-        } else if (!cached) setError((e as Error).message);
-      }
-    })();
-  }, [go]);
+    void loadUsers();
+  }, [loadUsers]);
+
+  /** A new shop's owner signs up with a password only, so the till has nobody to list: let them set their own PIN here. */
+  async function saveOwnPin() {
+    if (!/^\d{4,8}$/.test(newPin)) return setError("الرقم السري من 4 لين 8 أرقام");
+    setSaving(true);
+    setError(null);
+    try {
+      const me = await api<{ user: { id: string } }>("/me", { token: session.adminToken });
+      await api(`/users/${me.user.id}`, { method: "PATCH", body: { pin: newPin }, token: session.adminToken });
+      setNewPin("");
+      await loadUsers();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function login(p = pin) {
     if (!userId || p.length < 4) return;
@@ -77,7 +101,35 @@ export function PinScreen({ go }: { go: (s: Screen) => void }) {
           <span className="spacer" />
           <span className="muted">{device?.storeName}</span>
         </div>
-        {users.length === 0 && !error && <div className="muted">جاري التحميل… (أول مرة تاخذ ثواني)</div>}
+        {users.length === 0 && !loaded && !error && <div className="muted">جاري التحميل… (أول مرة تاخذ ثواني)</div>}
+        {users.length === 0 && loaded && (
+          <div className="stack">
+            <div className="notice">ما فيش حد عنده رقم سري للكاشير لسه.</div>
+            {session.adminToken ? (
+              <>
+                <div className="muted">حط رقم سري لحسابك وادخل بيه توا، وبعدين تقدر تضيف الكاشيرات من «الموظفين» في الإدارة.</div>
+                <div className="row">
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    autoComplete="new-password"
+                    placeholder="رقم سري (4 لين 8 أرقام)"
+                    value={newPin}
+                    onChange={(e) => setNewPin(e.target.value.replace(/\D/g, "").slice(0, 8))}
+                    onKeyDown={(e) => {
+                      e.stopPropagation();
+                      if (e.key === "Enter") void saveOwnPin();
+                    }}
+                    style={{ flex: 1 }}
+                  />
+                  <button className="primary" disabled={saving || newPin.length < 4} onClick={() => void saveOwnPin()}>حفظ</button>
+                </div>
+              </>
+            ) : (
+              <div className="muted">ادخل للإدارة وضيف رقم سري لحسابك أو للكاشير من «الموظفين».</div>
+            )}
+          </div>
+        )}
         <div className="users">
           {users.map((u) => (
             <button key={u.id} className={u.id === userId ? "active" : ""} onClick={() => { setUserId(u.id); setPin(""); }}>
