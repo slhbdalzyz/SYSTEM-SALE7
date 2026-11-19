@@ -96,7 +96,7 @@ th { color: var(--muted); font-weight: 600; font-size: .85rem; }
   @page { size: 80mm auto; margin: 0; }
   body * { visibility: hidden; }
   .receipt, .receipt * { visibility: visible; }
-  .receipt { display: block; position: absolute; top: 0; right: 0; width: 76mm; padding: 2mm; font-size: 11px; color: #000; }
+  .receipt { display: block; position: absolute; top: 0; right: 0; width: var(--rc-width, 76mm); padding: var(--rc-pad, 2mm); font-size: calc(11px * var(--rc-scale, 1)); color: #000; }
   .receipt table td, .receipt table th { padding: 1px 0; border: 0; }
   .receipt hr { border: 0; border-top: 1px dashed #000; }
 }
@@ -760,3 +760,10 @@ a.btn.primary { background: var(--brand); color: var(--brand-ink); border-color:
 .switch:checked::after { inset-inline-start: 23px; }
 .switch:disabled { opacity: .6; }
 .switch:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+
+/* Printers in the settings: the form, and the paper as the printer will print it. */
+.printer-form { display: grid; grid-template-columns: 1fr auto; gap: 20px; align-items: start; }
+.printer-form input[type="range"] { width: 100%; }
+.paper-preview { background: var(--bg); border-radius: var(--radius); padding: 10px; display: grid; gap: 6px; justify-items: center; position: sticky; top: 12px; max-width: 300px; }
+.paper-preview canvas { max-width: 100%; height: auto; background: #fff; box-shadow: 0 2px 10px rgb(0 0 0 / .12); image-rendering: pixelated; }
+@media (max-width: 760px) { .printer-form { grid-template-columns: 1fr; } .paper-preview { position: static; justify-self: center; } }

@@ -191,10 +191,11 @@ export async function loadReceiptImages(rows: Row[]): Promise<Map<string, HTMLIm
 }
 
 /** Lays the rows out on a canvas `dots` wide (384 for 58 mm, 576 for 80 mm paper). */
-export function drawReceipt(rows: Row[], dots: number, images = new Map<string, HTMLImageElement>()): HTMLCanvasElement {
-  const pad = Math.round(dots * 0.02);
+/** `textScale` is the shop's chosen text size (1 = normal), `margin` the blank edge in dots on each side. */
+export function drawReceipt(rows: Row[], dots: number, images = new Map<string, HTMLImageElement>(), textScale = 1, margin?: number): HTMLCanvasElement {
+  const pad = margin ?? Math.round(dots * 0.02);
   const base = dots >= 576 ? 22 : 20;
-  const scale = base / 22;
+  const scale = (base / 22) * textScale;
   const canvas = document.createElement("canvas");
   canvas.width = dots;
   canvas.height = 4000;

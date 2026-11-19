@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReceiptData } from "../pos/Receipt";
 import { Modal } from "../pos/dialogs";
 import { listScalePorts, loadScaleSettings, readScaleWeight, saveScaleSettings, webSerialSupported, type ScaleSettings } from "../scale";
-import { isDesktopApp, listSystemPrinters, loadPrinterSettings, openDrawer, printReceipt, savePrinterSettings, serialSupported, type PrinterMode, type PrinterSettings } from "./printer";
+import { isDesktopApp, listSystemPrinters, loadKitchenPrinter, loadPrinterSettings, openDrawer, paperDots, printReceipt, receiptBitmap, saveKitchenPrinter, savePrinterSettings, serialSupported, type KitchenPrinterSettings, type PrinterMode, type PrinterSettings } from "./printer";
 
 const SAMPLE: ReceiptData = {
   storeName: "تجربة الطابعة",
@@ -24,12 +24,89 @@ const SAMPLE: ReceiptData = {
   changeMinor: 8625,
 };
 
-export function PrinterDialog({ onClose }: { onClose: () => void }) {
-  const [s, setS] = useState<PrinterSettings>(loadPrinterSettings);
+const KITCHEN_SAMPLE: ReceiptData = {
+  storeName: "تجربة الطابعة",
+  deviceName: "كاشير",
+  cashierName: "تجربة",
+  kitchen: {
+    label: "طاولة 4",
+    orderType: "dine_in",
+    at: new Date().toISOString(),
+    lines: [
+      { name: "شاورما دجاج", qtyMilli: 2000, note: "بدون ثوم" },
+      { name: "عصير برتقال", qtyMilli: 1000 },
+    ],
+  },
+};
+
+const SIZES: [number, string][] = [[0.85, "صغير"], [1, "عادي"], [1.15, "كبير"], [1.3, "كبير جداً"]];
+
+type Tab = "receipt" | "kitchen" | "scale";
+
+/**
+ * This device's printers, the way the shop wants them: how each is reached, the paper, how big and
+ * dark the print is, the edges, the cut, a beep, the drawer; the kitchen's own printer; and the scale.
+ * Lives on the device (each till has its own printer), so it is set from the till itself.
+ */
+export function PrinterSetup({ onSaved }: { onSaved?: () => void }) {
+  const [tab, setTab] = useState<Tab>("receipt");
+  const [receipt, setReceipt] = useState<PrinterSettings>(loadPrinterSettings);
+  const [kitchen, setKitchen] = useState<KitchenPrinterSettings>(loadKitchenPrinter);
+  const [scale, setScale] = useState<ScaleSettings>(loadScaleSettings);
+  const [msg, setMsg] = useState<{ text: string; bad?: boolean } | null>(null);
+
+  function save() {
+    savePrinterSettings(receipt);
+    saveKitchenPrinter(kitchen);
+    saveScaleSettings(scale);
+    setMsg({ text: "تم حفظ إعدادات الطابعات على هذا الجهاز ✓" });
+    onSaved?.();
+  }
+
+  return (
+    <div className="stack printer-setup">
+      <div className="tabs">
+        <button className={tab === "receipt" ? "active" : ""} onClick={() => setTab("receipt")}>🧾 طابعة الفواتير</button>
+        <button className={tab === "kitchen" ? "active" : ""} onClick={() => setTab("kitchen")}>👨‍🍳 طابعة المطبخ</button>
+        <button className={tab === "scale" ? "active" : ""} onClick={() => setTab("scale")}>⚖️ الميزان</button>
+      </div>
+      {tab === "receipt" && <PrinterForm s={receipt} set={setReceipt} sample={SAMPLE} drawer />}
+      {tab === "kitchen" && (
+        <>
+          <div className="tabs">
+            <button className={!kitchen.separate ? "active" : ""} onClick={() => setKitchen({ ...kitchen, separate: false })}>نفس طابعة الفواتير</button>
+            <button className={kitchen.separate ? "active" : ""} onClick={() => setKitchen({ ...kitchen, separate: true })}>طابعة خاصة بالمطبخ</button>
+          </div>
+          {kitchen.separate ? (
+            <>
+              <PrinterForm s={kitchen} set={(k) => setKitchen({ ...kitchen, ...k })} sample={KITCHEN_SAMPLE} />
+              <div className="row">
+                <span>نسخ ورقة المطبخ</span>
+                <div className="tabs">
+                  {[1, 2, 3].map((n) => <button key={n} className={kitchen.copies === n ? "active" : ""} onClick={() => setKitchen({ ...kitchen, copies: n })}>{n}</button>)}
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="muted">ورقة المطبخ تطلع من طابعة الفواتير. لو عندك طابعة تانية في المطبخ (مثلاً طابعة شبكة)، اختار «طابعة خاصة بالمطبخ». تشغيل الطباعة مع كل إرسال للمطبخ من زر المطبخ في الكاشير.</div>
+          )}
+        </>
+      )}
+      {tab === "scale" && <ScaleSection s={scale} set={setScale} />}
+      <div className="row">
+        {msg && <span className={msg.bad ? "error" : "badge ok"}>{msg.text}</span>}
+        <span className="spacer" />
+        <button className="primary" onClick={save}>💾 حفظ إعدادات الطابعات</button>
+      </div>
+    </div>
+  );
+}
+
+function PrinterForm<T extends PrinterSettings>({ s, set, sample, drawer }: { s: T; set: (s: T) => void; sample: ReceiptData; drawer?: boolean }) {
   const [printers, setPrinters] = useState<string[]>([]);
   const [msg, setMsg] = useState<{ text: string; bad?: boolean } | null>(null);
-  const [scale, setScale] = useState<ScaleSettings>(loadScaleSettings);
   const desktop = isDesktopApp();
+  const up = (patch: Partial<PrinterSettings>) => set({ ...s, ...patch });
 
   useEffect(() => {
     if (desktop) void listSystemPrinters().then(setPrinters).catch(() => setPrinters([]));
@@ -41,9 +118,10 @@ export function PrinterDialog({ onClose }: { onClose: () => void }) {
     { id: "network", label: "طابعة شبكة (IP)", ok: desktop, why: "يحتاج تطبيق ويندوز" },
     { id: "serial", label: "منفذ تسلسلي / USB-Serial", ok: serialSupported(), why: "يحتاج Chrome أو Edge" },
   ];
+  const direct = s.mode !== "browser";
+  const custom = s.dots >= 200;
 
   async function run(fn: () => Promise<unknown>, ok: string) {
-    savePrinterSettings(s);
     setMsg(null);
     try {
       await fn();
@@ -54,60 +132,149 @@ export function PrinterDialog({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <Modal title="الطابعة والدرج والميزان" onClose={onClose}>
-      <div className="stack" style={{ gap: 6 }}>
-        {modes.map((m) => (
-          <label key={m.id} className="row" style={{ color: m.ok ? "var(--ink)" : "var(--muted)" }}>
-            <input type="radio" style={{ width: "auto" }} disabled={!m.ok} checked={s.mode === m.id} onChange={() => setS({ ...s, mode: m.id })} />
-            {m.label}
-            {!m.ok && <span className="muted"> ({m.why})</span>}
-          </label>
-        ))}
-      </div>
-      {s.mode === "system" && (
-        <label>الطابعة
-          <select value={s.printerName} onChange={(e) => setS({ ...s, printerName: e.target.value })}>
-            <option value="">—</option>
-            {printers.map((p) => <option key={p}>{p}</option>)}
-          </select>
-        </label>
-      )}
-      {s.mode === "network" && (
-        <div className="row">
-          <label style={{ flex: 2 }}>عنوان IP<input className="num" value={s.host} onChange={(e) => setS({ ...s, host: e.target.value })} /></label>
-          <label style={{ flex: 1 }}>المنفذ<input className="num" value={s.port} onChange={(e) => setS({ ...s, port: Number(e.target.value) || 9100 })} /></label>
+    <div className="printer-form">
+      <div className="stack">
+        <b>التوصيل</b>
+        <div className="stack" style={{ gap: 6 }}>
+          {modes.map((m) => (
+            <label key={m.id} className="row" style={{ color: m.ok ? "var(--ink)" : "var(--muted)" }}>
+              <input type="radio" style={{ width: "auto" }} disabled={!m.ok} checked={s.mode === m.id} onChange={() => up({ mode: m.id })} />
+              {m.label}
+              {!m.ok && <span className="muted"> ({m.why})</span>}
+            </label>
+          ))}
         </div>
-      )}
-      {s.mode === "serial" && (
-        <label>السرعة (Baud)
-          <select value={s.baudRate} onChange={(e) => setS({ ...s, baudRate: Number(e.target.value) })}>
-            {[9600, 19200, 38400, 115200].map((b) => <option key={b}>{b}</option>)}
-          </select>
-        </label>
-      )}
-      {s.mode !== "browser" && (
-        <>
-          <div className="tabs">
-            {([80, 58] as const).map((w) => (
-              <button key={w} className={s.paper === w ? "active" : ""} onClick={() => setS({ ...s, paper: w })}>ورق {w} مم</button>
-            ))}
-          </div>
-          <label className="row" style={{ color: "var(--ink)" }}>
-            <input type="checkbox" style={{ width: "auto" }} checked={s.openDrawerOnCash} onChange={(e) => setS({ ...s, openDrawerOnCash: e.target.checked })} />
-            افتح الدرج أوتوماتيك مع الدفع الكاش
+        {s.mode === "system" && (
+          <label>الطابعة
+            <select value={s.printerName} onChange={(e) => up({ printerName: e.target.value })}>
+              <option value="">—</option>
+              {printers.map((p) => <option key={p}>{p}</option>)}
+            </select>
           </label>
-        </>
-      )}
-      <div className="row">
-        <button onClick={() => run(() => printReceipt(SAMPLE, { openDrawer: false }, s), "تم إرسال صفحة التجربة")}>طباعة تجربة</button>
-        {s.mode !== "browser" && <button onClick={() => run(() => openDrawer(s), "تم إرسال أمر فتح الدرج")}>تجربة الدرج</button>}
+        )}
+        {s.mode === "network" && (
+          <div className="row">
+            <label style={{ flex: 2 }}>عنوان IP<input className="num" value={s.host} onChange={(e) => up({ host: e.target.value.trim() })} /></label>
+            <label style={{ flex: 1 }}>المنفذ<input className="num" value={s.port} onChange={(e) => up({ port: Number(e.target.value) || 9100 })} /></label>
+          </div>
+        )}
+        {s.mode === "serial" && (
+          <label>السرعة (Baud)
+            <select value={s.baudRate} onChange={(e) => up({ baudRate: Number(e.target.value) })}>
+              {[9600, 19200, 38400, 115200].map((b) => <option key={b}>{b}</option>)}
+            </select>
+          </label>
+        )}
+
+        <b>الورق</b>
+        <div className="tabs">
+          {([80, 58] as const).map((w) => (
+            <button key={w} className={s.paper === w && !custom ? "active" : ""} onClick={() => up({ paper: w, dots: 0 })}>{w} مم</button>
+          ))}
+          {direct && <button className={custom ? "active" : ""} onClick={() => up({ dots: custom ? 0 : 512, paper: 80 })}>عرض خاص</button>}
+        </div>
+        {direct && custom && (
+          <label>عدد النقاط في السطر <small className="muted">(من كتيب الطابعة: 80 مم غالباً 576 أو 512، و58 مم 384)</small>
+            <input className="num" type="number" min={200} max={832} step={8} value={s.dots} onChange={(e) => up({ dots: Math.max(200, Math.min(832, Math.round((Number(e.target.value) || 512) / 8) * 8)) })} />
+          </label>
+        )}
+
+        <b>شكل الطباعة</b>
+        <div className="row">
+          <span>حجم الكتابة</span>
+          <div className="tabs">
+            {SIZES.map(([v, l]) => <button key={v} className={s.textScale === v ? "active" : ""} onClick={() => up({ textScale: v })}>{l}</button>)}
+          </div>
+        </div>
+        <label>الهامش على الجنبين: <b className="num">{s.marginMm} مم</b>
+          <input type="range" min={0} max={6} step={0.5} value={s.marginMm} onChange={(e) => up({ marginMm: Number(e.target.value) })} />
+        </label>
+        {direct && (
+          <>
+            <label>غمق الطباعة: <b>{s.darkness < 140 ? "فاتح" : s.darkness > 185 ? "غامق" : "عادي"}</b>
+              <input type="range" min={110} max={220} step={10} value={s.darkness} onChange={(e) => up({ darkness: Number(e.target.value) })} />
+            </label>
+            <label>سطور فاضية قبل القص: <b className="num">{s.feed}</b>
+              <input type="range" min={0} max={8} step={1} value={s.feed} onChange={(e) => up({ feed: Number(e.target.value) })} />
+            </label>
+            <div className="checks col">
+              <label className="row" style={{ color: "var(--ink)" }}>
+                <input type="checkbox" style={{ width: "auto" }} checked={s.cut} onChange={(e) => up({ cut: e.target.checked })} />
+                قص الورقة أوتوماتيك بعد كل فاتورة
+              </label>
+              <label className="row" style={{ color: "var(--ink)" }}>
+                <input type="checkbox" style={{ width: "auto" }} checked={s.beep} onChange={(e) => up({ beep: e.target.checked })} />
+                صفّارة مع كل طباعة <small className="muted">(للطابعات اللي فيها صفّارة)</small>
+              </label>
+              {drawer && (
+                <label className="row" style={{ color: "var(--ink)" }}>
+                  <input type="checkbox" style={{ width: "auto" }} checked={s.openDrawerOnCash} onChange={(e) => up({ openDrawerOnCash: e.target.checked })} />
+                  افتح الدرج أوتوماتيك مع الدفع الكاش
+                </label>
+              )}
+            </div>
+          </>
+        )}
+        {!direct && <div className="hint">الغمق والقص والصفّارة والدرج تشتغل لما الطابعة تكون موصولة مباشرة (تطبيق ويندوز أو منفذ تسلسلي).</div>}
+        <div className="row">
+          <button onClick={() => run(() => printReceipt(sample, { openDrawer: false }, s), "تم إرسال صفحة التجربة")}>🖨️ طباعة تجربة</button>
+          {drawer && direct && <button onClick={() => run(() => openDrawer(s), "تم إرسال أمر فتح الدرج")}>تجربة الدرج</button>}
+        </div>
+        {msg && <div className={msg.bad ? "error" : "badge ok"}>{msg.text}</div>}
       </div>
-      <hr style={{ width: "100%", border: 0, borderTop: "1px solid var(--line)" }} />
-      <ScaleSection s={scale} set={setScale} />
-      {msg && <div className={msg.bad ? "error" : "badge ok"}>{msg.text}</div>}
+      <PaperPreview s={s} sample={sample} />
+    </div>
+  );
+}
+
+/** The sample drawn in the printer's own black and white dots, so size, darkness and edges show before printing. */
+function PaperPreview({ s, sample }: { s: PrinterSettings; sample: ReceiptData }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  const { paper, dots, textScale, darkness, marginMm } = s;
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      await document.fonts?.ready;
+      const b = await receiptBitmap(sample, { paper, dots, textScale, darkness, marginMm });
+      const c = ref.current;
+      if (!live || !c) return;
+      c.width = b.width;
+      c.height = b.height;
+      const ctx = c.getContext("2d")!;
+      const img = ctx.createImageData(b.width, b.height);
+      const row = b.width / 8;
+      for (let y = 0; y < b.height; y++) {
+        for (let x = 0; x < b.width; x++) {
+          const on = b.data[y * row + (x >> 3)] & (0x80 >> (x & 7));
+          const i = (y * b.width + x) * 4;
+          const v = on ? 20 : 255;
+          img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
+          img.data[i + 3] = 255;
+        }
+      }
+      ctx.putImageData(img, 0, 0);
+    })().catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [sample, paper, dots, textScale, darkness, marginMm]);
+  const mm = Math.round(paperDots(s) / 8);
+  return (
+    <div className="paper-preview" aria-label="معاينة الورقة">
+      <small className="muted">معاينة · عرض الطباعة {mm} مم</small>
+      <canvas ref={ref} style={{ width: `${Math.round(mm * 3.4)}px` }} />
+    </div>
+  );
+}
+
+/** The till's quick access: the same settings in a window. */
+export function PrinterDialog({ onClose }: { onClose: () => void }) {
+  return (
+    <Modal title="الطابعات والدرج والميزان" onClose={onClose} wide>
+      <PrinterSetup onSaved={onClose} />
       <div className="row">
         <span className="spacer" />
-        <button className="primary" onClick={() => { savePrinterSettings(s); saveScaleSettings(scale); onClose(); }}>حفظ</button>
+        <button onClick={onClose}>إغلاق</button>
       </div>
     </Modal>
   );

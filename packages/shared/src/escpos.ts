@@ -66,10 +66,17 @@ export function concatBytes(parts: Uint8Array[]): Uint8Array {
   return out;
 }
 
-export function receiptJob(b: Bitmap | null, opts: { cut?: boolean; openDrawer?: boolean } = {}): Uint8Array {
+/** Feed n blank lines (ESC d n). */
+export const feedLines = (n: number) => new Uint8Array([ESC, 0x64, Math.max(0, Math.min(255, Math.round(n)))]);
+/** Two short beeps on printers that have a buzzer (ESC B n t); others ignore it. */
+export const BEEP = new Uint8Array([ESC, 0x42, 0x02, 0x02]);
+
+export function receiptJob(b: Bitmap | null, opts: { cut?: boolean; openDrawer?: boolean; feed?: number; beep?: boolean } = {}): Uint8Array {
   const parts: Uint8Array[] = [INIT];
   if (opts.openDrawer) parts.push(OPEN_DRAWER);
   if (b) parts.push(...rasterCommands(b));
+  if (b && opts.feed) parts.push(feedLines(opts.feed));
+  if (b && opts.beep) parts.push(BEEP);
   if (b && opts.cut !== false) parts.push(CUT);
   return concatBytes(parts);
 }
