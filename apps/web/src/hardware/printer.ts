@@ -4,6 +4,7 @@
 import { PAPER_DOTS, receiptJob, toMonochrome, trimBottom, type PaperWidth } from "@pos/shared";
 import type { ReceiptData } from "../pos/Receipt";
 import { drawReceipt, loadReceiptImages, receiptRows } from "./receiptImage";
+import { printPage, type PageSize } from "./pageInvoice";
 
 export type PrinterMode = "browser" | "system" | "network" | "serial";
 
@@ -27,7 +28,11 @@ export interface PrinterSettings {
   feed: number;
   cut: boolean;
   beep: boolean;
+  /** "roll" for a receipt printer; A4 or A5 prints a full invoice on an ordinary printer. */
+  sheet: Sheet;
 }
+
+export type Sheet = "roll" | PageSize;
 
 /** The kitchen's own printer, for restaurants: when `separate` is off, kitchen slips go to the receipt printer. */
 export interface KitchenPrinterSettings extends PrinterSettings {
@@ -39,7 +44,7 @@ const KEY = "pos.printer";
 const KITCHEN_KEY = "pos.printer.kitchen";
 export const PRINTER_DEFAULTS: PrinterSettings = {
   mode: "browser", printerName: "", host: "192.168.1.100", port: 9100, paper: 80, openDrawerOnCash: true, baudRate: 9600,
-  dots: 0, textScale: 1, darkness: 160, marginMm: 1, feed: 0, cut: true, beep: false,
+  dots: 0, textScale: 1, darkness: 160, marginMm: 1, feed: 0, cut: true, beep: false, sheet: "roll",
 };
 const KITCHEN_DEFAULTS: KitchenPrinterSettings = { ...PRINTER_DEFAULTS, host: "192.168.1.101", openDrawerOnCash: false, textScale: 1.15, separate: false, copies: 1 };
 
@@ -137,13 +142,17 @@ function browserLook(s: Look) {
 export async function printReceipt(data: ReceiptData, opts: { openDrawer?: boolean } = {}, given?: PrinterSettings): Promise<boolean> {
   const kitchen = data.kitchen && !given ? loadKitchenPrinter() : null;
   const s = given ?? (kitchen?.separate ? kitchen : loadPrinterSettings());
+  const copies = data.copy ? 1 : data.kitchen ? Math.max(1, kitchen?.separate ? kitchen.copies : 1) : Math.max(1, data.shop?.settings.receipt.copies ?? 1);
+  if (s.sheet && s.sheet !== "roll") {
+    await printPage(data, { size: s.sheet, textScale: s.textScale, marginMm: s.marginMm }, copies);
+    return false;
+  }
   if (s.mode === "browser") {
     browserLook(s);
     window.print();
     return false;
   }
   await document.fonts?.ready;
-  const copies = data.copy ? 1 : data.kitchen ? Math.max(1, kitchen?.separate ? kitchen.copies : 1) : Math.max(1, data.shop?.settings.receipt.copies ?? 1);
   for (let i = 0; i < copies; i++) {
     const bitmap = await receiptBitmap(i ? { ...data, copy: true } : data, s);
     await send(receiptJob(bitmap, { openDrawer: !i && opts.openDrawer && s.openDrawerOnCash, cut: s.cut, feed: s.feed, beep: !i && s.beep }), s);
@@ -152,7 +161,7 @@ export async function printReceipt(data: ReceiptData, opts: { openDrawer?: boole
 }
 
 export async function openDrawer(s = loadPrinterSettings()) {
-  if (s.mode === "browser") throw new Error("فتح الدرج يحتاج طابعة موصولة (تطبيق ويندوز أو منفذ تسلسلي)");
+  if (s.mode === "browser" || (s.sheet && s.sheet !== "roll")) throw new Error("فتح الدرج يحتاج طابعة موصولة (تطبيق ويندوز أو منفذ تسلسلي)");
   await send(receiptJob(null, { openDrawer: true }), s);
 }
 

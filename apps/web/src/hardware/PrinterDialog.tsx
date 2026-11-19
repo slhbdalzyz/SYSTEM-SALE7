@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReceiptData } from "../pos/Receipt";
 import { Modal } from "../pos/dialogs";
+import { pageHtml } from "./pageInvoice";
 import { listScalePorts, loadScaleSettings, readScaleWeight, saveScaleSettings, webSerialSupported, type ScaleSettings } from "../scale";
 import { isDesktopApp, listSystemPrinters, loadKitchenPrinter, loadPrinterSettings, openDrawer, paperDots, printReceipt, receiptBitmap, saveKitchenPrinter, savePrinterSettings, serialSupported, type KitchenPrinterSettings, type PrinterMode, type PrinterSettings } from "./printer";
 
@@ -118,6 +119,7 @@ function PrinterForm<T extends PrinterSettings>({ s, set, sample, drawer }: { s:
     { id: "network", label: "طابعة شبكة (IP)", ok: desktop, why: "يحتاج تطبيق ويندوز" },
     { id: "serial", label: "منفذ تسلسلي / USB-Serial", ok: serialSupported(), why: "يحتاج Chrome أو Edge" },
   ];
+  const page = s.sheet === "A4" || s.sheet === "A5";
   const direct = s.mode !== "browser";
   const custom = s.dots >= 200;
 
@@ -134,6 +136,7 @@ function PrinterForm<T extends PrinterSettings>({ s, set, sample, drawer }: { s:
   return (
     <div className="printer-form">
       <div className="stack">
+        {!page && <>
         <b>التوصيل</b>
         <div className="stack" style={{ gap: 6 }}>
           {modes.map((m) => (
@@ -165,15 +168,20 @@ function PrinterForm<T extends PrinterSettings>({ s, set, sample, drawer }: { s:
             </select>
           </label>
         )}
+        </>}
 
         <b>الورق</b>
         <div className="tabs">
           {([80, 58] as const).map((w) => (
-            <button key={w} className={s.paper === w && !custom ? "active" : ""} onClick={() => up({ paper: w, dots: 0 })}>{w} مم</button>
+            <button key={w} className={!page && s.paper === w && !custom ? "active" : ""} onClick={() => up({ sheet: "roll", paper: w, dots: 0 })}>رول {w} مم</button>
           ))}
-          {direct && <button className={custom ? "active" : ""} onClick={() => up({ dots: custom ? 0 : 512, paper: 80 })}>عرض خاص</button>}
+          {direct && !page && <button className={custom ? "active" : ""} onClick={() => up({ dots: custom ? 0 : 512, paper: 80 })}>عرض خاص</button>}
+          {(["A4", "A5"] as const).map((z) => (
+            <button key={z} className={s.sheet === z ? "active" : ""} onClick={() => up({ sheet: z })}>📄 {z}</button>
+          ))}
         </div>
-        {direct && custom && (
+        {page && <div className="hint">فاتورة كاملة بجدول على ورق {s.sheet}، تنطبع على أي طابعة عادية (ليزر أو حبر) من نافذة الطباعة. أول مرة اختار الطابعة وحجم الورق {s.sheet} في النافذة، والمتصفح يتذكرهم.</div>}
+        {direct && !page && custom && (
           <label>عدد النقاط في السطر <small className="muted">(من كتيب الطابعة: 80 مم غالباً 576 أو 512، و58 مم 384)</small>
             <input className="num" type="number" min={200} max={832} step={8} value={s.dots} onChange={(e) => up({ dots: Math.max(200, Math.min(832, Math.round((Number(e.target.value) || 512) / 8) * 8)) })} />
           </label>
@@ -189,7 +197,7 @@ function PrinterForm<T extends PrinterSettings>({ s, set, sample, drawer }: { s:
         <label>الهامش على الجنبين: <b className="num">{s.marginMm} مم</b>
           <input type="range" min={0} max={6} step={0.5} value={s.marginMm} onChange={(e) => up({ marginMm: Number(e.target.value) })} />
         </label>
-        {direct && (
+        {direct && !page && (
           <>
             <label>غمق الطباعة: <b>{s.darkness < 140 ? "فاتح" : s.darkness > 185 ? "غامق" : "عادي"}</b>
               <input type="range" min={110} max={220} step={10} value={s.darkness} onChange={(e) => up({ darkness: Number(e.target.value) })} />
@@ -215,14 +223,14 @@ function PrinterForm<T extends PrinterSettings>({ s, set, sample, drawer }: { s:
             </div>
           </>
         )}
-        {!direct && <div className="hint">الغمق والقص والصفّارة والدرج تشتغل لما الطابعة تكون موصولة مباشرة (تطبيق ويندوز أو منفذ تسلسلي).</div>}
+        {!direct && !page && <div className="hint">الغمق والقص والصفّارة والدرج تشتغل لما الطابعة تكون موصولة مباشرة (تطبيق ويندوز أو منفذ تسلسلي).</div>}
         <div className="row">
           <button onClick={() => run(() => printReceipt(sample, { openDrawer: false }, s), "تم إرسال صفحة التجربة")}>🖨️ طباعة تجربة</button>
-          {drawer && direct && <button onClick={() => run(() => openDrawer(s), "تم إرسال أمر فتح الدرج")}>تجربة الدرج</button>}
+          {drawer && direct && !page && <button onClick={() => run(() => openDrawer(s), "تم إرسال أمر فتح الدرج")}>تجربة الدرج</button>}
         </div>
         {msg && <div className={msg.bad ? "error" : "badge ok"}>{msg.text}</div>}
       </div>
-      <PaperPreview s={s} sample={sample} />
+      {page ? <PagePreview s={s} sample={sample} /> : <PaperPreview s={s} sample={sample} />}
     </div>
   );
 }
@@ -263,6 +271,26 @@ function PaperPreview({ s, sample }: { s: PrinterSettings; sample: ReceiptData }
     <div className="paper-preview" aria-label="معاينة الورقة">
       <small className="muted">معاينة · عرض الطباعة {mm} مم</small>
       <canvas ref={ref} style={{ width: `${Math.round(mm * 3.4)}px` }} />
+    </div>
+  );
+}
+
+/** An A4/A5 page drawn small, from the very document that will be printed. */
+function PagePreview({ s, sample }: { s: PrinterSettings; sample: ReceiptData }) {
+  const size = s.sheet === "A5" ? "A5" : "A4";
+  const [wMm, hMm] = size === "A5" ? [148, 210] : [210, 297];
+  const html = useMemo(() => pageHtml(sample, { size, textScale: s.textScale, marginMm: s.marginMm }), [sample, size, s.textScale, s.marginMm]);
+  // Shown 260 px wide; the frame is laid out at the page's real width (96 px to the inch) and scaled down.
+  const pageW = Math.round((wMm / 25.4) * 96);
+  const pageH = Math.round((hMm / 25.4) * 96);
+  const k = 260 / pageW;
+  const pad = Math.round((((size === "A5" ? 7 : 10) + (s.marginMm || 0)) / 25.4) * 96);
+  return (
+    <div className="paper-preview" aria-label="معاينة الصفحة">
+      <small className="muted">معاينة · ورق {size}</small>
+      <div className="page-preview" style={{ width: 260, height: Math.round(pageH * k) }}>
+        <iframe title="معاينة" srcDoc={html} style={{ width: pageW, height: pageH, padding: pad, transform: `scale(${k})` }} tabIndex={-1} />
+      </div>
     </div>
   );
 }

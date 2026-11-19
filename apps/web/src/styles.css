@@ -767,3 +767,6 @@ a.btn.primary { background: var(--brand); color: var(--brand-ink); border-color:
 .paper-preview { background: var(--bg); border-radius: var(--radius); padding: 10px; display: grid; gap: 6px; justify-items: center; position: sticky; top: 12px; max-width: 300px; }
 .paper-preview canvas { max-width: 100%; height: auto; background: #fff; box-shadow: 0 2px 10px rgb(0 0 0 / .12); image-rendering: pixelated; }
 @media (max-width: 760px) { .printer-form { grid-template-columns: 1fr; } .paper-preview { position: static; justify-self: center; } }
+.page-preview { overflow: hidden; background: #fff; box-shadow: 0 2px 10px rgb(0 0 0 / .12); }
+.page-preview iframe { border: 0; background: #fff; transform-origin: top left; pointer-events: none; box-sizing: border-box; }
+[dir="rtl"] .page-preview iframe { transform-origin: top right; }
