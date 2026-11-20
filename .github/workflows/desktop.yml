@@ -5,11 +5,16 @@ on:
     branches: [main]
     tags: ["v*"]
   pull_request:
-    paths: ["apps/desktop/**", "apps/web/**", "packages/shared/**", ".github/workflows/desktop.yml"]
+    paths: ["apps/desktop/**", "apps/web/**", "apps/api/**", "packages/shared/**", "scripts/build-local-server.mjs", ".github/workflows/desktop.yml"]
   workflow_dispatch:
     inputs:
+      edition:
+        description: "local = the shop's own server and database on the computer, no internet needed; demo = the ready-made demo shop"
+        type: choice
+        options: [local, demo]
+        default: local
       api_url:
-        description: "API address the app talks to (empty = the demo shop built into the app)"
+        description: "API address of a cloud server the app talks to instead (overrides the edition)"
         required: false
 
 jobs:
@@ -30,6 +35,9 @@ jobs:
 
   build:
     runs-on: windows-latest
+    # A version tag (v0.7.0) publishes a GitHub release, which is where shops' apps get updates.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -47,18 +55,78 @@ jobs:
         working-directory: apps/desktop
         env:
           API_URL: ${{ inputs.api_url }}
+          # Pushes and pull requests build the local edition.
+          EDITION: ${{ inputs.edition || 'local' }}
+          NODE_VERSION: v22.20.0
+          CLOUD_API: https://sale7-pos.vercel.app/api
+          LICENSE_PUBLIC_KEY: ${{ vars.LICENSE_PUBLIC_KEY }}
+          # Signs the update files (repository secret); without it the app builds but publishes no updates.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           if [ -n "$API_URL" ]; then
-            # A real shop: talk to its server, and package the normal web build.
+            # A shop on the cloud: talk to its server, and package the normal web build.
             export VITE_API_URL="$API_URL"
             sed -i 's#dist-demo#dist#' src-tauri/tauri.conf.json
-          else
+            pnpm tauri build
+          elif [ "$EDITION" = "demo" ]; then
             export VITE_DEMO=1
+            pnpm tauri build
+          else
+            # The local edition carries its own Node to run the shop's server.
+            curl -fsSL -o "$RUNNER_TEMP/node.exe" "https://nodejs.org/dist/$NODE_VERSION/win-x64/node.exe"
+            # And the platform's public licence key, so it can check activation keys with no internet.
+            if [ -z "$LICENSE_PUBLIC_KEY" ]; then
+              LICENSE_PUBLIC_KEY=$(curl -fsS --max-time 20 "$CLOUD_API/licenses/public-key" | node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>{try{process.stdout.write(JSON.parse(s).publicKey||"")}catch{}})' || true)
+            fi
+            if [ -z "$LICENSE_PUBLIC_KEY" ]; then echo "::warning::No licence public key: this build runs the 14-day trial but cannot activate licences."; fi
+            export LICENSE_PUBLIC_KEY
+            export NODE_EXE="$RUNNER_TEMP/node.exe" VITE_LOCAL=1 VITE_API_URL=http://127.0.0.1:7400/api
+            # A version tag sets the app's version; with the signing key, the build also makes the update files.
+            if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+              node -e 'const f="src-tauri/tauri.conf.json";const c=require("./"+f);c.version=process.argv[1];require("fs").writeFileSync(f,JSON.stringify(c,null,2))' "${GITHUB_REF#refs/tags/v}"
+            fi
+            if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+              node -e 'const f="src-tauri/tauri.local.conf.json";const c=require("./"+f);c.bundle.createUpdaterArtifacts=true;require("fs").writeFileSync(f,JSON.stringify(c,null,2))'
+            else
+              echo "::warning::No TAURI_SIGNING_PRIVATE_KEY secret: this build makes no signed update files."
+            fi
+            pnpm tauri build --config src-tauri/tauri.local.conf.json
           fi
-          pnpm tauri build
+      - name: Check the local server starts on Windows
+        if: ${{ !inputs.api_url && (inputs.edition || 'local') == 'local' }}
+        shell: bash
+        working-directory: apps/desktop/src-tauri/server
+        run: |
+          export POS_DATA_DIR="$RUNNER_TEMP/pos-data" PORT=7400 POS_SHUTDOWN_TOKEN=ci-token
+          ./node.exe server.mjs > "$RUNNER_TEMP/server.log" 2>&1 &
+          for i in $(seq 1 60); do curl -fs http://127.0.0.1:7400/api/health && break; sleep 1; done
+          curl -fs http://127.0.0.1:7400/api/local/status
+          curl -fs -X POST -H "x-shutdown-token: ci-token" http://127.0.0.1:7400/api/local/shutdown
+          sleep 3
+          cat "$RUNNER_TEMP/server.log"
+          grep -q "local server on" "$RUNNER_TEMP/server.log"
+      - name: Publish the update for shops (version tags only)
+        if: ${{ startsWith(github.ref, 'refs/tags/v') && !inputs.api_url && (inputs.edition || 'local') == 'local' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="${GITHUB_REF#refs/tags/v}"
+          EXE=$(ls apps/desktop/src-tauri/target/release/bundle/nsis/*.exe | head -1)
+          [ -f "$EXE.sig" ] || { echo "::error::No .sig next to the installer: set the TAURI_SIGNING_PRIVATE_KEY secret"; exit 1; }
+          NAME="Sale7-POS_${V}_x64-setup.exe"
+          cp "$EXE" "$RUNNER_TEMP/$NAME"
+          node -e '
+            const fs = require("fs");
+            const [v, sig, url, out] = process.argv.slice(1);
+            fs.writeFileSync(out, JSON.stringify({ version: v, notes: "نسخة " + v, pub_date: new Date().toISOString(),
+              platforms: { "windows-x86_64": { signature: fs.readFileSync(sig, "utf8").trim(), url } } }, null, 2));
+          ' "$V" "$EXE.sig" "https://github.com/${GITHUB_REPOSITORY}/releases/download/v${V}/${NAME}" "$RUNNER_TEMP/latest.json"
+          gh release create "v$V" "$RUNNER_TEMP/$NAME" "$RUNNER_TEMP/latest.json" --title "Sale7 POS $V" --notes "النسخة المحلية لسطح المكتب، $V. البرامج المثبتة تتحدث وحدها."
       - uses: actions/upload-artifact@v4
         with:
-          name: sale7-pos-windows
+          name: sale7-pos-windows-${{ inputs.api_url && 'cloud' || inputs.edition || 'local' }}
           path: |
             apps/desktop/src-tauri/target/release/bundle/nsis/*.exe
             apps/desktop/src-tauri/target/release/bundle/msi/*.msi

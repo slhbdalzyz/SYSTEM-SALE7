@@ -63,7 +63,7 @@ export async function assertNotLocked(db: Db, tid: string) {
 }
 
 /** Writes that stay open while locked: syncing what the till already did, and signing in to see the bill. */
-const OPEN_WHILE_LOCKED = [/^\/auth\//, /^\/sales\/batch$/, /^\/shifts\//, /^\/devices\/events$/, /^\/customers\/[^/]+\/payments$/, /^\/platform\//, /^\/subscription\/pay\//];
+const OPEN_WHILE_LOCKED = [/^\/auth\//, /^\/sales\/batch$/, /^\/shifts\//, /^\/devices\/events$/, /^\/customers\/[^/]+\/payments$/, /^\/platform\//, /^\/subscription\/pay\//, /^\/local\//];
 
 /** Rejects a write by a shop that is locked. `verify` reads the caller's token, if there is one. */
 export async function checkSubscription(db: Db, method: string, path: string, verify: (() => Promise<TokenPayload>) | null) {
@@ -100,7 +100,15 @@ export async function usage(q: Db | Tx, tid: string) {
   )).rows[0] as { stores: number; devices: number; users: number };
 }
 
+// On the shop's own computer the yearly licence says how many devices (tills, kitchen screens) it covers.
+let localDeviceLimit: number | null = null;
+export const setLocalDeviceLimit = (n: number | null) => void (localDeviceLimit = n);
+
 export async function assertWithinPlan(q: Db | Tx, tid: string, what: "devices" | "users" | "stores") {
+  if (what === "devices" && localDeviceLimit !== null) {
+    if ((await usage(q, tid)).devices >= localDeviceLimit) throw new HttpError(402, `الترخيص يسمح بـ ${localDeviceLimit} أجهزة بس. كلّم البائع باش تزيد.`);
+    return;
+  }
   const [l, u] = await Promise.all([planLimits(q, tid), usage(q, tid)]);
   const max = { devices: l.max_devices, users: l.max_users, stores: l.max_stores }[what];
   const label = { devices: "الأجهزة", users: "المستخدمين", stores: "الفروع" }[what];
