@@ -13,7 +13,6 @@
     "typecheck": "tsc -p ."
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^1.11.0",
     "@fastify/cors": "^10.0.1",
     "@fastify/helmet": "^12.0.1",
     "@fastify/jwt": "^9.0.1",

@@ -94,16 +94,6 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
     if (t === "clothing" && f.variants) setVariants(true);
     if (t === "pharmacy" && f.pharmacy) { setExpiry(f.expiry); setBase("شريط"); setPacks([{ name: "علبة", qty: "", barcode: "" }]); }
   }).catch(() => {}), [call]);
-  // A scanned barcode with no name typed yet: take the name other shops gave the same product.
-  const [libName, setLibName] = useState<string | null>(null);
-  const nameFromLibrary = async () => {
-    if (!/^\d{8,14}$/.test(barcode) || name.trim()) return;
-    const hit = await call<{ name: string; unit: string | null; shops: number }[]>(`/library/barcode/${barcode}`).catch(() => []);
-    if (!hit[0]) return;
-    setName(hit[0].name);
-    if (hit[0].unit) setBase(hit[0].unit);
-    setLibName(`🤝 الاسم من مكتبة الباركود (${hit[0].shops} محل). عدّله لو تبي.`);
-  };
   const combos = Math.max(sizes.length, 1) * Math.max(colors.length, 1);
 
   const baseName = weighted ? "كيلو" : base.trim() || "حبة";
@@ -263,11 +253,10 @@ export function ItemCard({ call, initial = "", categoryId = "", onClose, onCreat
               <input list="item-base-units" value={base} onChange={(e) => setBase(e.target.value)} />
             </label>
             <label style={{ flex: 1, minWidth: 180 }}>الباركود
-              <input className="num" value={barcode} onChange={(e) => setBarcode(e.target.value.replace(/\s/g, ""))} placeholder="امسحه أو اتركه فاضي" onBlur={() => void nameFromLibrary()} onKeyDown={(e) => e.key === "Enter" && void nameFromLibrary()} />
+              <input className="num" value={barcode} onChange={(e) => setBarcode(e.target.value.replace(/\s/g, ""))} placeholder="امسحه أو اتركه فاضي" />
             </label>
           </div>
         )}
-        {libName && <div className="hint">{libName}</div>}
         {!service && !variants && !weighted && !barcode && <div className="hint">🏷️ ما فيش باركود؟ يتعمل له باركود خاص بالمحل تلقائياً وتقدر تطبعه ملصق.</div>}
 
         {!variants && !service && <fieldset className="item-box">

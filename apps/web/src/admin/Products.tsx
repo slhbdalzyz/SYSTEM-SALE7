@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { foldVariants, formatMoney, formatQty, shopModules, toMinor, variantBaseName, type CatalogProduct, type LibraryItem, type Modules } from "@pos/shared";
+import { foldVariants, formatMoney, formatQty, shopModules, toMinor, variantBaseName, type CatalogProduct, type Modules } from "@pos/shared";
 import { Modal } from "../pos/dialogs";
-import { LibraryPicker } from "./Library";
 import type { Call } from "./Admin";
 import { ItemCard } from "./ItemCard";
 import type { LabelDraft } from "./Labels";
@@ -63,26 +62,6 @@ export function Products({ call, storeId, onLabels, mods = shopModules("other") 
   const [tiers, setTiers] = useState(false);
   useEffect(() => setTiers(!!form?.units.some((u) => u.wholesale || u.contractor || u.workshop)), [form?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // «📚 من المكتبة»: ticked items come in with their department and packing, no price yet.
-  const [lib, setLib] = useState(false);
-  const [libBusy, setLibBusy] = useState(false);
-  const [libMsg, setLibMsg] = useState<{ text: string; bad?: boolean } | null>(null);
-  const addFromLibrary = async (items: LibraryItem[]) => {
-    setLibBusy(true);
-    setLibMsg(null);
-    try {
-      const r = await call<{ created: number; newCategories: number }>("/import/products", { body: { storeId, rows: items.map((i) => ({
-        name: i.name, category: i.category, unit: i.unit, weighted: i.weighted,
-        ...(i.packUnit && i.packQty ? { packUnit: i.packUnit, packFactorMilli: i.packQty * 1000 } : {}),
-      })) } });
-      setLibMsg({ text: `✓ تضاف ${r.created} صنف${r.newCategories ? ` و${r.newCategories} قسم` : ""}. حط أسعارهم من فاتورة التوريد أو من «تعديل»، والكاشير يسأل على السعر لو صنف ما عندهش سعر.` });
-      void load();
-    } catch (e) {
-      setLibMsg({ text: (e as Error).message, bad: true });
-    } finally {
-      setLibBusy(false);
-    }
-  };
   const load = async () => {
     setRows(await call<Row[]>(`/products?storeId=${storeId}`));
     setCats(await call<Dept[]>("/categories"));
@@ -266,15 +245,8 @@ export function Products({ call, storeId, onLabels, mods = shopModules("other") 
       <div className="row">
         <input placeholder="بحث بالاسم أو الباركود" value={q} onChange={(e) => setQ(e.target.value)} style={{ maxWidth: 360 }} />
         <span className="spacer" />
-        <button onClick={() => setLib(true)}>📚 من المكتبة</button>
         <button className="primary" onClick={() => setCard(true)}>+ بطاقة صنف جديدة</button>
       </div>
-      {lib && (
-        <Modal title="📚 مكتبة الأصناف" onClose={() => setLib(false)}>
-          <LibraryPicker call={call} action="أضف {n} صنف" busy={libBusy} onPick={(items) => void addFromLibrary(items)} />
-          {libMsg && <div className={libMsg.bad ? "error" : "badge ok"}>{libMsg.text}</div>}
-        </Modal>
-      )}
       {card && (
         <ItemCard call={call} initial={q.trim()} categoryId={dept !== "all" && dept !== "none" ? dept : ""} onClose={() => setCard(false)}
           onCreated={(p) => { setCard(false); setQ(""); void load(); if (p.groupId) setModel(p.groupId); }} />
