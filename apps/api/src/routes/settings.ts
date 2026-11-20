@@ -61,6 +61,7 @@ export async function settingsRoutes(app: FastifyInstance) {
     // The shop's features have their own page; saving the settings page never resets them.
     const old = readShopSettings((await app.db.query(`SELECT settings FROM tenants WHERE id = $1`, [req.user.tid])).rows[0]?.settings);
     b.settings.modules = old.modules;
+    b.settings.library = old.library;
     await app.db.query(`UPDATE tenants SET name = $2, settings = $3 WHERE id = $1`, [req.user.tid, b.name, JSON.stringify(b.settings)]);
     await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "settings.update", entity: "tenant", entityId: req.user.tid, data: { name: b.name } });
     return { name: b.name, settings: b.settings };

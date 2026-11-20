@@ -32,6 +32,7 @@ import { zakatRoutes } from "./routes/zakat";
 import { loyaltyRoutes } from "./routes/loyalty";
 import { quickRoutes } from "./routes/quick";
 import { importRoutes } from "./routes/import";
+import { libraryRoutes } from "./routes/library";
 import { subscriptionGuard } from "./billing";
 import { checkTokenRules } from "./features";
 import { platformProRoutes, runReminders } from "./routes/platform-pro";
@@ -43,6 +44,9 @@ import { businessRoutes } from "./routes/business";
 import { setGateway, type Gateway } from "./payments/gateway";
 import { plutuFromEnv } from "./payments/plutu";
 import { fakeGateway } from "./payments/fake";
+import { setReader, type PageReader } from "./reader/reader";
+import { claudeReader } from "./reader/claude";
+import { fakeReader } from "./reader/fake";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -59,6 +63,8 @@ export interface AppOptions {
   trustProxy?: boolean;
   /** Online subscription payments. Default: Plutu when its keys are in the environment, the demo stand-in with PAYMENTS_FAKE=1, else none. */
   gateway?: Gateway | null;
+  /** Reading photos of notebook pages. Default: Claude when ANTHROPIC_API_KEY is set, the demo stand-in with READER_FAKE=1, else off. */
+  reader?: PageReader | null;
 }
 
 export async function buildApp(opts: AppOptions) {
@@ -66,6 +72,7 @@ export async function buildApp(opts: AppOptions) {
   const app = Fastify({ logger: opts.logger ?? false, trustProxy: opts.trustProxy ?? false, bodyLimit: 2 * 1024 * 1024 });
   app.decorate("db", opts.db);
   setGateway(opts.gateway !== undefined ? opts.gateway : (plutuFromEnv() ?? (process.env.PAYMENTS_FAKE === "1" ? fakeGateway() : null)));
+  setReader(opts.reader !== undefined ? opts.reader : process.env.ANTHROPIC_API_KEY ? claudeReader() : process.env.READER_FAKE === "1" ? fakeReader() : null);
 
   await app.register(helmet);
   await app.register(cors, { origin: opts.corsOrigin ?? true });
@@ -149,6 +156,7 @@ export async function buildApp(opts: AppOptions) {
   await app.register(loyaltyRoutes);
   await app.register(quickRoutes);
   await app.register(importRoutes);
+  await app.register(libraryRoutes);
   return app;
 }
 

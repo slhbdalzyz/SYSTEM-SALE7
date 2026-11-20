@@ -760,3 +760,12 @@ a.btn.primary { background: var(--brand); color: var(--brand-ink); border-color:
 .switch:checked::after { inset-inline-start: 23px; }
 .switch:disabled { opacity: .6; }
 .switch:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+
+/* «📚 مكتبة الأصناف» */
+.library { display: flex; flex-direction: column; gap: 6px; max-height: 55vh; overflow: auto; }
+.library-group { border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 8px; }
+.library-head { padding: 6px 4px; text-align: start; }
+.library-items { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 2px 12px; padding: 4px 0 8px; }
+.library-item { display: flex; gap: 8px; align-items: center; color: var(--ink); padding: 3px 0; cursor: pointer; }
+.library-item.have { opacity: .55; cursor: default; }
+.paper-photo { border: 2px dashed var(--line); border-radius: var(--radius); padding: 18px; text-align: center; }

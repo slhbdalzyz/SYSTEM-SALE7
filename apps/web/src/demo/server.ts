@@ -31,6 +31,7 @@ import m027 from "../../../api/migrations/027_restaurant.sql?raw";
 import m028 from "../../../api/migrations/028_electronics.sql?raw";
 import m029 from "../../../api/migrations/029_business_pack.sql?raw";
 import m030 from "../../../api/migrations/030_services.sql?raw";
+import m031 from "../../../api/migrations/031_barcode_library.sql?raw";
 import { setGateway } from "../../../api/src/payments/gateway";
 import { fakeGateway } from "../../../api/src/payments/fake";
 import { authRoutes } from "../../../api/src/routes/auth";
@@ -66,6 +67,9 @@ import { businessRoutes } from "../../../api/src/routes/business";
 import { restaurantRoutes } from "../../../api/src/routes/restaurant";
 import { checkTokenRules } from "../../../api/src/features";
 import { importRoutes } from "../../../api/src/routes/import";
+import { libraryRoutes } from "../../../api/src/routes/library";
+import { setReader } from "../../../api/src/reader/reader";
+import { fakeReader } from "../../../api/src/reader/fake";
 import { seedDemo } from "./seed";
 import { checkSubscription } from "../../../api/src/billing";
 // Type-only: brings in the server's Fastify type additions (app.db, req.user) for the route files.
@@ -164,7 +168,7 @@ async function boot(): Promise<MiniApp> {
   }
   await pg.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY)`);
   const done = new Set((await pg.query<{ name: string }>(`SELECT name FROM schema_migrations`)).rows.map((r) => r.name));
-  for (const [name, sql] of [["001_init.sql", m001], ["002_customers_returns.sql", m002], ["003_device_kinds.sql", m003], ["004_saas.sql", m004], ["005_purchasing.sql", m005], ["006_branches.sql", m006], ["007_offers.sql", m007], ["008_online_payments.sql", m008], ["009_owner.sql", m009], ["010_restore.sql", m010], ["011_loyalty.sql", m011], ["012_departments_purchases.sql", m012], ["013_loyalty_cleanup.sql", m013], ["014_payroll_permissions.sql", m014], ["015_money.sql", m015], ["016_item_card.sql", m016], ["017_settings.sql", m017], ["018_pro.sql", m018], ["019_opening.sql", m019], ["020_zakat.sql", m020], ["021_till.sql", m021], ["022_loyalty.sql", m022], ["023_quick_keys.sql", m023], ["024_platform.sql", m024], ["025_pharmacy.sql", m025], ["026_butcher.sql", m026], ["027_restaurant.sql", m027], ["028_electronics.sql", m028], ["029_business_pack.sql", m029], ["030_services.sql", m030]] as const) {
+  for (const [name, sql] of [["001_init.sql", m001], ["002_customers_returns.sql", m002], ["003_device_kinds.sql", m003], ["004_saas.sql", m004], ["005_purchasing.sql", m005], ["006_branches.sql", m006], ["007_offers.sql", m007], ["008_online_payments.sql", m008], ["009_owner.sql", m009], ["010_restore.sql", m010], ["011_loyalty.sql", m011], ["012_departments_purchases.sql", m012], ["013_loyalty_cleanup.sql", m013], ["014_payroll_permissions.sql", m014], ["015_money.sql", m015], ["016_item_card.sql", m016], ["017_settings.sql", m017], ["018_pro.sql", m018], ["019_opening.sql", m019], ["020_zakat.sql", m020], ["021_till.sql", m021], ["022_loyalty.sql", m022], ["023_quick_keys.sql", m023], ["024_platform.sql", m024], ["025_pharmacy.sql", m025], ["026_butcher.sql", m026], ["027_restaurant.sql", m027], ["028_electronics.sql", m028], ["029_business_pack.sql", m029], ["030_services.sql", m030], ["031_barcode_library.sql", m031]] as const) {
     if (done.has(name)) continue;
     await pg.exec(sql);
     await pg.query(`INSERT INTO schema_migrations (name) VALUES ($1)`, [name]);
@@ -172,7 +176,8 @@ async function boot(): Promise<MiniApp> {
   const db = new Db(pg);
   const app = new MiniApp(db);
   setGateway(fakeGateway()); // Sadad and Edfali that accept the sandbox codes, no money involved
-  for (const r of [authRoutes, adminRoutes, catalogRoutes, salesRoutes, shiftRoutes, stockRoutes, reportRoutes, customerRoutes, returnRoutes, deviceRoutes, platformRoutes, subscriptionRoutes, purchasingRoutes, branchRoutes, offerRoutes, ownerRoutes, restoreRoutes, payrollRoutes, moneyRoutes, settingsRoutes, invoiceRoutes, countRoutes, importRoutes, zakatRoutes, loyaltyRoutes, quickRoutes, platformProRoutes, supportRoutes, butcherRoutes, restaurantRoutes, electronicsRoutes, businessRoutes]) {
+  setReader(fakeReader()); // a sample notebook page, so reading photos can be tried without an API key
+  for (const r of [authRoutes, adminRoutes, catalogRoutes, salesRoutes, shiftRoutes, stockRoutes, reportRoutes, customerRoutes, returnRoutes, deviceRoutes, platformRoutes, subscriptionRoutes, purchasingRoutes, branchRoutes, offerRoutes, ownerRoutes, restoreRoutes, payrollRoutes, moneyRoutes, settingsRoutes, invoiceRoutes, countRoutes, importRoutes, zakatRoutes, loyaltyRoutes, quickRoutes, platformProRoutes, supportRoutes, butcherRoutes, restaurantRoutes, electronicsRoutes, businessRoutes, libraryRoutes]) {
     await app.register(r);
   }
   await seedDemo(db);
