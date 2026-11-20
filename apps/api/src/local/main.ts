@@ -8,7 +8,7 @@
 //   POS_SHUTDOWN_TOKEN  lets the app ask for a clean stop on POST /api/local/shutdown
 process.env.POS_LOCAL = "1";
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import path from "node:path";
@@ -18,8 +18,9 @@ import { buildApp } from "../app";
 import type { Db } from "../db";
 import { PgliteDb, pgliteParsers } from "../pglite-db";
 import { localRoutes } from "./routes";
+import { BackupError, copyBeforeUpdate, LocalBackups, open } from "./backup";
 
-const dataDir = process.env.POS_DATA_DIR;
+const dataDir: string = process.env.POS_DATA_DIR ?? "";
 if (!dataDir) {
   console.error("POS_DATA_DIR is required");
   process.exit(2);
@@ -55,13 +56,61 @@ const jwtSecret = readFileSync(secretFile, "utf8").trim();
 const here = path.dirname(fileURLToPath(import.meta.url));
 const migrationsDir = [process.env.POS_MIGRATIONS_DIR, path.join(here, "migrations"), path.join(here, "..", "..", "migrations")].find((d) => d && existsSync(d))!;
 
-const pg = await PGlite.create(path.join(dataDir, "db"), { parsers: pgliteParsers });
+// Backups go next to the data folder (C:\ProgramData\Sale7\backups), and to a second place if the owner picked one.
+const root = path.dirname(path.resolve(dataDir));
+const dbDir = path.join(dataDir, "db");
+// An update that brings new tables first keeps a raw copy of the database as it was.
+if (existsSync(dbDir) && pending(migrationsDir, dbDir)) copyBeforeUpdate(root, dbDir);
+
+let pg = await PGlite.create(dbDir, { parsers: pgliteParsers });
 await migrate(pg, migrationsDir);
 const db = new PgliteDb(pg);
 
+const backups = new LocalBackups(root, dataDir, () => db.exclusive(async () => Buffer.from(await (await pg.dumpDataDir("gzip")).arrayBuffer())));
+
+/** Puts the database from a backup file in place of this one. The one it replaces is kept aside. */
+async function restore(file: Buffer, password: string | null) {
+  const packed = open(file, password, backups.known);
+  const tmp = path.join(dataDir, `db-restore-${Date.now()}`);
+  try {
+    const fresh = await PGlite.create(tmp, { parsers: pgliteParsers, loadDataDir: new Blob([new Uint8Array(packed)]) });
+    try {
+      await migrate(fresh, migrationsDir);
+      const n = (await fresh.query<{ n: number }>(`SELECT count(*)::int AS n FROM tenants`)).rows[0].n;
+      if (!n) throw new BackupError("النسخة فاضية: ما فيهاش محل");
+    } finally {
+      await fresh.close();
+    }
+  } catch (e) {
+    rmSync(tmp, { recursive: true, force: true });
+    if (e instanceof BackupError) throw e;
+    throw new BackupError("الملف تالف أو مش نسخة من هذا النظام");
+  }
+  await db.exclusive(async () => {
+    await pg.close();
+    const aside = path.join(root, "backups", "replaced");
+    mkdirSync(aside, { recursive: true });
+    renameSync(dbDir, path.join(aside, `db-${Date.now()}`));
+    for (const old of readdirSync(aside).sort().slice(0, -3)) rmSync(path.join(aside, old), { recursive: true, force: true });
+    renameSync(tmp, dbDir);
+    pg = await PGlite.create(dbDir, { parsers: pgliteParsers });
+    db.swap(pg);
+  });
+  console.log("restored a backup");
+}
+
 const shutdownToken = process.env.POS_SHUTDOWN_TOKEN ?? "";
 const app = await buildApp({ db: db as unknown as Db, jwtSecret, logger: false });
-await app.register(localRoutes, { shutdownToken, stop: () => void stop("asked") });
+await app.register(localRoutes, { shutdownToken, stop: () => void stop("asked"), backups, restore });
+
+// A backup every day the shop is open, and one after each shift closes.
+const backupIfDue = async () => {
+  if (stopping || !backups.due()) return;
+  if (!(await db.query(`SELECT 1 FROM tenants LIMIT 1`)).rowCount) return;
+  await backups.run().catch((e) => console.error("backup failed", e));
+};
+setTimeout(() => void backupIfDue(), 60_000).unref();
+setInterval(() => void backupIfDue(), 10 * 60_000).unref();
 
 let stopping = false;
 let server: Server | undefined;
@@ -73,6 +122,7 @@ async function stop(why: string) {
   hard.unref();
   server?.close();
   await app.close().catch(() => undefined);
+  await backups.running?.catch(() => undefined);
   await db.idle().catch(() => undefined);
   await pg.close().catch(() => undefined);
   rmSync(lockFile, { force: true });
@@ -91,6 +141,9 @@ server = createServer((req, res) => {
   const url = req.url ?? "/";
   if (url === "/api" || url.startsWith("/api/") || url.startsWith("/api?")) {
     req.url = url.slice(4) || "/";
+    if (req.method === "POST" && /^\/shifts\/[^/]+\/close/.test(req.url)) {
+      res.on("finish", () => res.statusCode === 200 && void backups.run().catch((e) => console.error("backup failed", e)));
+    }
     app.routing(req, res);
     return;
   }
@@ -101,6 +154,13 @@ await new Promise<void>((resolve, reject) => {
   server!.listen(port, host, resolve);
 });
 console.log(`local server on http://${host}:${port}, data in ${dataDir}`);
+
+/** Whether this version brings SQL files the database has not had yet (read from PGlite's files would need it open: use the list we wrote). */
+function pending(dir: string, dbDir: string) {
+  const applied = path.join(dbDir, "..", "migrations.applied");
+  const have = existsSync(applied) ? readFileSync(applied, "utf8") : "";
+  return readdirSync(dir).some((f) => f.endsWith(".sql") && !have.includes(f));
+}
 
 /** Applies the SQL files in order, each once, each in one transaction. */
 async function migrate(pg: PGlite, dir: string) {
@@ -115,4 +175,7 @@ async function migrate(pg: PGlite, dir: string) {
     });
     console.log(`applied ${file}`);
   }
+  // Remembered outside the database, so the next start can tell an update is coming before opening it.
+  const all = (await pg.query<{ name: string }>(`SELECT name FROM schema_migrations ORDER BY name`)).rows.map((r) => r.name);
+  writeFileSync(path.join(dataDir, "migrations.applied"), all.join("\n"));
 }

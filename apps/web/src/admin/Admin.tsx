@@ -20,6 +20,7 @@ import { Electronics, Repairs } from "./Electronics";
 import { Recipes } from "./Restaurant";
 import { Deliveries, Installments, Kits, Quotes } from "./Business";
 import { Subscription, subNotice, type Sub } from "./Subscription";
+import { LocalBackup } from "./LocalBackup";
 import { Expenses } from "./Expenses";
 import { Alerts } from "../owner/Alerts";
 import { AlertSettings, BackupCard, RestoreCard } from "../owner/Settings";
@@ -130,6 +131,11 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
       .catch(() => setSub(null));
   }, [call, loadMe]);
   const notice = sub && subNotice(sub);
+  // On the shop's own computer: say so when backups stopped (no copy for 3 days, USB stick missing).
+  const [backupWarning, setBackupWarning] = useState<string | null>(null);
+  useEffect(() => {
+    if (LOCAL && me?.user.role === "owner") call<{ warning: string | null }>("/local/backup/warning").then((r) => setBackupWarning(r.warning)).catch(() => undefined);
+  }, [call, me?.user.role]);
 
   if (error) return <div className="center"><div className="error">{error}</div></div>;
   if (!me) return <div className="center muted">جاري التحميل…</div>;
@@ -200,6 +206,9 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
             {notice.text} <u>التفاصيل</u>
           </div>
         )}
+        {backupWarning && isOwner && shown !== "backup" && (
+          <div className="error" onClick={() => setTab("backup")} style={{ cursor: "pointer" }}>⚠️ {backupWarning} <u>النسخ الاحتياطي</u></div>
+        )}
         <Announcements call={call} />
         <div className="stack" key={store.id}>
           {shown === "home" && <Home call={call} storeId={store.id} userName={me.user.name} open={setTab} />}
@@ -230,7 +239,7 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
           {shown === "mypay" && !can("settings") && <SecurityCard call={call} />}
           {shown === "alerts" && <><Alerts call={call} /><AlertSettings call={call} isOwner={isOwner} /></>}
           {shown === "expenses" && <Expenses call={call} storeId={store.id} stores={open} />}
-          {shown === "backup" && (isOwner ? <><BackupCard /><RestoreCard /></> : <div className="notice">النسخة الاحتياطية لصاحب المحل فقط</div>)}
+          {shown === "backup" && (isOwner ? LOCAL ? <LocalBackup call={call} /> : <><BackupCard /><RestoreCard /></> : <div className="notice">النسخة الاحتياطية لصاحب المحل فقط</div>)}
           {shown === "staff" && <Staff call={call} isOwner={isOwner} mine={me.user.permissions} />}
           {shown === "payroll" && <Payroll call={call} storeId={store.id} />}
           {shown === "money" && <Money call={call} />}

@@ -7,6 +7,7 @@ import { db } from "./localdb";
 import { session } from "./session";
 import type { Screen } from "./App";
 import { TYPES } from "./Setup";
+import { RestoreUpload } from "./admin/LocalBackup";
 
 export function LocalSetup({ go, login }: { go: (s: Screen) => void; login: JSX.Element }) {
   const [status, setStatus] = useState<{ shop: { name: string } | null } | null>(null);
@@ -25,6 +26,7 @@ function FirstRun({ go }: { go: (s: Screen) => void }) {
   const [show, setShow] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [restoring, setRestoring] = useState(false);
   const set = (patch: Partial<typeof f>) => setF({ ...f, ...patch });
   const STEPS = ["المحل", "حسابك"];
   const ok = [
@@ -111,6 +113,13 @@ function FirstRun({ go }: { go: (s: Screen) => void }) {
 
         {error && <div className="error">{error}</div>}
         <button className="primary big" disabled={busy || !ok[step]}>{step < 1 ? "التالي" : busy ? "جاري إعداد المحل…" : "إنشاء المحل وابدأ"}</button>
+        {step === 0 && (
+          restoring ? (
+            <div className="card stack"><RestoreUpload token={null} /><button type="button" className="ghost" onClick={() => setRestoring(false)}>إلغاء</button></div>
+          ) : (
+            <div className="row"><span className="muted">نقلت من جهاز قديم؟</span><button type="button" className="ghost" onClick={() => setRestoring(true)}>استرجع نسخة احتياطية</button></div>
+          )
+        )}
       </form>
     </div>
   );

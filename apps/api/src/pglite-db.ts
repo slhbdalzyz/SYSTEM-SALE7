@@ -38,6 +38,14 @@ export class PgliteDb {
   idle() {
     return this.lock(async () => undefined);
   }
+  /** Runs `fn` with the database to itself: nothing else runs until it finishes (a backup copy). */
+  exclusive<T>(fn: () => Promise<T>): Promise<T> {
+    return this.lock(fn);
+  }
+  /** Puts another database in place of this one (after a restore); callers keep the same object. */
+  swap(pg: PgliteLike) {
+    this.pg = pg;
+  }
 }
 
 /** Same conversions as the pg pool in db.ts: bigint and numeric as numbers, a date as "YYYY-MM-DD". */

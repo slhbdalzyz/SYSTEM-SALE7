@@ -55,3 +55,17 @@ export async function api<T = unknown>(path: string, opts: { method?: string; bo
   if (!res.ok) throw new ApiError(res.status, (data as { error?: string }).error ?? `خطأ ${res.status}`);
   return data as T;
 }
+
+/** Sends a file as it is (a backup to restore), with extra headers. */
+export async function apiUpload<T = unknown>(path: string, file: Blob, headers: Record<string, string> = {}, token?: string | null): Promise<T> {
+  if (LOCAL) await waitForLocalServer();
+  let res: Response;
+  try {
+    res = await fetch(BASE + path, { method: "POST", headers: { "content-type": "application/octet-stream", ...headers, ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: file });
+  } catch {
+    throw new ApiError(0, "لا يوجد اتصال بالسيرفر");
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError(res.status, (data as { error?: string }).error ?? `خطأ ${res.status}`);
+  return data as T;
+}
