@@ -6,6 +6,19 @@
     "frontendDist": "../../web/dist"
   },
   "bundle": {
-    "resources": { "server/": "server/" }
+    "resources": {
+      "server/": "server/"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDc1NzdDRTJFQTg3NTZBMTMKUldRVGFuV29MczUzZFpadzJOUmFDenp0QWMvWnppU0lEQjRuMjV6ekIzUDZOU2I2TWs4TE93amQK",
+      "endpoints": [
+        "https://github.com/slhbdalzyz/system-sale7/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

@@ -8,6 +8,7 @@ mod backup;
 mod local;
 mod printer;
 mod scale;
+mod update;
 
 use std::io::Write;
 use std::net::{TcpStream, ToSocketAddrs};
@@ -108,9 +109,12 @@ pub fn run() {
             let fallback = app.path().app_data_dir()?;
             let server = local::start(&app.path().resource_dir()?, local::data_root(fallback));
             app.manage(server);
+            if update::enabled(app.handle()) {
+                app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+            }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![list_printers, print_raw, print_tcp, open_display, list_serial_ports, read_scale, save_backup, local_info])
+        .invoke_handler(tauri::generate_handler![list_printers, print_raw, print_tcp, open_display, list_serial_ports, read_scale, save_backup, local_info, update::check_update, update::install_update])
         .build(tauri::generate_context!())
         .expect("error while starting the till");
     app.run(|app, event| {

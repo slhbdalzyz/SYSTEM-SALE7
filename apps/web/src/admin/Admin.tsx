@@ -21,6 +21,7 @@ import { Recipes } from "./Restaurant";
 import { Deliveries, Installments, Kits, Quotes } from "./Business";
 import { Subscription, subNotice, type Sub } from "./Subscription";
 import { LocalBackup } from "./LocalBackup";
+import { AppUpdate } from "./AppUpdate";
 import { LocalLicense, licNotice, type Lic } from "./LocalLicense";
 import { Expenses } from "./Expenses";
 import { Alerts } from "../owner/Alerts";
@@ -222,6 +223,7 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
         {backupWarning && isOwner && shown !== "backup" && (
           <div className="error" onClick={() => setTab("backup")} style={{ cursor: "pointer" }}>⚠️ {backupWarning} <u>النسخ الاحتياطي</u></div>
         )}
+        {LOCAL && isOwner && <AppUpdate call={call} />}
         <Announcements call={call} />
         <div className="stack" key={store.id}>
           {shown === "home" && <Home call={call} storeId={store.id} userName={me.user.name} open={setTab} />}
