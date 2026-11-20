@@ -5,12 +5,15 @@ import { z } from "zod";
 import { audit } from "../db";
 import { authenticate, HttpError, requireRole } from "../auth";
 import type { LocalBackups } from "./backup";
+import type { LocalLicense } from "./license";
+import { daysLeft, graceDays, subState } from "../billing";
 
 export interface LocalOptions {
   shutdownToken: string;
   stop: () => void;
   backups?: LocalBackups;
   restore?: (file: Buffer, password: string | null) => Promise<void>;
+  license?: LocalLicense;
 }
 
 const MAX_BACKUP = 2 * 1024 * 1024 * 1024;
@@ -32,6 +35,32 @@ export async function localRoutes(app: FastifyInstance, opts: LocalOptions) {
     setTimeout(opts.stop, 50);
     return { ok: true };
   });
+
+  const license = opts.license;
+  if (license) {
+    /** The licence screen: this computer's ID (to send to the seller), the key in use, and where it stands. */
+    app.get("/local/license", { preHandler: authenticate }, async (req) => {
+      const t = (await app.db.query(`SELECT status, paid_until, status_reason FROM tenants WHERE id = $1`, [req.user.tid])).rows[0];
+      const cur = license.current();
+      return {
+        machineId: license.machineId,
+        canActivate: license.publicKeys.length > 0,
+        license: cur ? { shop: cur.shop, from: cur.from, until: cur.until, devices: cur.devices } : null,
+        state: t ? subState(t, await graceDays(app.db)) : "locked",
+        paidUntil: t?.paid_until ?? null,
+        daysLeft: t ? daysLeft(t.paid_until) : 0,
+        reason: t?.status_reason ?? null,
+      };
+    });
+
+    app.post("/local/license", { preHandler: requireRole("owner") }, async (req) => {
+      const { key } = z.object({ key: z.string().min(10).max(4000) }).parse(req.body);
+      const p = license.activate(key);
+      await license.apply(app.db);
+      await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "license.activate", data: { id: p.id, until: p.until } });
+      return { ok: true, until: p.until };
+    });
+  }
 
   const backups = opts.backups;
   const restore = opts.restore;

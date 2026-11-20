@@ -21,7 +21,10 @@ await build({
   // Some dependencies still call require(); give the ESM bundle one.
   banner: { js: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);" },
   logLevel: "warning",
+  // The platform's public licence key, fetched by the Windows build from GET /api/licenses/public-key.
+  define: { "process.env.POS_LICENSE_PUBLIC_KEY": JSON.stringify(process.env.LICENSE_PUBLIC_KEY ?? "") },
 });
+if (!process.env.LICENSE_PUBLIC_KEY) console.warn("No LICENSE_PUBLIC_KEY: this build cannot activate licences (the 14-day trial still works).");
 cpSync("apps/api/migrations", `${out}/migrations`, { recursive: true });
 
 // pnpm keeps the package behind a link in apps/api/node_modules; copy what it points to.

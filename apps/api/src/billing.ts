@@ -63,7 +63,7 @@ export async function assertNotLocked(db: Db, tid: string) {
 }
 
 /** Writes that stay open while locked: syncing what the till already did, and signing in to see the bill. */
-const OPEN_WHILE_LOCKED = [/^\/auth\//, /^\/sales\/batch$/, /^\/shifts\//, /^\/devices\/events$/, /^\/customers\/[^/]+\/payments$/, /^\/platform\//, /^\/subscription\/pay\//];
+const OPEN_WHILE_LOCKED = [/^\/auth\//, /^\/sales\/batch$/, /^\/shifts\//, /^\/devices\/events$/, /^\/customers\/[^/]+\/payments$/, /^\/platform\//, /^\/subscription\/pay\//, /^\/local\//];
 
 /** Rejects a write by a shop that is locked. `verify` reads the caller's token, if there is one. */
 export async function checkSubscription(db: Db, method: string, path: string, verify: (() => Promise<TokenPayload>) | null) {

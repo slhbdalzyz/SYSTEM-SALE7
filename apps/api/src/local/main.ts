@@ -19,6 +19,7 @@ import type { Db } from "../db";
 import { PgliteDb, pgliteParsers } from "../pglite-db";
 import { localRoutes } from "./routes";
 import { BackupError, copyBeforeUpdate, LocalBackups, open } from "./backup";
+import { LocalLicense, readMachineId } from "./license";
 
 const dataDir: string = process.env.POS_DATA_DIR ?? "";
 if (!dataDir) {
@@ -96,12 +97,25 @@ async function restore(file: Buffer, password: string | null) {
     pg = await PGlite.create(dbDir, { parsers: pgliteParsers });
     db.swap(pg);
   });
+  await license.apply(db);
   console.log("restored a backup");
 }
 
+// The platform's public key is put in the server when the Windows app is built (see build-local-server.mjs).
+const publicKeys = (process.env.POS_LICENSE_PUBLIC_KEY ?? "").split(",").map((k) => k.trim()).filter(Boolean);
+const cloudUrl = process.env.POS_CLOUD_URL === "" ? null : (process.env.POS_CLOUD_URL ?? "https://sale7-pos.vercel.app/api");
+const license = new LocalLicense(dataDir, readMachineId(dataDir), publicKeys, cloudUrl);
+await license.apply(db);
+const checkLicense = async () => {
+  if (stopping) return;
+  await license.renewOnline().catch(() => false);
+  await license.apply(db).catch((e) => console.error("licence check failed", e));
+};
+setInterval(() => void checkLicense(), 10 * 60_000).unref();
+
 const shutdownToken = process.env.POS_SHUTDOWN_TOKEN ?? "";
 const app = await buildApp({ db: db as unknown as Db, jwtSecret, logger: false });
-await app.register(localRoutes, { shutdownToken, stop: () => void stop("asked"), backups, restore });
+await app.register(localRoutes, { shutdownToken, stop: () => void stop("asked"), backups, restore, license });
 
 // A backup every day the shop is open, and one after each shift closes.
 const backupIfDue = async () => {

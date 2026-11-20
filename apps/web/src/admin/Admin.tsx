@@ -21,6 +21,7 @@ import { Recipes } from "./Restaurant";
 import { Deliveries, Installments, Kits, Quotes } from "./Business";
 import { Subscription, subNotice, type Sub } from "./Subscription";
 import { LocalBackup } from "./LocalBackup";
+import { LocalLicense, licNotice, type Lic } from "./LocalLicense";
 import { Expenses } from "./Expenses";
 import { Alerts } from "../owner/Alerts";
 import { AlertSettings, BackupCard, RestoreCard } from "../owner/Settings";
@@ -59,7 +60,7 @@ const NAV = [
 ] as const;
 type ItemKeys<T> = T extends { items: infer I } ? keyof I : never;
 type Tab = ItemKeys<(typeof NAV)[number]>;
-const TABS = Object.assign({}, ...NAV.map((g) => g.items)) as Record<Tab, readonly [string, string]>;
+const TABS = Object.assign({}, ...NAV.map((g) => g.items), LOCAL ? { subscription: ["⭐", "الترخيص"] } : {}) as Record<Tab, readonly [string, string]>;
 
 /** What opens each screen. "owner" = the shop owner only; null = everyone (their own pay). */
 const NEEDS: Record<Tab, Permission | "owner" | null> = {
@@ -130,7 +131,19 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
       })
       .catch(() => setSub(null));
   }, [call, loadMe]);
-  const notice = sub && subNotice(sub);
+  // On the shop's own computer the yearly licence takes the subscription's place.
+  const [lic, setLic] = useState<Lic | null>(null);
+  const loadLic = useCallback(() => {
+    if (!LOCAL) return;
+    call<Lic>("/local/license")
+      .then((l) => {
+        setLic(l);
+        if (["locked", "suspended"].includes(l.state)) setTab("subscription");
+      })
+      .catch(() => setLic(null));
+  }, [call]);
+  useEffect(() => loadLic(), [loadLic]);
+  const notice = LOCAL ? lic && licNotice(lic) : sub && subNotice(sub);
   // On the shop's own computer: say so when backups stopped (no copy for 3 days, USB stick missing).
   const [backupWarning, setBackupWarning] = useState<string | null>(null);
   useEffect(() => {
@@ -149,7 +162,7 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
     const need = MODULE_OF[t];
     if (need && !need.some((k) => mods[k])) return false;
     // On the shop's own computer there is no monthly subscription and no platform to write to.
-    if (LOCAL && (t === "subscription" || t === "support")) return false;
+    if (LOCAL && t === "support") return false;
     if (t === "electronics") return isOwner || ["products", "purchasing", "sales", "customers"].some((p) => me.user.permissions.includes(p as Permission));
     // Put away by the owner once the shop moved off paper; brought back from the settings.
     if (t === "paper" && me.tenant.settings?.menu?.hidePaper) return false;
@@ -244,7 +257,7 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
           {shown === "payroll" && <Payroll call={call} storeId={store.id} />}
           {shown === "money" && <Money call={call} />}
           {shown === "mypay" && <MyPay token={session.adminToken} />}
-          {shown === "subscription" && <Subscription call={call} />}
+          {shown === "subscription" && (LOCAL ? <LocalLicense call={call} onChange={loadLic} /> : <Subscription call={call} />)}
           {shown === "support" && <Support call={call} isOwner={isOwner} />}
           {shown === "devices" && <Devices call={call} storeId={store.id} storeName={store.name} go={go} isOwner={isOwner} />}
         </div>

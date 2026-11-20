@@ -55,6 +55,8 @@ jobs:
           # Pushes and pull requests build the local edition.
           EDITION: ${{ inputs.edition || 'local' }}
           NODE_VERSION: v22.20.0
+          CLOUD_API: https://sale7-pos.vercel.app/api
+          LICENSE_PUBLIC_KEY: ${{ vars.LICENSE_PUBLIC_KEY }}
         run: |
           if [ -n "$API_URL" ]; then
             # A shop on the cloud: talk to its server, and package the normal web build.
@@ -67,6 +69,12 @@ jobs:
           else
             # The local edition carries its own Node to run the shop's server.
             curl -fsSL -o "$RUNNER_TEMP/node.exe" "https://nodejs.org/dist/$NODE_VERSION/win-x64/node.exe"
+            # And the platform's public licence key, so it can check activation keys with no internet.
+            if [ -z "$LICENSE_PUBLIC_KEY" ]; then
+              LICENSE_PUBLIC_KEY=$(curl -fsS --max-time 20 "$CLOUD_API/licenses/public-key" | node -e 'let s="";process.stdin.on("data",(d)=>(s+=d)).on("end",()=>{try{process.stdout.write(JSON.parse(s).publicKey||"")}catch{}})' || true)
+            fi
+            if [ -z "$LICENSE_PUBLIC_KEY" ]; then echo "::warning::No licence public key: this build runs the 14-day trial but cannot activate licences."; fi
+            export LICENSE_PUBLIC_KEY
             export NODE_EXE="$RUNNER_TEMP/node.exe" VITE_LOCAL=1 VITE_API_URL=http://127.0.0.1:7400/api
             pnpm tauri build --config src-tauri/tauri.local.conf.json
           fi

@@ -45,11 +45,11 @@ describe("local edition", () => {
     expect((await call("GET", "/local/status")).body.shop).toEqual({ name: "بقالة الحي" });
   });
 
-  it("is open with no trial and no monthly plan", async () => {
-    const t = (await pg.query<{ status: string; plan_code: string; years: number }>(`SELECT status, plan_code, extract(year from paid_until) - extract(year from now()) AS years FROM tenants`)).rows[0];
-    expect(t.status).toBe("active");
+  it("opens everything for a 14-day trial, with no monthly plan", async () => {
+    const t = (await pg.query<{ status: string; plan_code: string; days: number }>(`SELECT status, plan_code, round(extract(epoch from paid_until - now()) / 86400) AS days FROM tenants`)).rows[0];
+    expect(t.status).toBe("trial");
     expect(t.plan_code).toBe("chain");
-    expect(Number(t.years)).toBeGreaterThan(50);
+    expect(Number(t.days)).toBe(14);
   });
 
   it("holds one shop only", async () => {
