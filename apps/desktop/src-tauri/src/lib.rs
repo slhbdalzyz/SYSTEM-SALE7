@@ -1,16 +1,18 @@
 //! The Windows shell around the web till. It adds what a browser cannot do: send raw bytes
 //! to the receipt printer (and through it, pulse the cash drawer), and open the customer
 //! display on the second monitor, read the counter scale on a COM port, and keep daily
-//! backups of the shop's data on the till's disk.
+//! backups of the shop's data on the till's disk. The local edition also runs the shop's own
+//! server and database on this computer (see local.rs).
 
 mod backup;
+mod local;
 mod printer;
 mod scale;
 
 use std::io::Write;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
 #[tauri::command]
 fn list_printers() -> Result<Vec<String>, String> {
@@ -86,10 +88,36 @@ fn open_display(app: AppHandle) -> Result<(), String> {
     b.build().map(|_| ()).map_err(|e| e.to_string())
 }
 
+#[derive(serde::Serialize)]
+struct LocalInfo {
+    data_dir: String,
+    log_file: String,
+    port: u16,
+}
+
+/// The local edition's folders, for the settings and backup screens; None in other builds.
+#[tauri::command]
+fn local_info(state: tauri::State<'_, Option<local::LocalServer>>) -> Option<LocalInfo> {
+    state.as_ref().map(|s| LocalInfo { data_dir: s.data_dir.display().to_string(), log_file: s.log_file.display().to_string(), port: local::PORT })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![list_printers, print_raw, print_tcp, open_display, list_serial_ports, read_scale, save_backup])
-        .run(tauri::generate_context!())
-        .expect("error while running the till");
+    let app = tauri::Builder::default()
+        .setup(|app| {
+            let fallback = app.path().app_data_dir()?;
+            let server = local::start(&app.path().resource_dir()?, local::data_root(fallback));
+            app.manage(server);
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![list_printers, print_raw, print_tcp, open_display, list_serial_ports, read_scale, save_backup, local_info])
+        .build(tauri::generate_context!())
+        .expect("error while starting the till");
+    app.run(|app, event| {
+        if let RunEvent::Exit = event {
+            if let Some(server) = app.state::<Option<local::LocalServer>>().as_ref() {
+                server.stop();
+            }
+        }
+    });
 }

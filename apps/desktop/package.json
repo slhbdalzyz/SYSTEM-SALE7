@@ -5,7 +5,8 @@
   "scripts": {
     "build:web": "cd ../web && npx vite build",
     "tauri": "tauri",
-    "build": "tauri build"
+    "build": "tauri build",
+    "build:local": "cd ../web && npx vite build && cd ../.. && node scripts/build-local-server.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.5.0"

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Sale7 POS",
+  "build": {
+    "beforeBuildCommand": "pnpm run build:local",
+    "frontendDist": "../../web/dist"
+  },
+  "bundle": {
+    "resources": { "server/": "server/" }
+  }
+}

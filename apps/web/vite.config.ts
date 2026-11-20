@@ -4,6 +4,8 @@ import { VitePWA } from "vite-plugin-pwa";
 import { fileURLToPath } from "node:url";
 
 const demo = process.env.VITE_DEMO === "1";
+// The Windows app's local edition: packaged inside the app, talking to the server it starts.
+const local = process.env.VITE_LOCAL === "1";
 const shims = fileURLToPath(new URL("./src/demo/shims.ts", import.meta.url));
 
 export default defineConfig({
@@ -12,7 +14,7 @@ export default defineConfig({
   build: demo ? { outDir: "dist-demo", chunkSizeWarningLimit: 4000 } : undefined,
   // Always a fixed string, so the demo's code (and its 10 MB database) is dropped from a real
   // build even when VITE_DEMO isn't set at all, as on the Windows app's build machine.
-  define: { "import.meta.env.VITE_DEMO": JSON.stringify(demo ? "1" : "") },
+  define: { "import.meta.env.VITE_DEMO": JSON.stringify(demo ? "1" : ""), "import.meta.env.VITE_LOCAL": JSON.stringify(local ? "1" : "") },
   // The demo runs the API's route code in the page; these two Node modules get browser stand-ins.
   resolve: { alias: { "node:crypto": shims, pg: shims } },
   optimizeDeps: { exclude: ["@electric-sql/pglite"] },
@@ -20,7 +22,7 @@ export default defineConfig({
     react(),
     // Caches the app itself so the cashier screen opens with no internet.
     VitePWA({
-      disable: demo,
+      disable: demo || local,
       registerType: "autoUpdate",
       manifest: {
         name: "نظام نقاط البيع",

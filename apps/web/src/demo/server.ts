@@ -67,6 +67,7 @@ import { restaurantRoutes } from "../../../api/src/routes/restaurant";
 import { checkTokenRules } from "../../../api/src/features";
 import { importRoutes } from "../../../api/src/routes/import";
 import { seedDemo } from "./seed";
+import { PgliteDb } from "../../../api/src/pglite-db";
 import { checkSubscription } from "../../../api/src/billing";
 // Type-only: brings in the server's Fastify type additions (app.db, req.user) for the route files.
 import type {} from "../../../api/src/app";
@@ -86,32 +87,8 @@ type Fn = (req: Req, reply: unknown) => unknown;
 interface Route { method: string; parts: string[]; pre: Fn[]; handler: Fn }
 
 /** One connection, used by one caller at a time, like a pool of size one. */
-class Db {
-  private queue: Promise<unknown> = Promise.resolve();
-  constructor(private pg: PGlite) {}
-  private async raw(sql: string, params: unknown[] = []) {
-    const r = await this.pg.query(sql, params);
-    return { rows: r.rows as any[], rowCount: Math.max(r.rows.length, r.affectedRows ?? 0) }; // eslint-disable-line @typescript-eslint/no-explicit-any
-  }
-  private lock<T>(fn: () => Promise<T>): Promise<T> {
-    const run = this.queue.then(fn, fn);
-    this.queue = run.catch(() => undefined);
-    return run;
-  }
-  query(sql: string, params?: unknown[]) {
-    return this.lock(() => this.raw(sql, params));
-  }
-  connect() {
-    return new Promise<{ query: Db["raw"]; release: () => void }>((resolve) => {
-      void this.lock(
-        () =>
-          new Promise<void>((done) => {
-            resolve({ query: (s, p) => this.raw(s, p), release: () => done() });
-          }),
-      );
-    });
-  }
-}
+const Db = PgliteDb;
+type Db = PgliteDb;
 
 const b64 = (o: unknown) => btoa(unescape(encodeURIComponent(JSON.stringify(o)))).replace(/=+$/, "");
 

@@ -1,7 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { formatMoney } from "@pos/shared";
 import type { Plan } from "./billing";
-import { api } from "./api";
+import { api, LOCAL } from "./api";
+import { LocalSetup } from "./LocalSetup";
 import { session } from "./session";
 import type { Screen } from "./App";
 import { prefersOwnerView } from "./owner/Owner";
@@ -43,7 +44,7 @@ export function Setup({ go }: { go: (s: Screen) => void }) {
     return q.has("login") || session.deviceToken ? "login" : "landing";
   });
   const [plans, setPlans] = useState<Plan[]>([]);
-  useEffect(() => void api<Plan[]>("/plans").then(setPlans).catch(() => undefined), []);
+  useEffect(() => void (!LOCAL && api<Plan[]>("/plans").then(setPlans).catch(() => undefined)), []);
   const start = (planCode?: string) => {
     setMode("register");
     try {
@@ -53,6 +54,8 @@ export function Setup({ go }: { go: (s: Screen) => void }) {
     }
     window.scrollTo?.(0, 0);
   };
+  // On the shop's own computer: no landing page and no sign-up for a plan, just its first-run setup.
+  if (LOCAL) return <LocalSetup go={go} login={<Login go={go} />} />;
   if (mode === "login") return <Login go={go} onRegister={() => start()} onBack={() => setMode("landing")} />;
   if (mode === "register") return <Register go={go} plans={plans} onLogin={() => setMode("login")} onBack={() => setMode("landing")} />;
   return <Landing plans={plans} onStart={start} onLogin={() => setMode("login")} />;
@@ -118,7 +121,7 @@ function Landing({ plans, onStart, onLogin }: { plans: Plan[]; onStart: (plan?: 
   );
 }
 
-function Login({ go, onRegister, onBack }: { go: (s: Screen) => void; onRegister: () => void; onBack: () => void }) {
+function Login({ go, onRegister, onBack }: { go: (s: Screen) => void; onRegister?: () => void; onBack?: () => void }) {
   const [f, setF] = useState({ email: "", password: "" });
   const [code, setCode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -145,7 +148,7 @@ function Login({ go, onRegister, onBack }: { go: (s: Screen) => void; onRegister
   return (
     <div className="center">
       <form className="card stack" style={{ width: "min(420px, 100%)" }} onSubmit={submit}>
-        <button type="button" className="ghost back" onClick={onBack}>→ رجوع</button>
+        {onBack && <button type="button" className="ghost back" onClick={onBack}>→ رجوع</button>}
         <h1 style={{ margin: 0 }}>دخول</h1>
         <label>البريد الإلكتروني<input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} required autoFocus /></label>
         <label>كلمة السر<input type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} required disabled={code !== null} /></label>
@@ -157,7 +160,7 @@ function Login({ go, onRegister, onBack }: { go: (s: Screen) => void; onRegister
         {error && <div className="error">{error}</div>}
         <button className="primary big" disabled={busy || (code !== null && code.length !== 6)}>{code !== null ? "تأكيد" : "دخول"}</button>
         <p className="muted" style={{ margin: 0, fontSize: ".85rem" }}>بعد الدخول تقدر تعتمد هذا الجهاز ككاشير من صفحة «الأجهزة».</p>
-        <div className="row"><span className="muted">ما عندكش حساب؟</span><button type="button" className="ghost" onClick={onRegister}>سجّل محلك</button></div>
+        {onRegister && <div className="row"><span className="muted">ما عندكش حساب؟</span><button type="button" className="ghost" onClick={onRegister}>سجّل محلك</button></div>}
       </form>
     </div>
   );

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, ApiError } from "../api";
+import { api, ApiError, LOCAL } from "../api";
 import { session, supportMode } from "../session";
 import type { Screen } from "../App";
 import { Products } from "./Products";
@@ -122,7 +122,7 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
   const loadMe = useCallback(() => call<Me>("/me").then(setMe).catch((e) => setError((e as Error).message)), [call]);
   useEffect(() => {
     void loadMe();
-    call<Sub>("/subscription")
+    if (!LOCAL) call<Sub>("/subscription")
       .then((s) => {
         setSub(s);
         if (["locked", "suspended", "cancelled"].includes(s.state) || new URLSearchParams(location.search).has("payment")) setTab("subscription");
@@ -142,6 +142,8 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
     // Screens of a feature the shop turned off (or never needed) stay out of the menu.
     const need = MODULE_OF[t];
     if (need && !need.some((k) => mods[k])) return false;
+    // On the shop's own computer there is no monthly subscription and no platform to write to.
+    if (LOCAL && (t === "subscription" || t === "support")) return false;
     if (t === "electronics") return isOwner || ["products", "purchasing", "sales", "customers"].some((p) => me.user.permissions.includes(p as Permission));
     // Put away by the owner once the shop moved off paper; brought back from the settings.
     if (t === "paper" && me.tenant.settings?.menu?.hidePaper) return false;

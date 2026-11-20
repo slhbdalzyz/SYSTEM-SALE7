@@ -5,6 +5,7 @@ import { z } from "zod";
 import { audit, inTx } from "../db";
 import { HttpError, authenticate, hashToken, type TokenPayload } from "../auth";
 import { assertNotLocked } from "../billing";
+import { isLocal } from "../edition";
 
 const registerSchema = z.object({
   businessName: z.string().min(2).max(120),
@@ -32,12 +33,18 @@ export async function authRoutes(app: FastifyInstance) {
     const email = b.email.toLowerCase();
     const exists = await app.db.query(`SELECT 1 FROM users WHERE email = $1`, [email]);
     if (exists.rowCount) throw new HttpError(409, "البريد مسجل من قبل");
+    const local = isLocal();
+    // The local edition holds one shop: the one set up on its first run.
+    if (local && (await app.db.query(`SELECT 1 FROM tenants LIMIT 1`)).rowCount) throw new HttpError(409, "المحل مسجل على هذا الجهاز من قبل. ادخل بحسابك.");
     const hash = await bcrypt.hash(b.password, 12);
     const out = await inTx(app.db, async (tx) => {
-      // Every new shop starts on a 14-day free trial of the plan it picked.
-      const plan = b.planCode && (await tx.query(`SELECT 1 FROM plans WHERE code = $1 AND active`, [b.planCode])).rowCount ? b.planCode : "basic";
+      // Every new shop starts on a 14-day free trial of the plan it picked. On the shop's own
+      // computer there is no monthly plan: everything is open, and the yearly licence governs it.
+      const plan = local ? "chain" : b.planCode && (await tx.query(`SELECT 1 FROM plans WHERE code = $1 AND active`, [b.planCode])).rowCount ? b.planCode : "basic";
       const t = await tx.query(
-        `INSERT INTO tenants (name, phone, plan_code, status, paid_until, business_type, settings) VALUES ($1,$2,$3,'trial', now() + interval '14 days', $4, $5) RETURNING id`,
+        local
+          ? `INSERT INTO tenants (name, phone, plan_code, status, paid_until, business_type, settings) VALUES ($1,$2,$3,'active', now() + interval '100 years', $4, $5) RETURNING id`
+          : `INSERT INTO tenants (name, phone, plan_code, status, paid_until, business_type, settings) VALUES ($1,$2,$3,'trial', now() + interval '14 days', $4, $5) RETURNING id`,
         // What they typed at sign-up already fills the receipt's phone and city.
         [b.businessName, b.phone ?? null, plan, b.businessType, JSON.stringify({ phone: b.phone ?? "", city: b.city ?? "" })],
       );

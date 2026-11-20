@@ -4,7 +4,7 @@ import { registerSW } from "virtual:pwa-register";
 import { App } from "./App";
 import "./styles.css";
 
-if (import.meta.env.VITE_DEMO !== "1") registerSW({ immediate: true });
+if (import.meta.env.VITE_DEMO !== "1" && import.meta.env.VITE_LOCAL !== "1") registerSW({ immediate: true });
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <App />
