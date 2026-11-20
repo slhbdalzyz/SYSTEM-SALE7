@@ -66,6 +66,8 @@ export const shopSettingsSchema = z.object({
   }).default({}),
   /** The shop's features the owner turned on or off (see modules.ts); anything missing follows the kind of shop. */
   modules: z.record(z.string(), z.boolean()).default({}),
+  /** The shared barcode library: this shop's product barcodes and names help other shops (no prices). */
+  library: z.object({ share: z.boolean().default(false) }).default({}),
 });
 export type ShopSettings = z.infer<typeof shopSettingsSchema>;
 
