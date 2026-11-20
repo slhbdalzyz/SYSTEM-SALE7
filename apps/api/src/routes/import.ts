@@ -1,10 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { audit, inTx } from "../db";
-import { effectivePermissions } from "@pos/shared";
 import { HttpError, requirePerm } from "../auth";
 import { saveProduct } from "./catalog";
-import { IMAGE_TYPES, PAPER_KINDS, ReaderError, getReader } from "../reader/reader";
 
 /**
  * Moving a shop from paper: its items with what is on the shelves, its customers with what they
@@ -151,31 +149,6 @@ export async function importRoutes(app: FastifyInstance) {
   });
 
   /** Where a shop moving from paper has got to: one tick per step. */
-  /** Is reading notebook photos on for this server? */
-  app.get("/import/read-page", { preHandler: requirePerm("products", "customers", "purchasing") }, async () => ({ enabled: !!getReader() }));
-
-  /** A photo of a notebook page becomes rows for the owner to check and fix; nothing is saved here. */
-  app.post("/import/read-page", { config: { rateLimit: { max: 20, timeWindow: "1 minute" } }, bodyLimit: 6 * 1024 * 1024, preHandler: requirePerm("products", "customers", "purchasing") }, async (req) => {
-    const b = z.object({ kind: z.enum(PAPER_KINDS), mediaType: z.enum(IMAGE_TYPES), data: z.string().min(100).max(5_500_000).regex(/^[A-Za-z0-9+/=]+$/) }).parse(req.body);
-    const need = { products: "products", customers: "customers", suppliers: "purchasing" } as const;
-    if (req.user.role !== "owner") {
-      const u = (await app.db.query(`SELECT role, permissions FROM users WHERE id = $1 AND tenant_id = $2`, [req.user.sub, req.user.tid])).rows[0];
-      if (!effectivePermissions(u.role, u.permissions).includes(need[b.kind])) throw new HttpError(403, "ليس لديك صلاحية");
-    }
-    const reader = getReader();
-    if (!reader) throw new HttpError(503, "قراءة صور الدفتر مش مفعّلة في هذا النظام بعد");
-    let rows;
-    try {
-      rows = await reader.read(b.kind, { data: b.data, mediaType: b.mediaType });
-    } catch (e) {
-      if (e instanceof ReaderError) throw new HttpError(422, e.message);
-      req.log.error(e);
-      throw new HttpError(502, "خدمة قراءة الصور ما ردتش. جرّب بعد شوية.");
-    }
-    await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "import.read_page", data: { kind: b.kind, rows: rows.length, reader: reader.name } });
-    return { rows };
-  });
-
   app.get("/import/status", { preHandler: requirePerm("products", "customers", "purchasing") }, async (req) => {
     const tid = req.user.tid;
     const r = (await app.db.query(

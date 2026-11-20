@@ -207,8 +207,6 @@ export function ShopSettings({ call, storeName, onSaved, openAlerts }: { call: C
         </div>
       </section>
 
-      <ShareBarcodes call={call} />
-
       <section className="card stack">
         <b>📲 رسائل الواتساب</b>
         <div className="muted">الكاشير يبعت الفاتورة للزبون، وانت تذكّر العملاء بديونهم من صفحة العملاء. الكلمات بين القوسين تتعبى تلقائياً: {"{shop}"} اسم المحل، {"{number}"} رقم الفاتورة، {"{total}"} المبلغ، {"{link}"} رابط الفاتورة، {"{name}"} اسم العميل، {"{balance}"} الدين.</div>
@@ -250,36 +248,5 @@ export function ShopSettings({ call, storeName, onSaved, openAlerts }: { call: C
 
       {printer && <PrinterDialog onClose={() => { setPrinter(false); bump((n) => n + 1); }} />}
     </div>
-  );
-}
-
-/**
- * The shared barcode library: when on, this shop's product barcodes with their names (never prices or
- * quantities) help other shops fill in a name when they scan the same product. Saved on its own.
- */
-function ShareBarcodes({ call }: { call: Call }) {
-  const [share, setShare] = useState<boolean | null>(null);
-  const [msg, setMsg] = useState<string | null>(null);
-  useEffect(() => void call<{ settings: unknown }>("/settings").then((r) => setShare(readShopSettings(r.settings).library.share)).catch(() => {}), [call]);
-  if (share === null) return null;
-  const flip = async (v: boolean) => {
-    setMsg(null);
-    try {
-      const r = await call<{ share: boolean; shared: number }>("/settings/library", { method: "PATCH", body: { share: v } });
-      setShare(r.share);
-      setMsg(r.share ? `✓ شاركت ${r.shared} باركود. شكراً!` : "✓ وقفت المشاركة وانشالت باركوداتك من المكتبة.");
-    } catch (e) {
-      setMsg((e as Error).message);
-    }
-  };
-  return (
-    <section className="card stack">
-      <b>🤝 مكتبة الباركود المشتركة</b>
-      <div className="muted">لما تمسح باركود صنف جديد، النظام يكتب اسمه من المحلات الثانية اللي عندها نفس الصنف. شارك باركوداتك وأسماء أصنافك باش تساعدهم، وانت تستفيد منهم في الحالتين. ما يتشاركش أي سعر ولا كمية ولا اسم محلك.</div>
-      <label className="row" style={{ color: "var(--ink)" }}>
-        <input type="checkbox" style={{ width: "auto" }} checked={share} onChange={(e) => void flip(e.target.checked)} /> شارك باركودات أصنافي وأسماءها
-      </label>
-      {msg && <div className="muted">{msg}</div>}
-    </section>
   );
 }

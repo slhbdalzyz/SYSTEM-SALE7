@@ -4,8 +4,6 @@ import { computeTotals } from "@pos/shared";
 import { buildApp } from "../src/app";
 import { createPool } from "../src/db";
 import { migrate } from "../src/migrate";
-import { setReader } from "../src/reader/reader";
-import { fakeReader } from "../src/reader/fake";
 
 const db = createPool(process.env.TEST_DATABASE_URL ?? "postgres://pos:pos@localhost:5432/pos_test");
 let app: Awaited<ReturnType<typeof buildApp>>;
@@ -1583,46 +1581,6 @@ describe("moving a shop from paper", () => {
     expect((await call("PATCH", "/settings/modules", t, { nonsense: true })).status).toBe(400);
     expect((await call("PATCH", "/settings/modules", cashierToken, { variants: false })).status).toBe(403);
     await call("PATCH", "/settings/modules", t, { variants: false, expiry: true });
-  });
-
-  it("offers the ready item list for the shop's kind, marking what it already has", async () => {
-    const items = (await call("GET", "/library/items", owner)).body as { name: string; category: string; have: boolean; packUnit?: string }[];
-    expect(items.length).toBeGreaterThan(100);
-    expect(items.find((i) => i.name.startsWith("مياه 1.5 لتر"))).toMatchObject({ category: "المشروبات", packUnit: "شد" });
-    expect((await call("GET", "/library/items", cashierToken)).status).toBe(403);
-  });
-
-  it("shares barcodes only from shops that agreed, and fills the name for the next shop", async () => {
-    const code = "6111234567890";
-    const other = (await app.inject({ method: "POST", url: "/auth/register", remoteAddress: "10.0.0.91", payload: { businessName: "بقالة المشاركة", storeName: "الرئيسي", ownerName: "فرج", email: "share@test.ly", password: "password123" } })).json();
-    const add = (tok: string, name: string, c: string) => call("POST", "/products", tok, { name, units: [{ name: "قنينة", factorMilli: 1000, priceMinor: 1000, isBase: true, barcodes: [c] }] });
-    expect((await add(other.token, "عصير مانجو 1 لتر", code)).status).toBeLessThan(300);
-    expect((await call("GET", `/library/barcode/${code}`, owner)).body).toEqual([]);
-    const on = (await call("PATCH", "/settings/library", other.token, { share: true })).body;
-    expect(on).toMatchObject({ share: true, shared: 1 });
-    expect((await call("GET", `/library/barcode/${code}`, owner)).body).toEqual([{ name: "عصير مانجو 1 لتر", unit: "قنينة", shops: 1 }]);
-    // Codes the shop or its scale made are never shared.
-    await add(other.token, "خبز المحل", "2990000000123");
-    expect((await call("GET", "/library/barcode/2990000000123", owner)).body).toEqual([]);
-    await call("PATCH", "/settings/library", other.token, { share: false });
-    expect((await call("GET", `/library/barcode/${code}`, owner)).body).toEqual([]);
-    expect((await call("PATCH", "/settings/library", cashierToken, { share: true })).status).toBe(403);
-  });
-
-  it("reads a notebook photo into rows to check, and says so when reading is off", async () => {
-    const img = { kind: "customers", mediaType: "image/jpeg", data: "A".repeat(400) };
-    expect((await call("GET", "/import/read-page", owner)).body).toEqual({ enabled: false });
-    expect((await call("POST", "/import/read-page", owner, img)).status).toBe(503);
-    setReader(fakeReader());
-    try {
-      expect((await call("GET", "/import/read-page", owner)).body).toEqual({ enabled: true });
-      const r = await call("POST", "/import/read-page", owner, img);
-      expect(r.body.rows[0]).toMatchObject({ name: "الحاج علي", balance: "145" });
-      expect((await call("POST", "/import/read-page", owner, { ...img, data: "not base64!" + "A".repeat(200) })).status).toBe(400);
-      expect((await call("POST", "/import/read-page", cashierToken, img)).status).toBe(403);
-    } finally {
-      setReader(null);
-    }
   });
 
   it("brings in customers with what they already owe, counted in their balance and statement", async () => {

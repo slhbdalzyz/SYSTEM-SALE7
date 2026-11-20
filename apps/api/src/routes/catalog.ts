@@ -1,6 +1,5 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { shareBarcodes } from "./library";
 import { ean13CheckDigit, productInputSchema, type CatalogProduct } from "@pos/shared";
 import { audit, inTx, type Db, type Tx } from "../db";
 import { HttpError, authenticate, requirePerm } from "../auth";
@@ -157,7 +156,6 @@ export async function saveProduct(tx: Tx, tenantId: string, id: string | null, i
   } else if (!b.quick && hasKey) {
     await tx.query(`DELETE FROM quick_keys WHERE product_id = $1`, [pid]);
   }
-  await shareBarcodes(tx, tenantId, pid);
   return pid;
 }
 

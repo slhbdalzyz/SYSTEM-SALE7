@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatMoney, toMinor } from "@pos/shared";
 import type { Call } from "./Admin";
-import { LibraryPicker } from "./Library";
-import { shrinkPhoto } from "./photo";
 import { BIG_UNITS, SHEETS, mapSheet, readSheetFile, readNumber, templateCsv, type Mapped, type SheetKind } from "./sheet";
 
 interface Status { products: number; stocked: number; customers: number; customers_owe: number; suppliers: number; suppliers_owed: number; cash_opening: number; sales: number }
@@ -86,15 +84,7 @@ export function FromPaper({ call, storeId, open, onHide }: { call: Call; storeId
 }
 
 function ImportStep({ kind, call, storeId, onDone }: { kind: SheetKind; call: Call; storeId: string; onDone: () => void }) {
-  const [mode, setMode] = useState<"hand" | "file" | "photo" | "library">("hand");
-  // Lines read off a photo or picked from the library land in the typing grid, to check before saving.
-  const [incoming, setIncoming] = useState<{ id: number; rows: string[][] } | null>(null);
-  const [canRead, setCanRead] = useState(false);
-  useEffect(() => void call<{ enabled: boolean }>("/import/read-page").then((r) => setCanRead(r.enabled)).catch(() => {}), [call]);
-  const toGrid = (rows: Record<string, string>[]) => {
-    setIncoming({ id: Date.now(), rows: rows.map((r) => HAND[kind].map((c) => (c.kind === "check" ? (r[c.key] ? "1" : "") : r[c.key] ?? ""))) });
-    setMode("hand");
-  };
+  const [mode, setMode] = useState<"hand" | "file">("hand");
   const [file, setFile] = useState<string | null>(null);
   const [mapped, setMapped] = useState<Mapped<Record<string, unknown>> | null>(null);
   const [result, setResult] = useState<(Result & { lines: number[] }) | null>(null);
@@ -142,15 +132,8 @@ function ImportStep({ kind, call, storeId, onDone }: { kind: SheetKind; call: Ca
       <div className="seg" role="group" aria-label="طريقة الإدخال" style={{ alignSelf: "start" }}>
         <button type="button" className={mode === "hand" ? "active" : ""} onClick={() => { setMode("hand"); setResult(null); }}>✍️ اكتب بيدك</button>
         <button type="button" className={mode === "file" ? "active" : ""} onClick={() => { setMode("file"); setResult(null); }}>📄 من ملف Excel</button>
-        <button type="button" className={mode === "photo" ? "active" : ""} onClick={() => { setMode("photo"); setResult(null); }}>📷 صورة الدفتر</button>
-        {kind === "products" && <button type="button" className={mode === "library" ? "active" : ""} onClick={() => { setMode("library"); setResult(null); }}>📚 من المكتبة</button>}
       </div>
-      {mode === "hand" && <HandEntry kind={kind} call={call} busy={busy} incoming={incoming} onSend={(m, clear) => void send(m, clear)} />}
-      {mode === "photo" && <PhotoStep kind={kind} call={call} enabled={canRead} onRows={toGrid} />}
-      {mode === "library" && (
-        <LibraryPicker call={call} action="أضف {n} للجدول"
-          onPick={(items) => toGrid(items.map((i) => ({ name: i.name, category: i.category, unit: i.unit, weighted: i.weighted ? "1" : "", pack: i.packUnit ?? "", packQty: i.packQty ? String(i.packQty) : "" })))} />
-      )}
+      {mode === "hand" && <HandEntry kind={kind} call={call} busy={busy} onSend={(m, clear) => void send(m, clear)} />}
       {mode === "file" && <>
       <div className="row wrap">
         <button onClick={() => download(`sale7-${kind}-template.csv`, templateCsv(kind))}>⬇️ نزّل القالب</button>
@@ -220,7 +203,7 @@ const draftKey = (k: SheetKind) => `pos.paperDraft.${k}`;
  * Typing items, customers or suppliers straight in, one line each, no file needed.
  * Enter (or a barcode scanner) moves to the next box; a new line opens by itself.
  */
-function HandEntry({ kind, call, busy, incoming, onSend }: { kind: SheetKind; call: Call; busy: boolean; incoming: { id: number; rows: string[][] } | null; onSend: (m: Mapped<Record<string, unknown>>, clear: () => void) => void }) {
+function HandEntry({ kind, call, busy, onSend }: { kind: SheetKind; call: Call; busy: boolean; onSend: (m: Mapped<Record<string, unknown>>, clear: () => void) => void }) {
   const cols = HAND[kind];
   const [grid, setGrid] = useState<string[][]>(() => {
     try {
@@ -231,19 +214,6 @@ function HandEntry({ kind, call, busy, incoming, onSend }: { kind: SheetKind; ca
   });
   const [cats, setCats] = useState<string[]>([]);
   const box = useRef<HTMLTableSectionElement>(null);
-  // Lines from a photo or the library: they replace the empty lines and go before the typing line.
-  const took = useRef(0);
-  useEffect(() => {
-    if (!incoming || took.current === incoming.id) return;
-    took.current = incoming.id;
-    setGrid((g) => [...g.filter((r) => r.some((x) => x.trim())), ...incoming.rows, blank(cols.length)]);
-  }, [incoming, cols.length]);
-  // A barcode typed or scanned on a line with no name yet: take the name other shops gave it.
-  const askName = async (r: number, code: string) => {
-    if (!/^\d{8,14}$/.test(code) || grid[r]?.[0]?.trim()) return;
-    const hit = await call<{ name: string; unit: string | null }[]>(`/library/barcode/${code}`).catch(() => []);
-    if (hit[0]) setGrid((g) => g.map((row, i) => (i === r && !row[0].trim() ? row.map((x, j) => (j === 0 ? hit[0].name : cols[j].key === "unit" && !x && hit[0].unit ? hit[0].unit : x)) : row)));
-  };
   useEffect(() => {
     if (kind === "products") void call<{ name: string }[]>("/categories").then((c) => setCats(c.map((x) => x.name))).catch(() => {});
   }, [call, kind]);
@@ -300,7 +270,7 @@ function HandEntry({ kind, call, busy, incoming, onSend }: { kind: SheetKind; ca
                       <input data-cell={`${r}-${j}`} value={row[j]} className={c.kind === "num" || c.kind === "money" ? "num" : ""}
                         inputMode={c.key === "barcode" || c.key === "phone" ? "numeric" : c.kind === "num" || c.kind === "money" ? "decimal" : undefined}
                         list={c.kind === "list" ? `hand-${c.key}` : undefined} placeholder={r === 0 && c.key === "barcode" ? "امسح أو فاضي" : undefined}
-                        onChange={(e) => set(r, j, e.target.value)} onKeyDown={(e) => onKey(e, r, j)} onBlur={c.key === "barcode" ? (e) => void askName(r, e.target.value.trim()) : undefined} aria-label={`${c.label} سطر ${r + 1}`} />
+                        onChange={(e) => set(r, j, e.target.value)} onKeyDown={(e) => onKey(e, r, j)} aria-label={`${c.label} سطر ${r + 1}`} />
                     )}
                   </td>
                 ))}
@@ -332,46 +302,6 @@ function HandEntry({ kind, call, busy, incoming, onSend }: { kind: SheetKind; ca
         <button className="primary" disabled={busy || !mapped.rows.length || mapped.errors.length > 0} onClick={() => onSend(mapped, clear)}>{busy ? "جاري الإدخال…" : `أدخل ${mapped.rows.length || ""} سطر`}</button>
       </div>
       {mapped.errors.length > 0 && <ul className="error" style={{ margin: 0, paddingInlineStart: 24 }}>{mapped.errors.slice(0, 8).map((e, i) => <li key={i}>سطر {e.row - 1}: {e.message}</li>)}</ul>}
-    </div>
-  );
-}
-
-/** A photo of a notebook page: read into lines that go to the typing grid, where the owner checks them. */
-function PhotoStep({ kind, call, enabled, onRows }: { kind: SheetKind; call: Call; enabled: boolean; onRows: (rows: Record<string, string>[]) => void }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [preview, setPreview] = useState<string | null>(null);
-  useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
-  async function pick(f: File | undefined) {
-    if (!f) return;
-    setError(null);
-    setPreview(URL.createObjectURL(f));
-    setBusy(true);
-    try {
-      const img = await shrinkPhoto(f);
-      const r = await call<{ rows: Record<string, string>[] }>("/import/read-page", { body: { kind, ...img } });
-      if (!r.rows.length) setError("ما لقيناش سطور في الصورة. صوّر الصفحة كاملة وفي ضو كويس.");
-      else onRows(r.rows);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-  if (!enabled) return <div className="notice">قراءة صور الدفتر مش مفعّلة في النظام هذا بعد. تقدر تكتب بيدك أو ترفع ملف Excel.</div>;
-  return (
-    <div className="stack">
-      <div className="paper-photo stack">
-        <b>📷 صوّر صفحة من الدفتر</b>
-        <span className="muted">صفحة وحدة في كل صورة، مفرودة وفي ضو كويس. النظام يقرا السطور ويحطهم في الجدول، وانت تراجعهم وتصلّح قبل ما يدخلوا.</span>
-        <label className="file-pick" style={{ alignSelf: "center" }}>
-          <input type="file" accept="image/*" capture="environment" disabled={busy} onChange={(e) => { void pick(e.target.files?.[0]); e.target.value = ""; }} />
-          <span className="primary-like">{busy ? "⏳ جاري القراءة… (حتى دقيقة)" : "📷 صوّر أو اختار صورة"}</span>
-        </label>
-        {preview && <img src={preview} alt="صورة الصفحة" style={{ maxHeight: 220, maxWidth: "100%", alignSelf: "center", borderRadius: 8, opacity: busy ? 0.6 : 1 }} />}
-      </div>
-      {error && <div className="error">{error}</div>}
-      <small className="muted">الخط اليدوي ممكن يتقرا غلط ساعات، فراجع الأسماء والأرقام في الجدول قبل ما تضغط «أدخل».</small>
     </div>
   );
 }
