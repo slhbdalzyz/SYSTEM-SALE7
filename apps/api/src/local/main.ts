@@ -20,6 +20,7 @@ import { PgliteDb, pgliteParsers } from "../pglite-db";
 import { localRoutes } from "./routes";
 import { BackupError, copyBeforeUpdate, LocalBackups, open } from "./backup";
 import { LocalLicense, readMachineId } from "./license";
+import { lanAddresses, readNetwork, saveNetwork, serveWeb } from "./network";
 
 const dataDir: string = process.env.POS_DATA_DIR ?? "";
 if (!dataDir) {
@@ -27,7 +28,9 @@ if (!dataDir) {
   process.exit(2);
 }
 const port = Number(process.env.PORT ?? 7400);
-const host = process.env.HOST ?? "127.0.0.1";
+// This computer only, unless the owner turned on the shop network (then every network card).
+const localHost = process.env.HOST ?? "127.0.0.1";
+const hostFor = (lan: boolean) => (lan ? "0.0.0.0" : localHost);
 mkdirSync(dataDir, { recursive: true });
 
 // Two copies of PostgreSQL writing the same folder would ruin it: only one server per folder.
@@ -113,9 +116,20 @@ const checkLicense = async () => {
 };
 setInterval(() => void checkLicense(), 10 * 60_000).unref();
 
+// The web app's files, for the shop's other devices (next to server.mjs in the Windows app).
+const webDir = [process.env.POS_WEB_DIR, path.join(here, "web")].find((d) => d && existsSync(path.join(d, "index.html"))) ?? null;
+const networkCtl: { set: (lan: boolean) => Promise<void> } = { set: async () => undefined };
+
 const shutdownToken = process.env.POS_SHUTDOWN_TOKEN ?? "";
 const app = await buildApp({ db: db as unknown as Db, jwtSecret, logger: false });
-await app.register(localRoutes, { shutdownToken, stop: () => void stop("asked"), backups, restore, license });
+await app.register(localRoutes, {
+  shutdownToken,
+  stop: () => void stop("asked"),
+  backups,
+  restore,
+  license,
+  network: { get: () => ({ lan: readNetwork(dataDir).lan, port, addresses: lanAddresses(), web: !!webDir }), set: (lan) => networkCtl.set(lan) },
+});
 
 // A backup every day the shop is open, and one after each shift closes.
 const backupIfDue = async () => {
@@ -161,13 +175,40 @@ server = createServer((req, res) => {
     app.routing(req, res);
     return;
   }
-  res.writeHead(404, { "content-type": "application/json" }).end(`{"error":"غير موجود"}`);
+  serveWeb(webDir, req, res);
 });
-await new Promise<void>((resolve, reject) => {
-  server!.once("error", reject);
-  server!.listen(port, host, resolve);
+async function listen(lan: boolean) {
+  await new Promise<void>((resolve, reject) => {
+    server!.once("error", reject);
+    server!.listen(port, hostFor(lan), () => {
+      server!.off("error", reject);
+      resolve();
+    });
+  });
+  console.log(`local server on http://${hostFor(lan)}:${port}, data in ${dataDir}`);
+}
+/** Turns the shop network on or off: listens again on the new address, without a restart. */
+async function setLan(lan: boolean) {
+  saveNetwork(dataDir, { lan });
+  await new Promise<void>((resolve) => {
+    server!.close(() => resolve());
+    server!.closeAllConnections();
+  });
+  try {
+    await listen(lan);
+  } catch (e) {
+    // The port is taken on the network side: stay on this computer only.
+    saveNetwork(dataDir, { lan: false });
+    await listen(false);
+    throw e;
+  }
+}
+networkCtl.set = setLan;
+await listen(readNetwork(dataDir).lan).catch(async (e) => {
+  if (!readNetwork(dataDir).lan) throw e;
+  console.error("shop network unavailable, this computer only", e);
+  await listen(false);
 });
-console.log(`local server on http://${host}:${port}, data in ${dataDir}`);
 
 /** Whether this version brings SQL files the database has not had yet (read from PGlite's files would need it open: use the list we wrote). */
 function pending(dir: string, dbDir: string) {

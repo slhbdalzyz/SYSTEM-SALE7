@@ -14,6 +14,7 @@ export interface LocalOptions {
   backups?: LocalBackups;
   restore?: (file: Buffer, password: string | null) => Promise<void>;
   license?: LocalLicense;
+  network?: { get: () => { lan: boolean; port: number; addresses: string[]; web: boolean }; set: (lan: boolean) => Promise<void> };
 }
 
 const MAX_BACKUP = 2 * 1024 * 1024 * 1024;
@@ -59,6 +60,19 @@ export async function localRoutes(app: FastifyInstance, opts: LocalOptions) {
       await license.apply(app.db);
       await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "license.activate", data: { id: p.id, until: p.until } });
       return { ok: true, until: p.until };
+    });
+  }
+
+  const network = opts.network;
+  if (network) {
+    /** Shop network: whether it is on, and the addresses the other devices open. */
+    app.get("/local/network", { preHandler: requireRole("owner", "manager") }, async () => network.get());
+    app.put("/local/network", { preHandler: requireRole("owner") }, async (req) => {
+      const { lan } = z.object({ lan: z.boolean() }).parse(req.body);
+      // Answer first: the server stops listening for a moment while it moves to the new address.
+      setTimeout(() => void network.set(lan).catch((e) => console.error("shop network", e)), 150);
+      await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: lan ? "network.on" : "network.off" });
+      return { ok: true };
     });
   }
 

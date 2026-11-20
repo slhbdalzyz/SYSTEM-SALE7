@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { forgetTenant } from "../billing";
+import { forgetTenant, setLocalDeviceLimit } from "../billing";
 import { formatMachineId, LicenseError, readLicense, type LicensePayload } from "../license";
 
 interface Store {
@@ -22,6 +22,8 @@ interface Q {
 
 const DAY = 86_400_000;
 export const TRIAL_DAYS = 14;
+/** Devices (tills, kitchen screens, price checkers) during the trial. */
+export const TRIAL_DEVICES = 3;
 const BACKDATE_SLACK = DAY;
 
 /** This computer's own ID: Windows' MachineGuid, Linux's machine-id, or one made and kept with the data. */
@@ -85,6 +87,7 @@ export class LocalLicense {
 
   /** Writes the licence's state into the shop's row. Run on start, every few minutes, and after activating. */
   async apply(db: Q, now = Date.now()) {
+    setLocalDeviceLimit(this.current()?.devices ?? TRIAL_DEVICES);
     const t = (await db.query(`SELECT id, created_at FROM tenants ORDER BY created_at LIMIT 1`)).rows[0] as { id: string; created_at: Date } | undefined;
     if (!t) return;
     const seen = this.store.lastSeen ? new Date(this.store.lastSeen).getTime() : 0;

@@ -4,7 +4,10 @@ export class ApiError extends Error {
   }
 }
 
-const BASE = import.meta.env.VITE_API_URL ?? "/api";
+// The local edition's web app is also opened from the shop's main computer by other devices
+// (http://192.168.1.10:7400): there the API is on the same address, not on 127.0.0.1.
+const servedByShopComputer = import.meta.env.VITE_LOCAL === "1" && typeof location !== "undefined" && location.port === "7400";
+const BASE = servedByShopComputer ? "/api" : (import.meta.env.VITE_API_URL ?? "/api");
 
 export const DEMO = import.meta.env.VITE_DEMO === "1";
 /** The Windows app's local edition: the API runs on this computer, with the shop's data on its disk. */

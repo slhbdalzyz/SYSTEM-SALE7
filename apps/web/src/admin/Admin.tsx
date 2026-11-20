@@ -22,6 +22,7 @@ import { Deliveries, Installments, Kits, Quotes } from "./Business";
 import { Subscription, subNotice, type Sub } from "./Subscription";
 import { LocalBackup } from "./LocalBackup";
 import { AppUpdate } from "./AppUpdate";
+import { LocalNetwork } from "./LocalNetwork";
 import { LocalLicense, licNotice, type Lic } from "./LocalLicense";
 import { Expenses } from "./Expenses";
 import { Alerts } from "../owner/Alerts";
@@ -261,6 +262,7 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
           {shown === "mypay" && <MyPay token={session.adminToken} />}
           {shown === "subscription" && (LOCAL ? <LocalLicense call={call} onChange={loadLic} /> : <Subscription call={call} />)}
           {shown === "support" && <Support call={call} isOwner={isOwner} />}
+          {shown === "devices" && LOCAL && <LocalNetwork call={call} isOwner={isOwner} />}
           {shown === "devices" && <Devices call={call} storeId={store.id} storeName={store.name} go={go} isOwner={isOwner} />}
         </div>
       </main>
