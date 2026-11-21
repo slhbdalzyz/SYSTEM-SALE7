@@ -2,8 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { fillTemplate, formatMoney, readShopSettings, type SaleInput, type ShopSettings as Settings } from "@pos/shared";
 import type { Call } from "./Admin";
 import { Receipt, type ReceiptData } from "../pos/Receipt";
-import { PrinterDialog } from "../hardware/PrinterDialog";
-import { loadPrinterSettings } from "../hardware/printer";
+import { PrinterSetup } from "../hardware/PrinterDialog";
 
 /** Shrinks a picked image to a small logo (at most 360 px wide) as a data: URL. */
 async function toLogo(file: File): Promise<string> {
@@ -50,7 +49,7 @@ function Check({ on, set, children }: { on: boolean; set: (v: boolean) => void; 
 
 /**
  * The shop's settings: its name and contact details (printed on every receipt), its bank
- * account, what the receipt shows, how the till behaves, and this device's printer.
+ * account, what the receipt shows, how the till behaves, and this device's printers.
  */
 export function ShopSettings({ call, storeName, onSaved, openAlerts }: { call: Call; storeName: string; onSaved: () => void; openAlerts: () => void }) {
   const [name, setName] = useState("");
@@ -58,8 +57,6 @@ export function ShopSettings({ call, storeName, onSaved, openAlerts }: { call: C
   const [saved, setSaved] = useState("");
   const [msg, setMsg] = useState<{ text: string; bad?: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
-  const [printer, setPrinter] = useState(false);
-  const [, bump] = useState(0);
 
   useEffect(() => {
     call<{ name: string; settings: Settings }>("/settings")
@@ -111,8 +108,6 @@ export function ShopSettings({ call, storeName, onSaved, openAlerts }: { call: C
   }
 
   const preview: ReceiptData = { storeName, deviceName: "كاشير 1", cashierName: "أحمد", shop: { name: name || storeName, settings: s }, sale: sample(), changeMinor: 500 };
-  const p = loadPrinterSettings();
-  const MODE: Record<string, string> = { browser: "نافذة الطباعة في المتصفح", system: "طابعة ويندوز", network: "طابعة شبكة", serial: "منفذ تسلسلي" };
 
   return (
     <div className="stack settings-page">
@@ -223,14 +218,10 @@ export function ShopSettings({ call, storeName, onSaved, openAlerts }: { call: C
         <Check on={s.whatsapp.offerAfterSale} set={(v) => wa({ offerAfterSale: v })}>بعد كل بيعة يطلع للكاشير زر «أرسل الفاتورة على الواتساب»</Check>
       </section>
 
-      <section className="card stack">
-        <b>🖨️ الطابعة والدرج على هذا الجهاز</b>
-        <div className="row">
-          <span>الطباعة: <b>{MODE[p.mode] ?? p.mode}</b>{p.mode !== "browser" && ` · ورق ${p.paper} مم`}</span>
-          <span className="spacer" />
-          <button onClick={() => setPrinter(true)}>إعدادات الطابعة والميزان</button>
-        </div>
-        <div className="muted">إعدادات الطابعة تخص كل جهاز لوحده، فاضبطها من جهاز الكاشير نفسه.</div>
+      <section className="card stack" id="printers">
+        <b>🖨️ الطابعات على هذا الجهاز</b>
+        <div className="muted">كل جهاز كاشير عنده طابعاته، فاضبطها من جهاز الكاشير نفسه. التعديلات هنا تتحفظ بزرها تحت، مش بزر «حفظ الإعدادات».</div>
+        <PrinterSetup />
       </section>
 
       <section className="card row">
@@ -246,7 +237,6 @@ export function ShopSettings({ call, storeName, onSaved, openAlerts }: { call: C
         <button className="primary" disabled={!dirty || busy || name.trim().length < 2} onClick={save}>💾 حفظ الإعدادات</button>
       </div>
 
-      {printer && <PrinterDialog onClose={() => { setPrinter(false); bump((n) => n + 1); }} />}
     </div>
   );
 }
