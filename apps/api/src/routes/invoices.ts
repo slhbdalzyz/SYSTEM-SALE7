@@ -38,7 +38,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
               st.name AS store_name, d.name AS device_name, u.name AS cashier, c.name AS customer_name, e.name AS employee_name,
               sh.opened_at AS shift_opened_at, sh.closed_at AS shift_closed_at,
               (SELECT count(*)::int FROM sale_lines l WHERE l.sale_id = s.id) AS lines,
-              COALESCE((SELECT json_agg(json_build_object('method', p.method, 'amount', p.amount_minor)) FROM payments p WHERE p.sale_id = s.id), '[]') AS payments,
+              COALESCE((SELECT json_agg(json_build_object('method', p.method, 'label', p.label, 'amount', p.amount_minor)) FROM payments p WHERE p.sale_id = s.id), '[]') AS payments,
               COALESCE((SELECT -sum(r.total_minor) FROM sales r WHERE r.original_sale_id = s.id), 0)::bigint AS returned_minor
          FROM sales s JOIN stores st ON st.id = s.store_id JOIN devices d ON d.id = s.device_id JOIN users u ON u.id = s.user_id
          LEFT JOIN customers c ON c.id = s.customer_id LEFT JOIN users e ON e.id = s.employee_id LEFT JOIN shifts sh ON sh.id = s.shift_id
@@ -55,8 +55,8 @@ export async function invoiceRoutes(app: FastifyInstance) {
       args,
     )).rows[0];
     const byMethod = (await app.db.query(
-      `SELECT p.method, sum(p.amount_minor - CASE WHEN p.method = 'cash' AND s.kind = 'sale' THEN s.change_minor ELSE 0 END)::bigint AS amount
-         FROM payments p JOIN sales s ON s.id = p.sale_id LEFT JOIN customers c ON c.id = s.customer_id WHERE ${where} GROUP BY p.method`,
+      `SELECT COALESCE(p.label, p.method) AS method, sum(p.amount_minor - CASE WHEN p.method = 'cash' AND s.kind = 'sale' THEN s.change_minor ELSE 0 END)::bigint AS amount
+         FROM payments p JOIN sales s ON s.id = p.sale_id LEFT JOIN customers c ON c.id = s.customer_id WHERE ${where} GROUP BY 1`,
       args,
     )).rows;
     return {
@@ -113,7 +113,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
          FROM sale_lines l LEFT JOIN offers o ON o.id = l.offer_id LEFT JOIN products p ON p.id = l.product_id WHERE l.sale_id = $1 ORDER BY l.id`,
       [id],
     )).rows;
-    const payments = (await app.db.query(`SELECT method, amount_minor FROM payments WHERE sale_id = $1`, [id])).rows;
+    const payments = (await app.db.query(`SELECT method, label, amount_minor FROM payments WHERE sale_id = $1`, [id])).rows;
     const returns = (await app.db.query(
       `SELECT r.id, r.number, r.created_at, -r.total_minor AS amount_minor, r.reason FROM sales r WHERE r.original_sale_id = $1 AND r.tenant_id = $2 ORDER BY r.created_at`,
       [id, tid],
@@ -123,7 +123,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
       ...s,
       subtotal_minor: n(s.subtotal_minor), discount_minor: n(s.discount_minor), tax_minor: n(s.tax_minor), total_minor: n(s.total_minor), paid_minor: n(s.paid_minor), change_minor: n(s.change_minor),
       lines: lines.map((l) => ({ ...l, qty_milli: n(l.qty_milli), price_minor: n(l.price_minor), discount_minor: n(l.discount_minor), tax_minor: n(l.tax_minor), total_minor: n(l.total_minor), promo_minor: n(l.promo_minor), tax_bp: n(l.tax_bp ?? 0) })),
-      payments: payments.map((p) => ({ method: p.method, amount_minor: n(p.amount_minor) })),
+      payments: payments.map((p) => ({ method: p.method, label: p.label ?? null, amount_minor: n(p.amount_minor) })),
       returns: returns.map((r) => ({ ...r, amount_minor: n(r.amount_minor) })),
     };
   }

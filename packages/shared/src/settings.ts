@@ -66,7 +66,20 @@ export const shopSettingsSchema = z.object({
   }).default({}),
   /** The shop's features the owner turned on or off (see modules.ts); anything missing follows the kind of shop. */
   modules: z.record(z.string(), z.boolean()).default({}),
+  /**
+   * Ways of paying the owner added (a new wallet, another bank's card). Each one is counted in the
+   * treasury as card or bank transfer money, and shows on receipts and reports under its own name.
+   */
+  payMethods: z.array(z.object({
+    id: z.string().regex(/^[a-z0-9]{4,12}$/),
+    name: z.string().trim().min(1).max(40),
+    account: z.enum(["card", "transfer"]).default("card"),
+    active: z.boolean().default(true),
+  })).max(30).default([]),
+  /** Built-in ways of paying this shop does not take, kept off the till (card, sadad, edfali…). */
+  hiddenMethods: z.array(z.string()).default([]),
 });
+export type PayMethod = ShopSettings["payMethods"][number];
 export type ShopSettings = z.infer<typeof shopSettingsSchema>;
 
 /** Settings as stored (possibly old or partial), with every default filled in. */

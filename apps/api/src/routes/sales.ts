@@ -230,7 +230,9 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
       }
       if (quote) await tx.query(`UPDATE quotes SET status = 'sold', sale_id = $2 WHERE id = $1`, [quote.id, s.id]);
       for (const p of s.payments) {
-        await tx.query(`INSERT INTO payments (tenant_id, sale_id, method, amount_minor) VALUES ($1,$2,$3,$4)`, [tid, s.id, p.method, p.amountMinor]);
+        // A shop's own way of paying only ever counts as card or transfer money.
+        const label = p.label && (p.method === "card" || p.method === "transfer") ? p.label : null;
+        await tx.query(`INSERT INTO payments (tenant_id, sale_id, method, amount_minor, label) VALUES ($1,$2,$3,$4,$5)`, [tid, s.id, p.method, p.amountMinor, label]);
       }
       if (onSalary > 0) {
         await payrollPurchase(tx, { tid, storeId: who.sid!, employeeId: s.employeeId!, employeeName: employee!.name, saleId: s.id, number: s.number, amountMinor: onSalary, createdAt: s.createdAt, by: who.sub });
