@@ -82,8 +82,9 @@ export async function customerRoutes(app: FastifyInstance) {
       if (!sh.rowCount) throw new HttpError(400, "الوردية غير موجودة على هذا الجهاز");
     }
     const r = await app.db.query(
-      `INSERT INTO customer_payments (id, tenant_id, customer_id, store_id, device_id, shift_id, user_id, method, amount_minor, note)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (id) DO NOTHING RETURNING id`,
+      `INSERT INTO customer_payments (id, tenant_id, customer_id, store_id, device_id, shift_id, user_id, method, amount_minor, note, bank_account_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, CASE WHEN $8 = 'card' THEN (SELECT card_bank_id FROM devices WHERE id = $5 AND tenant_id = $2) END)
+       ON CONFLICT (id) DO NOTHING RETURNING id`,
       [b.id, req.user.tid, id, req.user.sid, req.user.did, b.shiftId ?? null, req.user.sub, b.method, b.amountMinor, b.note ?? null],
     );
     if (r.rowCount) {

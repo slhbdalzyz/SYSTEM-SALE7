@@ -3,16 +3,19 @@ import { session } from "../session";
 import { db } from "../localdb";
 import type { Screen } from "../App";
 import type { Call } from "./Admin";
+import { DeviceAccess } from "./DeviceAccess";
+import { bankLabel, useBanks } from "./banks";
 
-interface D { id: string; name: string; prefix: string; kind: "pos" | "price_checker" | "kitchen"; active: boolean; backup: boolean; last_seen_at: string | null }
+interface D { id: string; name: string; prefix: string; kind: "pos" | "price_checker" | "kitchen"; active: boolean; backup: boolean; last_seen_at: string | null; card_bank_id?: string | null }
 
-export function Devices({ call, storeId, storeName, go, isOwner }: { call: Call; storeId: string; storeName: string; go: (s: Screen) => void; isOwner: boolean }) {
+export function Devices({ call, storeId, storeName, stores, go, isOwner }: { call: Call; storeId: string; storeName: string; stores: { id: string; name: string }[]; go: (s: Screen) => void; isOwner: boolean }) {
   const [devices, setDevices] = useState<D[]>([]);
   const [name, setName] = useState("كاشير 1");
   const [error, setError] = useState<string | null>(null);
   const load = () => call<D[]>("/devices").then(setDevices).catch((e) => setError((e as Error).message));
   useEffect(() => void load(), []); // eslint-disable-line react-hooks/exhaustive-deps
   const thisId = session.device?.id;
+  const banks = useBanks(call);
 
   async function registerThis(kind: "pos" | "price_checker" | "kitchen") {
     setError(null);
@@ -42,10 +45,11 @@ export function Devices({ call, storeId, storeName, go, isOwner }: { call: Call;
         </div>
       )}
       {error && <div className="error">{error}</div>}
+      {isOwner && <DeviceAccess call={call} stores={stores} />}
       <div className="muted small">«نسخة يومية»: جهاز الكاشير في تطبيق ويندوز يحفظ نسخة من كل بيانات المحل في «المستندات\POS-Backups» مرة في اليوم، ويخلّي آخر 30 نسخة. فعّلها بس على جهاز في مكان آمن.</div>
       <div className="card">
         <table>
-          <thead><tr><th>الجهاز</th><th>الرمز</th><th>آخر ظهور</th><th>الحالة</th><th title="تطبيق ويندوز يحفظ نسخة من كل بيانات المحل على الجهاز كل يوم">نسخة يومية</th><th /></tr></thead>
+          <thead><tr><th>الجهاز</th><th>الرمز</th><th>آخر ظهور</th><th>الحالة</th><th title="تطبيق ويندوز يحفظ نسخة من كل بيانات المحل على الجهاز كل يوم">نسخة يومية</th>{banks.length > 1 && <th title="فلوس البطاقات في هذا الكاشير تنزل في حساب هذا المصرف">ماكينة البطاقات</th>}<th /></tr></thead>
           <tbody>
             {devices.map((d) => (
               <tr key={d.id}>
@@ -62,6 +66,17 @@ export function Devices({ call, storeId, storeName, go, isOwner }: { call: Call;
                     </label>
                   )}
                 </td>
+                {banks.length > 1 && (
+                  <td>
+                    {d.kind === "pos" && (
+                      <select value={d.card_bank_id ?? ""} disabled={!isOwner}
+                        onChange={async (e) => { await call(`/devices/${d.id}/card-bank`, { method: "PATCH", body: { bankId: e.target.value || null } }).catch((err) => setError((err as Error).message)); await load(); }}>
+                        <option value="">الحساب الرئيسي</option>
+                        {banks.map((b) => <option key={b.id} value={b.id}>🏦 {bankLabel(b)}</option>)}
+                      </select>
+                    )}
+                  </td>
+                )}
                 <td>
                   <button className={d.active ? "danger" : ""} onClick={async () => { await call(`/devices/${d.id}`, { method: "PATCH", body: { active: !d.active } }); await load(); }}>
                     {d.active ? "إيقاف (ضايع/مسروق)" : "تفعيل"}

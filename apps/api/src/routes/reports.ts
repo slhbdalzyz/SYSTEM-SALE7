@@ -89,7 +89,8 @@ export async function reportRoutes(app: FastifyInstance) {
         `SELECT to_char(s.created_at AT TIME ZONE $5, 'YYYY-MM-DD') AS day, sum(s.total_minor)::bigint AS total_minor, count(*) FILTER (WHERE s.kind = 'sale')::int AS sales_count,
            COALESCE(sum((SELECT sum(l.total_minor - l.cost_minor) FROM sale_lines l WHERE l.sale_id = s.id)), 0)::bigint AS profit_minor
          FROM sales s WHERE ${S} GROUP BY 1`, args),
-      app.db.query(`SELECT p.method, sum(p.amount_minor)::bigint AS amount_minor FROM payments p JOIN sales s ON s.id = p.sale_id WHERE ${S} GROUP BY 1`, args),
+      // A shop's own ways of paying show under their own names.
+      app.db.query(`SELECT COALESCE(p.label, p.method) AS method, sum(p.amount_minor)::bigint AS amount_minor FROM payments p JOIN sales s ON s.id = p.sale_id WHERE ${S} GROUP BY 1`, args),
       app.db.query(`SELECT COALESCE(sum(s.change_minor), 0)::bigint AS c FROM sales s WHERE ${S}`, args),
       app.db.query(`SELECT extract(hour FROM s.created_at AT TIME ZONE $5)::int AS hour, count(*)::int AS sales_count, sum(s.total_minor)::bigint AS total_minor FROM sales s WHERE ${S} AND s.kind = 'sale' GROUP BY 1 ORDER BY 1`, args),
       app.db.query(`SELECT extract(dow FROM s.created_at AT TIME ZONE $5)::int AS dow, count(*)::int AS sales_count, sum(s.total_minor)::bigint AS total_minor FROM sales s WHERE ${S} AND s.kind = 'sale' GROUP BY 1 ORDER BY 1`, args),

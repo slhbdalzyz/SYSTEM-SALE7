@@ -40,6 +40,8 @@ import { butcherRoutes } from "./routes/butcher";
 import { restaurantRoutes } from "./routes/restaurant";
 import { electronicsRoutes } from "./routes/electronics";
 import { businessRoutes } from "./routes/business";
+import { licenseRoutes } from "./routes/licenses";
+import { isLocal } from "./edition";
 import { setGateway, type Gateway } from "./payments/gateway";
 import { plutuFromEnv } from "./payments/plutu";
 import { fakeGateway } from "./payments/fake";
@@ -149,6 +151,8 @@ export async function buildApp(opts: AppOptions) {
   await app.register(loyaltyRoutes);
   await app.register(quickRoutes);
   await app.register(importRoutes);
+  // Issuing desktop licences is the platform's job; the shop's own computer only checks them.
+  if (!isLocal()) await app.register(licenseRoutes);
   return app;
 }
 

@@ -10,7 +10,7 @@ import { printReceipt } from "../hardware/printer";
 interface Row {
   id: string; number: string; kind: "sale" | "return"; created_at: string; total_minor: number; discount_minor: number; shift_id: string | null;
   store_name: string; device_name: string; cashier: string; customer_name: string | null; employee_name: string | null;
-  shift_opened_at: string | null; shift_closed_at: string | null; lines: number; payments: { method: string; amount: number }[]; returned_minor: number;
+  shift_opened_at: string | null; shift_closed_at: string | null; lines: number; payments: { method: string; label?: string | null; amount: number }[]; returned_minor: number;
 }
 interface List {
   rows: Row[];
@@ -22,7 +22,7 @@ interface Detail {
   store_name: string; receipt_footer: string | null; device_name: string; cashier: string; customer_name: string | null; customer_phone?: string | null; employee_name: string | null; approved_by_name: string | null;
   shift_opened_at: string | null; shift_closed_at: string | null; shift_cashier: string | null;
   lines: { id: string; product_id: string; unit_id: string; name: string; qty_milli: number; price_minor: number; discount_minor: number; tax_minor: number; total_minor: number; promo_minor: number; offer_name: string | null; tax_bp: number }[];
-  payments: { method: string; amount_minor: number }[];
+  payments: { method: string; label?: string | null; amount_minor: number }[];
   returns: { id: string; number: string; created_at: string; amount_minor: number; reason: string | null }[];
 }
 interface Shift {
@@ -75,7 +75,7 @@ export function receiptFromDetail(d: Detail, shop: { name: string; settings: Sho
       productId: l.product_id, unitId: l.unit_id, name: l.name, qtyMilli: l.qty_milli, priceMinor: l.price_minor,
       discountMinor: Math.max(0, l.discount_minor - l.promo_minor), promoMinor: l.promo_minor, offerName: l.offer_name, taxBp: l.tax_bp,
     })),
-    payments: d.payments.map((p) => ({ method: p.method as SaleInput["payments"][number]["method"], amountMinor: p.amount_minor })),
+    payments: d.payments.map((p) => ({ method: p.method as SaleInput["payments"][number]["method"], amountMinor: p.amount_minor, ...(p.label ? { label: p.label } : {}) })),
   };
   return { ...base, sale, changeMinor: d.change_minor, customerName: d.customer_name, employeeName: d.employee_name };
 }
@@ -89,7 +89,7 @@ export function Invoices({ call, storeId, stores }: { call: Call; storeId: strin
   const [preset, setPreset] = useState("اليوم");
   const [[from, to], setRange] = useState(PRESETS["اليوم"]);
   const [scope, setScope] = useState<"store" | "all">("store");
-  const [f, setF] = useState({ shiftId: "", userId: "", kind: "", method: "", q: "" });
+  const [f, setF] = useState({ shiftId: "", userId: "", kind: "", method: "", q: "", min: "", max: "" });
   const [list, setList] = useState<List | null>(null);
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [open, setOpen] = useState<string | null>(null);
@@ -100,13 +100,16 @@ export function Invoices({ call, storeId, stores }: { call: Call; storeId: strin
   const qs = useMemo(() => {
     const p = new URLSearchParams({ from, to, limit: String(limit) });
     if (sid) p.set("storeId", sid);
-    for (const [k, v] of Object.entries(f)) if (v.trim()) p.set(k, v.trim());
+    for (const [k, v] of Object.entries(f)) if (v.trim() && k !== "min" && k !== "max") p.set(k, v.trim());
+    const money = (v: string) => Math.round(Number(v.replace(",", ".")) * 1000);
+    if (Number(f.min) > 0) p.set("minMinor", String(money(f.min)));
+    if (Number(f.max) > 0) p.set("maxMinor", String(money(f.max)));
     return p.toString();
   }, [from, to, sid, f, limit]);
 
   useEffect(() => {
     setError(null);
-    const t = setTimeout(() => void call<List>(`/invoices?${qs}`).then(setList).catch((e) => setError((e as Error).message)), f.q ? 300 : 0);
+    const t = setTimeout(() => void call<List>(`/invoices?${qs}`).then(setList).catch((e) => setError((e as Error).message)), f.q || f.min || f.max ? 300 : 0);
     return () => clearTimeout(t);
   }, [call, qs]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -123,7 +126,7 @@ export function Invoices({ call, storeId, stores }: { call: Call; storeId: strin
     if (!list) return;
     downloadCsv(`invoices-${from}-${to}`, ["الرقم", "النوع", "التاريخ", "الفرع", "الجهاز", "الكاشير", "الوردية", "العميل", "الأصناف", "الدفع", "الإجمالي"],
       list.rows.map((r) => [r.number, r.kind === "sale" ? "بيع" : "مرتجع", at(r.created_at), r.store_name, r.device_name, r.cashier, shiftLabel(null, r.shift_opened_at, r.shift_closed_at),
-        r.customer_name ?? "", r.lines, r.payments.map((p) => PAY[p.method] ?? p.method).join(" + "), (r.total_minor / 1000).toFixed(3)]));
+        r.customer_name ?? "", r.lines, r.payments.map((p) => p.label ?? PAY[p.method] ?? p.method).join(" + "), (r.total_minor / 1000).toFixed(3)]));
   }
 
   const sm = list?.summary;
@@ -153,7 +156,11 @@ export function Invoices({ call, storeId, stores }: { call: Call; storeId: strin
         </div>
         {view === "invoices" && (
           <div className="filters">
-            <input value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} placeholder="🔎 رقم الفاتورة أو اسم العميل" aria-label="بحث" />
+            <input value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} placeholder="🔎 رقم الفاتورة (123 يكفي)، العميل، تلفونه، صنف، أو الكاشير" aria-label="بحث" style={{ minWidth: 260 }} />
+            <span className="row" style={{ gap: 4 }}>
+              <input className="num" inputMode="decimal" value={f.min} onChange={(e) => setF({ ...f, min: e.target.value.replace(/[^\d.,]/g, "") })} placeholder="المبلغ من" aria-label="المبلغ من" style={{ width: 95 }} />
+              <input className="num" inputMode="decimal" value={f.max} onChange={(e) => setF({ ...f, max: e.target.value.replace(/[^\d.,]/g, "") })} placeholder="إلى" aria-label="المبلغ إلى" style={{ width: 85 }} />
+            </span>
             <select value={f.shiftId} onChange={(e) => setF({ ...f, shiftId: e.target.value })} aria-label="الوردية">
               <option value="">كل الورديات</option>
               {shifts.map((s) => <option key={s.id} value={s.id}>{shiftLabel(s.cashier, s.opened_at, s.closed_at)}</option>)}
@@ -201,7 +208,7 @@ export function Invoices({ call, storeId, stores }: { call: Call; storeId: strin
             <button onClick={csv} disabled={!list.rows.length}>⬇️ Excel (CSV)</button>
           </div>
           {list.rows.length === 0 ? (
-            <div className="muted">ما فيش فواتير في هذي الفترة{f.q || f.shiftId || f.userId || f.method || f.kind ? " بهذي الفلاتر" : ""}.</div>
+            <div className="muted">ما فيش فواتير في هذي الفترة{f.q || f.shiftId || f.userId || f.method || f.kind || f.min || f.max ? " بهذي الفلاتر" : ""}.</div>
           ) : (
             <div className="table-wrap">
               <table className="invoices">
@@ -216,7 +223,7 @@ export function Invoices({ call, storeId, stores }: { call: Call; storeId: strin
                       <td>{r.cashier}<small className="muted"> · {r.device_name}{scope === "all" ? ` · ${r.store_name}` : ""}</small></td>
                       <td><small>{r.shift_opened_at ? `${time(r.shift_opened_at)} ← ${r.shift_closed_at ? time(r.shift_closed_at) : "مفتوحة"}` : "—"}</small></td>
                       <td>{r.customer_name ?? r.employee_name ?? <span className="muted">—</span>}</td>
-                      <td><small>{r.payments.map((p) => PAY[p.method] ?? p.method).join(" + ")}</small></td>
+                      <td><small>{r.payments.map((p) => p.label ?? PAY[p.method] ?? p.method).join(" + ")}</small></td>
                       <td className="num"><b>{formatMoney(r.total_minor)}</b></td>
                     </tr>
                   ))}
@@ -325,7 +332,7 @@ function InvoiceDetail({ call, id, onClose, onOpen }: { call: Call; id: string; 
             {!ret && d.discount_minor > 0 && <div className="line"><span>الخصم</span><span className="num">{formatMoney(d.discount_minor)}</span></div>}
             {d.tax_minor !== 0 && <div className="line"><span>منها ضريبة</span><span className="num">{formatMoney(Math.abs(d.tax_minor))}</span></div>}
             <div className="line big"><span>{ret ? "المبلغ المرجع" : "الإجمالي"}</span><span className="num">{formatMoney(Math.abs(d.total_minor))}</span></div>
-            {d.payments.map((p, i) => <div key={i} className="line"><span>{PAY[p.method] ?? p.method}</span><span className="num">{formatMoney(Math.abs(p.amount_minor))}</span></div>)}
+            {d.payments.map((p, i) => <div key={i} className="line"><span>{p.label ?? PAY[p.method] ?? p.method}</span><span className="num">{formatMoney(Math.abs(p.amount_minor))}</span></div>)}
             {d.change_minor > 0 && <div className="line"><span>الباقي</span><span className="num">{formatMoney(d.change_minor)}</span></div>}
           </div>
           {d.returns.length > 0 && (

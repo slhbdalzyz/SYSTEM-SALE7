@@ -8,3 +8,4 @@ apps/desktop/src-tauri/gen
 .vercel
 deploy/.env
 deploy/backups
+apps/desktop/src-tauri/server

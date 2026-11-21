@@ -213,6 +213,8 @@ describe("customers, credit and returns", () => {
 
   it("finds a sale by number with what can still be returned", async () => {
     const r = await call("GET", `/sales/lookup?number=${creditSale.number}`, cashierToken);
+    const short = creditSale.number.replace(/-0*(\d+)$/, "-$1");
+    expect((await call("GET", `/sales/lookup?number=${encodeURIComponent(short.toLowerCase())}`, cashierToken)).body.id).toBe(r.body.id);
     expect(r.body.lines[0].qty_milli).toBe(4000);
     expect(r.body.lines[0].returned_milli).toBe(0);
     expect(r.body.invoice_discount_minor).toBe(400);
@@ -1338,6 +1340,18 @@ describe("the shop's settings and the invoices page", () => {
     const byShift = (await call("GET", `/invoices?from=${today}&to=${today}&shiftId=${sale.shift_id}`, owner)).body.rows;
     expect(byShift.every((r: { shift_id: string }) => r.shift_id === sale.shift_id)).toBe(true);
     expect((await call("GET", `/invoices?from=${today}&to=${today}&q=${encodeURIComponent(sale.number)}`, owner)).body.rows[0].id).toBe(sale.id);
+    // The number however it is typed: just the count, without the zeros, in Arabic digits.
+    const ids = async (q: string, more = "") => (await call("GET", `/invoices?from=${today}&to=${today}&q=${encodeURIComponent(q)}${more}`, owner)).body.rows.map((r: { id: string }) => r.id);
+    const [, prefix, count] = /^(.*)-0*(\d+)$/.exec(sale.number)!;
+    expect(await ids(count)).toContain(sale.id);
+    expect(await ids(`${prefix.toLowerCase()}-${count}`)).toEqual([sale.id]);
+    expect(await ids(count.replace(/\d/g, (d) => "٠١٢٣٤٥٦٧٨٩"[Number(d)]))).toContain(sale.id);
+    expect(await ids(`${count}9999`)).not.toContain(sale.id);
+    // By an item on it, and by its amount.
+    expect(await ids(one.lines[0].name.slice(0, 3))).toContain(sale.id);
+    const amt = Math.abs(sale.total_minor);
+    expect((await call("GET", `/invoices?from=${today}&to=${today}&minMinor=${amt}&maxMinor=${amt}`, owner)).body.rows.every((r: { total_minor: number }) => Math.abs(r.total_minor) === amt)).toBe(true);
+    expect((await call("GET", `/invoices?from=${today}&to=${today}&minMinor=${amt}&maxMinor=${amt}`, owner)).body.rows.map((r: { id: string }) => r.id)).toContain(sale.id);
     expect((await call("GET", `/invoices?from=${today}&to=${today}&kind=return`, owner)).body.rows.every((r: { kind: string }) => r.kind === "return")).toBe(true);
     const shifts = (await call("GET", `/shifts?from=${today}&to=${today}`, owner)).body;
     const s = shifts.find((x: { id: string }) => x.id === sale.shift_id);
@@ -2565,5 +2579,196 @@ describe("more kinds of shop: customer prices, quotes, lists, orders, instalment
     expect(after.paidMinor).toBe(900_000);
     expect(after.rows.map((r: { state: string }) => r.state).slice(0, 3)).toEqual(["paid", "paid", "late"]);
     expect((await call("POST", "/installments", t, { customerId: c.body.id, title: "x", totalMinor: 100, downMinor: 100, count: 1, firstDue: "2026-01-01" })).status).toBe(400);
+  });
+});
+
+describe("a cashier gets a new device in without the owner there", () => {
+  let o: string;
+  let sid: string;
+  let cashier: string;
+  let code: string;
+  it("asks with the shop code and the PIN, and the owner approves", async () => {
+    const reg = await call("POST", "/auth/register", undefined, { businessName: "محل الغياب", storeName: "الرئيسي", ownerName: "عمر", email: "away@test.ly", password: "password123", planCode: "chain" });
+    o = reg.body.token;
+    sid = reg.body.storeId;
+    cashier = (await call("POST", "/users", o, { name: "علي", role: "cashier", pin: "4321" })).body.id;
+    const acc = await call("GET", "/devices/access", o);
+    expect(acc.body.shopCode).toMatch(/^\d{6}$/);
+    expect(acc.body.autoApprove).toBe(false);
+    code = acc.body.shopCode;
+    expect((await call("POST", "/auth/shop-lookup", undefined, { shopCode: "000000" === code ? "000001" : "000000" })).status).toBe(404);
+    const look = await call("POST", "/auth/shop-lookup", undefined, { shopCode: code });
+    expect(look.body.shop.name).toBe("محل الغياب");
+    expect(look.body.users.map((u: { name: string }) => u.name)).toEqual(["علي"]);
+    expect((await call("POST", "/auth/device-request", undefined, { shopCode: code, storeId: sid, userId: cashier, pin: "9999", name: "جهاز جديد" })).status).toBe(401);
+    const ask = await call("POST", "/auth/device-request", undefined, { shopCode: code, storeId: sid, userId: cashier, pin: "4321", name: "جهاز جديد" });
+    expect(ask.body.status).toBe("pending");
+    // Not a device yet.
+    expect((await call("POST", "/auth/device-users", undefined, { deviceToken: ask.body.deviceToken })).status).toBe(401);
+    const st = (await call("POST", "/auth/device-request/status", undefined, { requestId: ask.body.requestId, deviceToken: ask.body.deviceToken })).body;
+    expect(st.status).toBe("pending");
+    const pending = (await call("GET", "/devices/access", o)).body.requests;
+    expect(pending).toHaveLength(1);
+    expect(pending[0].user_name).toBe("علي");
+    const alerts = (await db.query(`SELECT kind FROM alerts a JOIN tenants t ON t.id = a.tenant_id WHERE t.shop_code = $1`, [code])).rows;
+    expect(alerts.map((a) => a.kind)).toContain("device_request");
+    expect((await call("POST", `/devices/requests/${pending[0].id}/approve`, o, {})).status).toBe(200);
+    const done = (await call("POST", "/auth/device-request/status", undefined, { requestId: ask.body.requestId, deviceToken: ask.body.deviceToken })).body;
+    expect(done.status).toBe("approved");
+    expect(done.device.name).toBe("جهاز جديد");
+    const pin = await call("POST", "/auth/pin", undefined, { deviceToken: ask.body.deviceToken, userId: cashier, pin: "4321" });
+    expect(pin.status).toBe(200);
+    // A cashier cannot approve devices.
+    expect((await call("GET", "/devices/access", pin.body.token)).status).toBe(403);
+  });
+
+  it("can be refused", async () => {
+    const ask = await call("POST", "/auth/device-request", undefined, { shopCode: code, storeId: sid, userId: cashier, pin: "4321", name: "جهاز غريب" });
+    const id = (await call("GET", "/devices/access", o)).body.requests[0].id;
+    await call("POST", `/devices/requests/${id}/reject`, o, {});
+    expect((await call("POST", "/auth/device-request/status", undefined, { requestId: ask.body.requestId, deviceToken: ask.body.deviceToken })).body.status).toBe("rejected");
+    expect((await call("POST", "/auth/device-users", undefined, { deviceToken: ask.body.deviceToken })).status).toBe(401);
+  });
+
+  it("lets a device in at once when the shop says so", async () => {
+    await call("PATCH", "/devices/access", o, { autoApprove: true });
+    const ask = await call("POST", "/auth/device-request", undefined, { shopCode: code, storeId: sid, userId: cashier, pin: "4321", name: "جهاز ثاني" });
+    expect(ask.body.status).toBe("approved");
+    expect((await call("POST", "/auth/device-users", undefined, { deviceToken: ask.body.deviceToken })).status).toBe(200);
+    await call("PATCH", "/devices/access", o, { autoApprove: false });
+  });
+
+  it("approves a device with a one-time link", async () => {
+    const l = await call("POST", "/devices/links", o, { storeId: sid, name: "شاشة المطبخ", kind: "kitchen" });
+    expect(l.body.code).toMatch(/^[0-9a-f]{32}$/);
+    const p = await call("POST", "/auth/pair", undefined, { code: l.body.code });
+    expect(p.status).toBe(200);
+    expect(p.body.device.kind).toBe("kitchen");
+    expect((await call("POST", "/auth/pair", undefined, { code: l.body.code })).status).toBe(410);
+    const old = await call("POST", "/devices/links", o, { storeId: sid, name: "قديم" });
+    await db.query(`UPDATE device_links SET expires_at = now() - interval '1 minute' WHERE used_at IS NULL`);
+    expect((await call("POST", "/auth/pair", undefined, { code: old.body.code })).status).toBe(410);
+  });
+
+  it("locks a PIN after 5 wrong tries", async () => {
+    for (let i = 0; i < 5; i++) await call("POST", "/auth/device-request", undefined, { shopCode: code, storeId: sid, userId: cashier, pin: "1111", name: "x" });
+    expect((await call("POST", "/auth/device-request", undefined, { shopCode: code, storeId: sid, userId: cashier, pin: "4321", name: "x" })).status).toBe(429);
+    const renewed = (await call("POST", "/devices/shop-code", o, {})).body.shopCode;
+    expect(renewed).not.toBe(code);
+    expect((await call("POST", "/auth/shop-lookup", undefined, { shopCode: code })).status).toBe(404);
+  });
+});
+
+describe("ways of paying the shop adds itself", () => {
+  it("keeps them in the settings, sells with one, and shows it by name", async () => {
+    const reg = await call("POST", "/auth/register", undefined, { businessName: "محل الطرق", storeName: "الرئيسي", ownerName: "هدى", email: "paymethods@test.ly", password: "password123" });
+    const o = reg.body.token;
+    const sid = reg.body.storeId;
+    const bad = await call("PATCH", "/settings/pay-methods", o, { payMethods: [{ id: "aaaa1", name: "س" }, { id: "aaaa1", name: "ص" }], hiddenMethods: [] });
+    expect(bad.status).toBe(400);
+    const ok = await call("PATCH", "/settings/pay-methods", o, { payMethods: [{ id: "wal1", name: "محفظة الأمل", account: "transfer" }], hiddenMethods: ["mobicash", "cash"] });
+    expect(ok.status).toBe(200);
+    // Cash can never be put away.
+    expect(ok.body.hiddenMethods).toEqual(["mobicash"]);
+    // Saving the settings page keeps them.
+    const s = (await call("GET", "/settings", o)).body;
+    await call("PUT", "/settings", o, { name: s.name, settings: { ...s.settings, payMethods: [], hiddenMethods: [] } });
+    expect((await call("GET", "/settings", o)).body.settings.payMethods[0].name).toBe("محفظة الأمل");
+
+    const p = await call("POST", "/products", o, { name: "شاي", costMinor: 1000, units: [{ name: "علبة", priceMinor: 2000, isBase: true }] });
+    const d = await call("POST", "/devices", o, { storeId: sid, name: "كاشير" });
+    const u = await call("POST", "/users", o, { name: "رامي", role: "cashier", pin: "5555" });
+    const t = (await call("POST", "/auth/pin", undefined, { deviceToken: d.body.deviceToken, userId: u.body.id, pin: "5555" })).body.token;
+    const shift = randomUUID();
+    await call("POST", "/shifts/open", t, { id: shift, openingCashMinor: 0 });
+    const line = { productId: p.body.id, unitId: p.body.units[0].id, name: "شاي", qtyMilli: 2000, priceMinor: 2000, discountMinor: 0, taxBp: 0 };
+    const sale = { id: randomUUID(), number: "PM-1", shiftId: shift, createdAt: new Date().toISOString(), lines: [line], payments: [{ method: "cash", amountMinor: 1000 }, { method: "transfer", amountMinor: 3000, label: "محفظة الأمل" }, { method: "cash", amountMinor: 0, label: "لا يُحفظ" }], totalMinor: 4000 };
+    expect((await call("POST", "/sales/batch", t, { sales: [sale] })).status).toBe(200);
+    const rows = (await db.query(`SELECT method, label, amount_minor FROM payments WHERE sale_id = $1 ORDER BY amount_minor`, [sale.id])).rows;
+    expect(rows.map((r) => r.label)).toEqual([null, null, "محفظة الأمل"]);
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Tripoli" });
+    const inv = (await call("GET", `/invoices?from=${today}&to=${today}`, o)).body;
+    expect(inv.rows[0].payments.find((x: { label: string | null }) => x.label)?.label).toBe("محفظة الأمل");
+    expect(Number(inv.summary.byMethod["محفظة الأمل"])).toBe(3000);
+    // The treasury counts it as bank transfer money.
+    const money = (await call("GET", "/money/summary", o)).body;
+    expect(money.accounts.transfer.balanceMinor).toBe(3000);
+  });
+});
+
+describe("several bank accounts, card settlement and checking against the statement", () => {
+  it("keeps each bank apart, settles card money, and records a statement check", async () => {
+    const reg = await call("POST", "/auth/register", undefined, { businessName: "محل المصارف", storeName: "الرئيسي", ownerName: "نوري", email: "banks@test.ly", password: "password123" });
+    const o = reg.body.token;
+    const sid = reg.body.storeId;
+    // Something paid to the bank before any account exists goes to the first (default) account.
+    const p = await call("POST", "/products", o, { name: "سكر", costMinor: 1000, units: [{ name: "كيس", priceMinor: 10000, isBase: true }] });
+    const d = await call("POST", "/devices", o, { storeId: sid, name: "كاشير" });
+    const u = await call("POST", "/users", o, { name: "سعاد", role: "cashier", pin: "7777" });
+    const t = (await call("POST", "/auth/pin", undefined, { deviceToken: d.body.deviceToken, userId: u.body.id, pin: "7777" })).body.token;
+    const shift = randomUUID();
+    await call("POST", "/shifts/open", t, { id: shift, openingCashMinor: 0 });
+    const line = { productId: p.body.id, unitId: p.body.units[0].id, name: "سكر", qtyMilli: 1000, priceMinor: 10000, discountMinor: 0, taxBp: 0 };
+    const sale = (n: string, payments: object[]) => ({ id: randomUUID(), number: n, shiftId: shift, createdAt: new Date().toISOString(), lines: [line], payments, totalMinor: 10000 });
+    await call("POST", "/sales/batch", t, { sales: [sale("B-1", [{ method: "transfer", amountMinor: 10000 }])] });
+
+    const j = (await call("POST", "/money/banks", o, { bankName: "مصرف الجمهورية", accountNumber: "111", openingMinor: 500000 })).body.id;
+    const w = (await call("POST", "/money/banks", o, { bankName: "مصرف الوحدة", iban: "LY22" })).body.id;
+    const banks = (await call("GET", "/money/banks", t)).body;
+    expect(banks.map((b: { bankName: string; isDefault: boolean }) => [b.bankName, b.isDefault])).toEqual([["مصرف الجمهورية", true], ["مصرف الوحدة", false]]);
+    expect((await call("GET", "/me", t)).body.banks).toHaveLength(2);
+
+    // The till's card machine pays into Wahda; a transfer to Wahda chosen at the till.
+    expect((await call("PATCH", `/devices/${d.body.id}/card-bank`, o, { bankId: w })).status).toBe(200);
+    await call("POST", "/sales/batch", t, { sales: [sale("B-2", [{ method: "card", amountMinor: 10000 }]), sale("B-3", [{ method: "transfer", amountMinor: 10000, bankAccountId: w }])] });
+
+    let s = (await call("GET", "/money/summary", o)).body;
+    const by = (id: string) => s.banks.find((b: { id: string }) => b.id === id);
+    expect(by(j).balanceMinor).toBe(510000);
+    expect(by(w).balanceMinor).toBe(10000);
+    expect(by(w).pendingCardMinor).toBe(10000);
+    expect(s.accounts.transfer.balanceMinor).toBe(520000);
+
+    // Bank to bank, and a supplier paid from Wahda.
+    await call("POST", "/money/transfers", o, { from: "transfer", fromBankId: j, to: "transfer", toBankId: w, amountMinor: 100000 });
+    expect((await call("POST", "/money/transfers", o, { from: "transfer", fromBankId: j, to: "transfer", toBankId: j, amountMinor: 1 })).status).toBe(400);
+    const sup = (await call("POST", "/suppliers", o, { name: "مورد" })).body.id;
+    await call("POST", `/suppliers/${sup}/payments`, o, { amountMinor: 30000, method: "transfer", bankId: w });
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Tripoli" });
+    await call("POST", "/expenses", o, { storeId: sid, category: "إيجار", amountMinor: 5000, spentOn: today, paymentMethod: "transfer", bankId: j });
+
+    // The bank paid in the card money, less 150 dirham commission.
+    const st = await call("POST", "/money/settlements", o, { bankId: w, grossMinor: 10000, feeMinor: 150 });
+    expect(st.status).toBe(200);
+    s = (await call("GET", "/money/summary", o)).body;
+    expect(by(j).balanceMinor).toBe(510000 - 100000 - 5000);
+    expect(by(w).balanceMinor).toBe(10000 + 100000 - 30000 + 10000 - 150);
+    expect(by(w).pendingCardMinor).toBe(0);
+    const exp = (await call("GET", `/expenses?month=${today.slice(0, 7)}`, o)).body;
+    expect(exp.byCategory["عمولة البطاقات"]).toBe(150);
+
+    // Wahda's statement: tick everything but the supplier payment, and the difference is what is not ticked.
+    const led = (await call("GET", `/money/ledger?account=transfer&bankId=${w}&from=${today}&to=${today}`, o)).body;
+    expect(led.closingMinor).toBe(89850);
+    const keys = led.rows.filter((r: { source: string }) => r.source !== "supplier").map((r: { row_key: string }) => r.row_key);
+    expect((await call("POST", "/money/cleared", o, { rowKeys: keys, cleared: true })).status).toBe(200);
+    const rec = await call("POST", "/money/reconciliations", o, { bankId: w, statementDate: today, statementMinor: 119850 });
+    expect(rec.body.bookMinor).toBe(89850);
+    expect(rec.body.clearedMinor).toBe(119850);
+    expect(rec.body.differenceMinor).toBe(0);
+    const hist = (await call("GET", `/money/reconciliations?bankId=${w}`, o)).body;
+    expect(hist.openCount).toBe(1);
+    expect(hist.history).toHaveLength(1);
+    expect((await call("GET", "/money/summary", o)).body.banks.find((b: { id: string }) => b.id === w).lastReconciled.differenceMinor).toBe(0);
+
+    // Undoing the settlement takes its commission away too.
+    const mv = (await call("GET", `/money/ledger?account=card&bankId=${w}&from=${today}&to=${today}`, o)).body.rows.find((r: { source: string }) => r.source === "settlement");
+    await call("POST", `/money/movements/${mv.movement_id}/delete`, o);
+    expect((await call("GET", `/expenses?month=${today.slice(0, 7)}`, o)).body.byCategory["عمولة البطاقات"]).toBeUndefined();
+
+    // The default account can't be switched off until another takes its place.
+    expect((await call("PATCH", `/money/banks/${j}`, o, { active: false })).status).toBe(400);
+    await call("PATCH", `/money/banks/${w}`, o, { isDefault: true });
+    expect((await call("PATCH", `/money/banks/${j}`, o, { active: false })).status).toBe(200);
   });
 });

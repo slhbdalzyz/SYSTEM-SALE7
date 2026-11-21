@@ -4,7 +4,10 @@ import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { audit, inTx } from "../db";
 import { HttpError, authenticate, hashToken, type TokenPayload } from "../auth";
+import { assertPinNotLocked } from "./devices";
+import { listBanks } from "./money";
 import { assertNotLocked } from "../billing";
+import { isLocal } from "../edition";
 
 const registerSchema = z.object({
   businessName: z.string().min(2).max(120),
@@ -32,12 +35,18 @@ export async function authRoutes(app: FastifyInstance) {
     const email = b.email.toLowerCase();
     const exists = await app.db.query(`SELECT 1 FROM users WHERE email = $1`, [email]);
     if (exists.rowCount) throw new HttpError(409, "البريد مسجل من قبل");
+    const local = isLocal();
+    // The local edition holds one shop: the one set up on its first run.
+    if (local && (await app.db.query(`SELECT 1 FROM tenants LIMIT 1`)).rowCount) throw new HttpError(409, "المحل مسجل على هذا الجهاز من قبل. ادخل بحسابك.");
     const hash = await bcrypt.hash(b.password, 12);
     const out = await inTx(app.db, async (tx) => {
-      // Every new shop starts on a 14-day free trial of the plan it picked.
-      const plan = b.planCode && (await tx.query(`SELECT 1 FROM plans WHERE code = $1 AND active`, [b.planCode])).rowCount ? b.planCode : "basic";
+      // Every new shop starts on a 14-day free trial of the plan it picked. On the shop's own
+      // computer there is no monthly plan: everything is open for 14 days, then the yearly licence.
+      const plan = local ? "chain" : b.planCode && (await tx.query(`SELECT 1 FROM plans WHERE code = $1 AND active`, [b.planCode])).rowCount ? b.planCode : "basic";
       const t = await tx.query(
-        `INSERT INTO tenants (name, phone, plan_code, status, paid_until, business_type, settings) VALUES ($1,$2,$3,'trial', now() + interval '14 days', $4, $5) RETURNING id`,
+        local
+          ? `INSERT INTO tenants (name, phone, plan_code, status, paid_until, business_type, settings) VALUES ($1,$2,$3,'trial', now() + interval '14 days', $4, $5) RETURNING id`
+          : `INSERT INTO tenants (name, phone, plan_code, status, paid_until, business_type, settings) VALUES ($1,$2,$3,'trial', now() + interval '14 days', $4, $5) RETURNING id`,
         // What they typed at sign-up already fills the receipt's phone and city.
         [b.businessName, b.phone ?? null, plan, b.businessType, JSON.stringify({ phone: b.phone ?? "", city: b.city ?? "" })],
       );
@@ -86,6 +95,7 @@ export async function authRoutes(app: FastifyInstance) {
     const d = (await app.db.query(`SELECT id, tenant_id, store_id FROM devices WHERE token_hash = $1 AND active AND kind = 'pos'`, [hashToken(b.deviceToken)])).rows[0];
     if (!d) throw new HttpError(401, "الجهاز غير معتمد");
     await assertNotLocked(app.db, d.tenant_id);
+    await assertPinNotLocked(app.db, d.tenant_id, b.userId);
     const u = (await app.db.query(`SELECT id, role, pin_hash FROM users WHERE id = $1 AND tenant_id = $2 AND active`, [b.userId, d.tenant_id])).rows[0];
     if (!u?.pin_hash || !(await bcrypt.compare(b.pin, u.pin_hash))) {
       await audit(app.db, { tenantId: d.tenant_id, userId: b.userId, deviceId: d.id, action: "user.pin_failed" });
@@ -119,7 +129,9 @@ export async function authRoutes(app: FastifyInstance) {
     t.features = resolveFeatures(t.plan_features, t.features);
     delete t.plan_features;
     const stores = await app.db.query(`SELECT id, name, address, phone, receipt_footer, active FROM stores WHERE tenant_id = $1 ORDER BY created_at`, [req.user.tid]);
-    return { user: u, tenant: t, stores: stores.rows, deviceId: req.user.did ?? null, storeId: req.user.sid ?? null, support: req.user.ro ? { readOnly: true } : null };
+    // The till picks the bank a transfer goes into.
+    const banks = (await listBanks(app.db, req.user.tid)).filter((b) => b.active).map((b) => ({ id: b.id, bankName: b.bankName, name: b.name }));
+    return { user: u, tenant: t, stores: stores.rows, banks, deviceId: req.user.did ?? null, storeId: req.user.sid ?? null, support: req.user.ro ? { readOnly: true } : null };
   });
 
   /** Two-step sign-in with an authenticator app (Google Authenticator, Microsoft Authenticator…). */

@@ -1,10 +1,12 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { formatMoney } from "@pos/shared";
 import type { Plan } from "./billing";
-import { api } from "./api";
+import { api, LOCAL } from "./api";
+import { LocalSetup } from "./LocalSetup";
 import { session } from "./session";
 import type { Screen } from "./App";
 import { prefersOwnerView } from "./owner/Owner";
+import { JoinShop, PairDevice, hasPendingJoin } from "./pos/JoinShop";
 
 const FEATURES: [string, string, string][] = [
   ["🛒", "كاشير سريع", "باركود، ميزان، عروض، تعليق فواتير، واختصارات لوحة المفاتيح"],
@@ -36,14 +38,18 @@ export const TYPES: { id: string; icon: string; name: string; ready: boolean }[]
 
 /** First screen on a browser that is not a registered cashier yet: what the system is, then sign in or open a shop. */
 export function Setup({ go }: { go: (s: Screen) => void }) {
-  const [mode, setMode] = useState<"landing" | "login" | "register">(() => {
+  const pairCode = new URLSearchParams(location.search).get("pair");
+  const [mode, setMode] = useState<"landing" | "login" | "register" | "join" | "pair">(() => {
     const q = new URLSearchParams(location.search);
+    if (pairCode && /^[0-9a-f]{32}$/.test(pairCode)) return "pair";
+    // Still waiting for the owner to approve this device (the page was reloaded meanwhile).
+    if (!session.deviceToken && hasPendingJoin()) return "join";
     // On a till (the owner pressed «الإدارة») or with ?login: straight to signing in.
     if (q.has("welcome")) return "landing";
     return q.has("login") || session.deviceToken ? "login" : "landing";
   });
   const [plans, setPlans] = useState<Plan[]>([]);
-  useEffect(() => void api<Plan[]>("/plans").then(setPlans).catch(() => undefined), []);
+  useEffect(() => void (!LOCAL && api<Plan[]>("/plans").then(setPlans).catch(() => undefined)), []);
   const start = (planCode?: string) => {
     setMode("register");
     try {
@@ -53,17 +59,22 @@ export function Setup({ go }: { go: (s: Screen) => void }) {
     }
     window.scrollTo?.(0, 0);
   };
-  if (mode === "login") return <Login go={go} onRegister={() => start()} onBack={() => setMode("landing")} />;
+  // On the shop's own computer: no landing page and no sign-up for a plan, just its first-run setup.
+  if (LOCAL) return <LocalSetup go={go} login={<Login go={go} />} />;
+  if (mode === "pair") return <PairDevice code={pairCode!} go={go} onBack={() => setMode(session.deviceToken ? "login" : "landing")} />;
+  if (mode === "join") return <JoinShop go={go} onBack={() => setMode("login")} />;
+  if (mode === "login") return <Login go={go} onRegister={() => start()} onBack={() => setMode("landing")} onCashier={() => setMode("join")} />;
   if (mode === "register") return <Register go={go} plans={plans} onLogin={() => setMode("login")} onBack={() => setMode("landing")} />;
-  return <Landing plans={plans} onStart={start} onLogin={() => setMode("login")} />;
+  return <Landing plans={plans} onStart={start} onLogin={() => setMode("login")} onCashier={() => setMode("join")} />;
 }
 
-function Landing({ plans, onStart, onLogin }: { plans: Plan[]; onStart: (plan?: string) => void; onLogin: () => void }) {
+function Landing({ plans, onStart, onLogin, onCashier }: { plans: Plan[]; onStart: (plan?: string) => void; onLogin: () => void; onCashier: () => void }) {
   return (
     <div className="landing">
       <header className="land-top">
         <b className="land-brand"><span className="logo">ن</span> نظام نقاط البيع</b>
         <span className="spacer" />
+        <button className="ghost" onClick={onCashier}>🧑‍💼 دخول الكاشير</button>
         <button onClick={onLogin}>دخول</button>
         <button className="primary" onClick={() => onStart()}>ابدأ مجاناً</button>
       </header>
@@ -118,7 +129,7 @@ function Landing({ plans, onStart, onLogin }: { plans: Plan[]; onStart: (plan?: 
   );
 }
 
-function Login({ go, onRegister, onBack }: { go: (s: Screen) => void; onRegister: () => void; onBack: () => void }) {
+function Login({ go, onRegister, onBack, onCashier }: { go: (s: Screen) => void; onRegister?: () => void; onBack?: () => void; onCashier?: () => void }) {
   const [f, setF] = useState({ email: "", password: "" });
   const [code, setCode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -145,7 +156,7 @@ function Login({ go, onRegister, onBack }: { go: (s: Screen) => void; onRegister
   return (
     <div className="center">
       <form className="card stack" style={{ width: "min(420px, 100%)" }} onSubmit={submit}>
-        <button type="button" className="ghost back" onClick={onBack}>→ رجوع</button>
+        {onBack && <button type="button" className="ghost back" onClick={onBack}>→ رجوع</button>}
         <h1 style={{ margin: 0 }}>دخول</h1>
         <label>البريد الإلكتروني<input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} required autoFocus /></label>
         <label>كلمة السر<input type="password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} required disabled={code !== null} /></label>
@@ -157,7 +168,8 @@ function Login({ go, onRegister, onBack }: { go: (s: Screen) => void; onRegister
         {error && <div className="error">{error}</div>}
         <button className="primary big" disabled={busy || (code !== null && code.length !== 6)}>{code !== null ? "تأكيد" : "دخول"}</button>
         <p className="muted" style={{ margin: 0, fontSize: ".85rem" }}>بعد الدخول تقدر تعتمد هذا الجهاز ككاشير من صفحة «الأجهزة».</p>
-        <div className="row"><span className="muted">ما عندكش حساب؟</span><button type="button" className="ghost" onClick={onRegister}>سجّل محلك</button></div>
+        {onCashier && <button type="button" onClick={onCashier}>🧑‍💼 أنا كاشير وصاحب المحل مش موجود</button>}
+        {onRegister && <div className="row"><span className="muted">ما عندكش حساب؟</span><button type="button" className="ghost" onClick={onRegister}>سجّل محلك</button></div>}
       </form>
     </div>
   );

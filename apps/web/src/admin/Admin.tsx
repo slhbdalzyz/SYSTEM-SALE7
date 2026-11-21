@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, ApiError } from "../api";
+import { api, ApiError, LOCAL } from "../api";
 import { session, supportMode } from "../session";
 import type { Screen } from "../App";
 import { Products } from "./Products";
@@ -7,6 +7,7 @@ import { Reports } from "./Reports";
 import { Home } from "./Home";
 import { Staff } from "./Staff";
 import { Devices } from "./Devices";
+import { PayMethodsCard } from "./PayMethods";
 import { LoyaltyCard } from "./LoyaltyCard";
 import { QuickKeys } from "./QuickKeys";
 import { Customers } from "./Customers";
@@ -20,6 +21,10 @@ import { Electronics, Repairs } from "./Electronics";
 import { Recipes } from "./Restaurant";
 import { Deliveries, Installments, Kits, Quotes } from "./Business";
 import { Subscription, subNotice, type Sub } from "./Subscription";
+import { LocalBackup } from "./LocalBackup";
+import { AppUpdate } from "./AppUpdate";
+import { LocalNetwork } from "./LocalNetwork";
+import { LocalLicense, licNotice, type Lic } from "./LocalLicense";
 import { Expenses } from "./Expenses";
 import { Alerts } from "../owner/Alerts";
 import { AlertSettings, BackupCard, RestoreCard } from "../owner/Settings";
@@ -58,7 +63,7 @@ const NAV = [
 ] as const;
 type ItemKeys<T> = T extends { items: infer I } ? keyof I : never;
 type Tab = ItemKeys<(typeof NAV)[number]>;
-const TABS = Object.assign({}, ...NAV.map((g) => g.items)) as Record<Tab, readonly [string, string]>;
+const TABS = Object.assign({}, ...NAV.map((g) => g.items), LOCAL ? { subscription: ["⭐", "الترخيص"] } : {}) as Record<Tab, readonly [string, string]>;
 
 /** What opens each screen. "owner" = the shop owner only; null = everyone (their own pay). */
 const NEEDS: Record<Tab, Permission | "owner" | null> = {
@@ -122,14 +127,31 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
   const loadMe = useCallback(() => call<Me>("/me").then(setMe).catch((e) => setError((e as Error).message)), [call]);
   useEffect(() => {
     void loadMe();
-    call<Sub>("/subscription")
+    if (!LOCAL) call<Sub>("/subscription")
       .then((s) => {
         setSub(s);
         if (["locked", "suspended", "cancelled"].includes(s.state) || new URLSearchParams(location.search).has("payment")) setTab("subscription");
       })
       .catch(() => setSub(null));
   }, [call, loadMe]);
-  const notice = sub && subNotice(sub);
+  // On the shop's own computer the yearly licence takes the subscription's place.
+  const [lic, setLic] = useState<Lic | null>(null);
+  const loadLic = useCallback(() => {
+    if (!LOCAL) return;
+    call<Lic>("/local/license")
+      .then((l) => {
+        setLic(l);
+        if (["locked", "suspended"].includes(l.state)) setTab("subscription");
+      })
+      .catch(() => setLic(null));
+  }, [call]);
+  useEffect(() => loadLic(), [loadLic]);
+  const notice = LOCAL ? lic && licNotice(lic) : sub && subNotice(sub);
+  // On the shop's own computer: say so when backups stopped (no copy for 3 days, USB stick missing).
+  const [backupWarning, setBackupWarning] = useState<string | null>(null);
+  useEffect(() => {
+    if (LOCAL && me?.user.role === "owner") call<{ warning: string | null }>("/local/backup/warning").then((r) => setBackupWarning(r.warning)).catch(() => undefined);
+  }, [call, me?.user.role]);
 
   if (error) return <div className="center"><div className="error">{error}</div></div>;
   if (!me) return <div className="center muted">جاري التحميل…</div>;
@@ -142,6 +164,8 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
     // Screens of a feature the shop turned off (or never needed) stay out of the menu.
     const need = MODULE_OF[t];
     if (need && !need.some((k) => mods[k])) return false;
+    // On the shop's own computer there is no monthly subscription and no platform to write to.
+    if (LOCAL && t === "support") return false;
     if (t === "electronics") return isOwner || ["products", "purchasing", "sales", "customers"].some((p) => me.user.permissions.includes(p as Permission));
     // Put away by the owner once the shop moved off paper; brought back from the settings.
     if (t === "paper" && me.tenant.settings?.menu?.hidePaper) return false;
@@ -198,6 +222,10 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
             {notice.text} <u>التفاصيل</u>
           </div>
         )}
+        {backupWarning && isOwner && shown !== "backup" && (
+          <div className="error" onClick={() => setTab("backup")} style={{ cursor: "pointer" }}>⚠️ {backupWarning} <u>النسخ الاحتياطي</u></div>
+        )}
+        {LOCAL && isOwner && <AppUpdate call={call} />}
         <Announcements call={call} />
         <div className="stack" key={store.id}>
           {shown === "home" && <Home call={call} storeId={store.id} userName={me.user.name} open={setTab} />}
@@ -224,18 +252,19 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
           {shown === "offers" && <Offers call={call} storeId={store.id} stores={me.stores} />}
           {shown === "customers" && <Customers call={call} isOwner={me.user.role === "owner"} tiers={mods.tiers} />}
           {shown === "invoices" && <Invoices call={call} storeId={store.id} stores={open} />}
-          {shown === "settings" && <><ShopSettings call={call} storeName={store.name} onSaved={loadMe} openAlerts={() => setTab("alerts")} />{me.tenant.features?.loyalty !== false && <LoyaltyCard call={call} isOwner={me.user.role === "owner"} />}<SecurityCard call={call} /></>}
+          {shown === "settings" && <><ShopSettings call={call} storeName={store.name} onSaved={loadMe} openAlerts={() => setTab("alerts")} /><PayMethodsCard call={call} />{me.tenant.features?.loyalty !== false && <LoyaltyCard call={call} isOwner={me.user.role === "owner"} />}<SecurityCard call={call} /></>}
           {shown === "mypay" && !can("settings") && <SecurityCard call={call} />}
           {shown === "alerts" && <><Alerts call={call} /><AlertSettings call={call} isOwner={isOwner} /></>}
           {shown === "expenses" && <Expenses call={call} storeId={store.id} stores={open} />}
-          {shown === "backup" && (isOwner ? <><BackupCard /><RestoreCard /></> : <div className="notice">النسخة الاحتياطية لصاحب المحل فقط</div>)}
+          {shown === "backup" && (isOwner ? LOCAL ? <LocalBackup call={call} /> : <><BackupCard /><RestoreCard /></> : <div className="notice">النسخة الاحتياطية لصاحب المحل فقط</div>)}
           {shown === "staff" && <Staff call={call} isOwner={isOwner} mine={me.user.permissions} />}
           {shown === "payroll" && <Payroll call={call} storeId={store.id} />}
           {shown === "money" && <Money call={call} />}
           {shown === "mypay" && <MyPay token={session.adminToken} />}
-          {shown === "subscription" && <Subscription call={call} />}
+          {shown === "subscription" && (LOCAL ? <LocalLicense call={call} onChange={loadLic} /> : <Subscription call={call} />)}
           {shown === "support" && <Support call={call} isOwner={isOwner} />}
-          {shown === "devices" && <Devices call={call} storeId={store.id} storeName={store.name} go={go} isOwner={isOwner} />}
+          {shown === "devices" && LOCAL && <LocalNetwork call={call} isOwner={isOwner} />}
+          {shown === "devices" && <Devices call={call} storeId={store.id} storeName={store.name} stores={open} go={go} isOwner={isOwner} />}
         </div>
       </main>
     </div>

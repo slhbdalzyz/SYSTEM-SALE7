@@ -3,6 +3,7 @@ import { FEATURES, formatMoney, ROLE_NAMES, HEALTH_LABELS, platformCan, PLATFORM
 import { downloadCsv } from "../admin/charts";
 import { AgentPage, AgentsTab, AnnouncementsTab, AuditTab, CouponsTab, HealthBadge, MyAccount, openInvoice, RemindersTab, RevenueTab, TeamTab, TicketsTab } from "./Pro";
 import { api, ApiError } from "../api";
+import { LicensesTab } from "./Licenses";
 import { session, tokenValid } from "../session";
 import { METHOD_LABEL, STATE_BADGE, STATE_LABEL, date, parseMoney, type Plan, type SubState } from "../billing";
 
@@ -90,6 +91,7 @@ const TABS: Record<string, { label: string; perm: PlatformPerm | null }> = {
   coupons: { label: "الكوبونات", perm: "coupons" },
   agents: { label: "الوكلاء", perm: "agents" },
   plans: { label: "الباقات", perm: "plans" },
+  licenses: { label: "تراخيص سطح المكتب", perm: "payments" },
   team: { label: "الفريق", perm: "team" },
   audit: { label: "السجل", perm: "audit" },
   errors: { label: "أخطاء السيرفر", perm: "errors" },
@@ -134,6 +136,7 @@ function Console({ call, logout }: { call: Call; logout: () => void }) {
           {current === "coupons" && <CouponsTab call={call} />}
           {current === "agents" && <AgentsTab call={call} open={setTenant} />}
           {current === "plans" && <Plans call={call} />}
+          {current === "licenses" && <LicensesTab call={call} />}
           {current === "team" && <TeamTab call={call} />}
           {current === "audit" && <AuditTab call={call} open={setTenant} />}
           {current === "errors" && <Errors call={call} />}

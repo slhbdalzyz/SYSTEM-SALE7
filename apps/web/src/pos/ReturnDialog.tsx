@@ -117,7 +117,7 @@ export function ReturnDialog({ shiftId, newNumber, onDone, onClose }: {
   return (
     <Modal title="مرتجع" onClose={onClose}>
       <div className="row" style={{ flexWrap: "nowrap" }}>
-        <input className="num" placeholder="رقم الفاتورة مثل P1-000123" value={number} onChange={(e) => setNumber(e.target.value)} onKeyDown={(e) => e.key === "Enter" && find()} autoFocus />
+        <input className="num" placeholder="رقم الفاتورة مثل P1-123 أو 123 بس" value={number} onChange={(e) => setNumber(e.target.value)} onKeyDown={(e) => e.key === "Enter" && find()} autoFocus />
         <button onClick={find} disabled={busy || !number.trim()}>بحث</button>
       </div>
       {sale && (

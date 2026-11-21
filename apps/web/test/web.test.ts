@@ -59,8 +59,8 @@ describe("cart", () => {
 
 describe("device", () => {
   it("numbers invoices per device", async () => {
-    expect(await nextInvoiceNumber("P1")).toBe("P1-000001");
-    expect(await nextInvoiceNumber("P1")).toBe("P1-000002");
+    expect(await nextInvoiceNumber("P1")).toBe("P1-1");
+    expect(await nextInvoiceNumber("P1")).toBe("P1-2");
   });
   it("parses common scale outputs", () => {
     expect(parseScaleLine("ST,GS,+  1.250kg")).toBe(1250);

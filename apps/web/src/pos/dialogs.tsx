@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { METHOD_LABELS, OTHER_METHODS, creditRoom, formatMoney, maxPointsPayment, pointsFor, toMinor, type CatalogCustomer, type LoyaltySettings, type PaymentMethod } from "@pos/shared";
+import { METHOD_LABELS, OTHER_METHODS, creditRoom, formatMoney, maxPointsPayment, pointsFor, toMinor, type CatalogCustomer, type LoyaltySettings, type PayMethod, type PaymentMethod } from "@pos/shared";
 import { readScaleWeight, scaleSupported } from "../scale";
 
 export function Modal({ title, children, onClose, wide }: { title: string; children: ReactNode; onClose: () => void; wide?: boolean }) {
@@ -58,20 +58,26 @@ export function AmountDialog({ title, label, initial = "", onDone, onClose, scal
 
 export interface Employee { id: string; name: string }
 
-type Other = (typeof OTHER_METHODS)[number] | "credit";
+/** A built-in way of paying, the customer's account, or one the shop added ("c:<id>"). */
+type Other = (typeof OTHER_METHODS)[number] | "credit" | `c:${string}`;
+export type Payment = { method: PaymentMethod; amountMinor: number; label?: string; bankAccountId?: string };
+export type TillBank = { id: string; bankName: string; name: string | null };
 
 /**
  * Paying: cash with ready banknote buttons (each tap adds that note), any of the Libyan ways of
  * paying for all or part of the bill, or on the customer's account. The change shows big.
  */
-export function PayDialog({ totalMinor, customer, employees, rules, onPay, onClose }: {
+export function PayDialog({ totalMinor, customer, employees, rules, shopMethods = [], hidden = [], banks = [], onPay, onClose }: {
   totalMinor: number; customer: CatalogCustomer | null; employees: Employee[]; rules?: LoyaltySettings | null;
-  onPay: (p: { method: PaymentMethod; amountMinor: number }[], employeeId: string | null) => void; onClose: () => void;
+  shopMethods?: PayMethod[]; hidden?: string[]; banks?: TillBank[];
+  onPay: (p: Payment[], employeeId: string | null) => void; onClose: () => void;
 }) {
   const [cash, setCash] = useState(String(totalMinor / 1000));
   /** Until the cashier types or taps a note, the cash box holds the exact amount. */
   const [fresh, setFresh] = useState(true);
   const [others, setOthers] = useState<Partial<Record<Other, string>>>({});
+  /** A transfer can go to any of the shop's banks: the customer says which one they sent it to. */
+  const [transferBank, setTransferBank] = useState(banks[0]?.id ?? "");
   const [staff, setStaff] = useState(false);
   const [employeeId, setEmployeeId] = useState("");
   const cashRef = useRef<HTMLInputElement>(null);
@@ -90,7 +96,14 @@ export function PayDialog({ totalMinor, customer, employees, rules, onPay, onClo
   const overLimit = !staff && creditM > 0 && room !== null && creditM > room;
   const valid = staff ? !!employeeId : paid >= totalMinor && change <= cashM && otherM + pointsM <= totalMinor && !overLimit;
   const notes = [5000, 10000, 20000, 50000];
-  const choices: Other[] = [...OTHER_METHODS, ...(customer && room !== 0 ? (["credit"] as const) : [])];
+  const own = shopMethods.filter((m) => m.active);
+  const choices: Other[] = [
+    ...OTHER_METHODS.filter((m) => !hidden.includes(m)),
+    ...own.map((m) => `c:${m.id}` as const),
+    ...(customer && room !== 0 ? (["credit"] as const) : []),
+  ];
+  const ownOf = (k: Other) => (k.startsWith("c:") ? own.find((m) => `c:${m.id}` === k) ?? shopMethods.find((m) => `c:${m.id}` === k) : undefined);
+  const nameOf = (k: Other) => ownOf(k)?.name ?? METHOD_LABELS[k as PaymentMethod] ?? k;
 
   function addNote(n: number) {
     setCash(String(((fresh ? 0 : cashM) + n) / 1000));
@@ -115,11 +128,13 @@ export function PayDialog({ totalMinor, customer, employees, rules, onPay, onClo
   function pay() {
     if (!valid) return;
     if (staff) return onPay([{ method: "payroll", amountMinor: totalMinor }], employeeId);
-    const p: { method: PaymentMethod; amountMinor: number }[] = [];
+    const p: Payment[] = [];
     if (cashM > 0) p.push({ method: "cash", amountMinor: cashM });
     for (const k of Object.keys(others) as Other[]) {
       const v = k === "credit" && !customer ? 0 : num(others[k]);
-      if (v > 0) p.push({ method: k, amountMinor: v });
+      const mine = ownOf(k);
+      const bank = mine ? mine.bankId ?? undefined : k === "transfer" && banks.length > 1 ? transferBank || undefined : undefined;
+      if (v > 0) p.push({ ...(mine ? { method: mine.account, label: mine.name } : { method: k as PaymentMethod }), amountMinor: v, ...(bank ? { bankAccountId: bank } : {}) });
     }
     if (pointsM > 0) p.push({ method: "points", amountMinor: pointsM });
     if (!p.length) p.push({ method: "cash", amountMinor: 0 });
@@ -159,15 +174,22 @@ export function PayDialog({ totalMinor, customer, employees, rules, onPay, onClo
         </div>
         <div className="pay-methods">
           {choices.map((m) => (
-            <button key={m} className={others[m] !== undefined ? "active" : ""} onClick={() => useMethod(m)}>{m === "credit" ? `آجل على ${customer?.name}` : METHOD_LABELS[m]}</button>
+            <button key={m} className={others[m] !== undefined ? "active" : ""} onClick={() => useMethod(m)}>{m === "credit" ? `آجل على ${customer?.name}` : nameOf(m)}</button>
           ))}
         </div>
         {(Object.keys(others) as Other[]).map((m) => (
           <div className="pay-row" key={m}>
-            <span>{m === "credit" ? `آجل${room !== null ? ` (متاح ${formatMoney(room)})` : ""}` : METHOD_LABELS[m]}</span>
+            <span>{m === "credit" ? `آجل${room !== null ? ` (متاح ${formatMoney(room)})` : ""}` : nameOf(m)}</span>
             <input className="num" inputMode="decimal" value={others[m]} onFocus={(e) => e.target.select()} autoFocus
               onChange={(e) => setOthers({ ...others, [m]: e.target.value })} onKeyDown={(e) => e.key === "Enter" && pay()} />
             <button className="ghost" aria-label="شيل" onClick={() => { const n = { ...others }; delete n[m]; setOthers(n); }}>✕</button>
+            {m === "transfer" && banks.length > 1 && (
+              <div className="pay-methods" style={{ gridColumn: "1 / -1" }}>
+                {banks.map((b) => (
+                  <button key={b.id} className={transferBank === b.id ? "active" : ""} onClick={() => setTransferBank(b.id)}>🏦 {b.name ? `${b.bankName} · ${b.name}` : b.bankName}</button>
+                ))}
+              </div>
+            )}
           </div>
         ))}
         {customer && rules?.enabled && (

@@ -156,7 +156,7 @@ export function receiptRows(d: ReceiptData): Row[] {
     ...(r?.showSavings !== false && promo > 0 ? [{ kind: "pair", right: "وفّرت من العروض", left: formatMoney(promo) } as Row] : []),
     ...(t.tax > 0 ? [{ kind: "pair", right: "منها ضريبة", left: formatMoney(t.tax) } as Row] : []),
     { kind: "pair", right: "الإجمالي", left: formatMoney(t.total), size: 30, bold: true },
-    ...s.payments.map((p): Row => ({ kind: "pair", right: METHOD[p.method], left: formatMoney(p.amountMinor) })),
+    ...s.payments.map((p): Row => ({ kind: "pair", right: p.label ?? METHOD[p.method], left: formatMoney(p.amountMinor) })),
     ...((d.changeMinor ?? 0) > 0 ? [{ kind: "pair", right: "الباقي", left: formatMoney(d.changeMinor ?? 0) } as Row] : []),
     ...(d.points
       ? [

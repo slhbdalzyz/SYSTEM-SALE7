@@ -38,6 +38,10 @@ export const saleLineSchema = z.object({
 export const paymentSchema = z.object({
   method: z.enum(PAYMENT_METHODS),
   amountMinor: posMinor,
+  /** A way of paying the shop added itself (its name); the money still counts as card or transfer. */
+  label: z.string().trim().min(1).max(40).optional(),
+  /** The bank account the money goes into (a transfer to a chosen bank); left out, the till's card machine or the shop's default account. */
+  bankAccountId: z.string().uuid().optional(),
 });
 
 /** A sale as the cashier device sends it. The id is made on the device, so re-sending is safe. */
