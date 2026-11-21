@@ -100,6 +100,6 @@ export async function nextInvoiceNumber(prefix: string): Promise<string> {
   return db.transaction("rw", db.meta, async () => {
     const n = ((await getMeta<number>("invoiceSeq")) ?? 0) + 1;
     await setMeta("invoiceSeq", n);
-    return `${prefix}-${String(n).padStart(6, "0")}`;
+    return `${prefix}-${n}`;
   });
 }

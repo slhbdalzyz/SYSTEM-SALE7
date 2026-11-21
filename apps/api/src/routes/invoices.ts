@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { PAYMENT_METHODS, readShopSettings } from "@pos/shared";
 import { HttpError, requirePerm } from "../auth";
+import { numberSeq, plainNumber, readNumber } from "../invoice-number";
 
 const TZ = "Africa/Tripoli";
 const dateRe = /^\d{4}-\d{2}-\d{2}$/;
@@ -23,16 +24,31 @@ export async function invoiceRoutes(app: FastifyInstance) {
       kind: z.enum(["sale", "return"]).optional(),
       method: z.enum(PAYMENT_METHODS).optional(),
       q: z.string().trim().max(60).optional(),
+      minMinor: z.coerce.number().int().min(0).optional(),
+      maxMinor: z.coerce.number().int().min(0).optional(),
       limit: z.coerce.number().int().min(1).max(500).default(200),
       offset: z.coerce.number().int().min(0).default(0),
     }).parse(req.query);
     if (q.from > q.to) throw new HttpError(400, "تاريخ البداية بعد النهاية");
+    // One box finds an invoice by its number (full, or just the count), the customer's name or
+    // phone, an item on it, or the cashier.
+    const term = q.q || null;
+    const n = term ? readNumber(term) : null;
+    const num = n && "full" in n ? n.full : null;
+    const seq = n && "seq" in n ? n.seq : null;
+    const search = `$9::text IS NULL
+      OR ($10::text IS NOT NULL AND ${plainNumber("s.number")} = $10)
+      OR ($11::text IS NOT NULL AND ${numberSeq("s.number")} = $11)
+      OR ($10::text IS NULL AND $11::text IS NULL AND (s.number ILIKE '%' || $9 || '%' OR c.name ILIKE '%' || $9 || '%' OR u.name ILIKE '%' || $9 || '%'
+          OR EXISTS (SELECT 1 FROM sale_lines l WHERE l.sale_id = s.id AND l.name ILIKE '%' || $9 || '%')))
+      OR (length(regexp_replace($9, '[^0-9]', '', 'g')) >= 6 AND regexp_replace(COALESCE(c.phone, ''), '[^0-9]', '', 'g') LIKE '%' || regexp_replace($9, '[^0-9]', '', 'g') || '%')`;
     const where = `s.tenant_id = $1 AND (s.created_at AT TIME ZONE '${TZ}')::date BETWEEN $2::date AND $3::date
       AND ($4::uuid IS NULL OR s.store_id = $4) AND ($5::uuid IS NULL OR s.shift_id = $5) AND ($6::uuid IS NULL OR s.user_id = $6)
       AND ($7::text IS NULL OR s.kind = $7)
       AND ($8::text IS NULL OR EXISTS (SELECT 1 FROM payments p WHERE p.sale_id = s.id AND p.method = $8))
-      AND ($9::text IS NULL OR s.number ILIKE '%' || $9 || '%' OR c.name ILIKE '%' || $9 || '%')`;
-    const args = [req.user.tid, q.from, q.to, q.storeId ?? null, q.shiftId ?? null, q.userId ?? null, q.kind ?? null, q.method ?? null, q.q || null];
+      AND (${search})
+      AND ($12::bigint IS NULL OR abs(s.total_minor) >= $12) AND ($13::bigint IS NULL OR abs(s.total_minor) <= $13)`;
+    const args = [req.user.tid, q.from, q.to, q.storeId ?? null, q.shiftId ?? null, q.userId ?? null, q.kind ?? null, q.method ?? null, term, num, seq, q.minMinor ?? null, q.maxMinor ?? null];
     const rows = (await app.db.query(
       `SELECT s.id, s.number, s.kind, s.created_at, s.total_minor, s.discount_minor, s.shift_id, s.original_sale_id,
               st.name AS store_name, d.name AS device_name, u.name AS cashier, c.name AS customer_name, e.name AS employee_name,
@@ -43,7 +59,7 @@ export async function invoiceRoutes(app: FastifyInstance) {
          FROM sales s JOIN stores st ON st.id = s.store_id JOIN devices d ON d.id = s.device_id JOIN users u ON u.id = s.user_id
          LEFT JOIN customers c ON c.id = s.customer_id LEFT JOIN users e ON e.id = s.employee_id LEFT JOIN shifts sh ON sh.id = s.shift_id
         WHERE ${where}
-        ORDER BY s.created_at DESC LIMIT $10 OFFSET $11`,
+        ORDER BY s.created_at DESC LIMIT $14 OFFSET $15`,
       [...args, q.limit, q.offset],
     )).rows;
     const sum = (await app.db.query(
@@ -51,12 +67,12 @@ export async function invoiceRoutes(app: FastifyInstance) {
               COALESCE(sum(s.total_minor) FILTER (WHERE s.kind = 'sale'), 0)::bigint AS sales_minor,
               COALESCE(-sum(s.total_minor) FILTER (WHERE s.kind = 'return'), 0)::bigint AS returns_minor,
               COALESCE(sum(s.discount_minor) FILTER (WHERE s.kind = 'sale'), 0)::bigint AS discount_minor
-         FROM sales s LEFT JOIN customers c ON c.id = s.customer_id WHERE ${where}`,
+         FROM sales s JOIN users u ON u.id = s.user_id LEFT JOIN customers c ON c.id = s.customer_id WHERE ${where}`,
       args,
     )).rows[0];
     const byMethod = (await app.db.query(
       `SELECT COALESCE(p.label, p.method) AS method, sum(p.amount_minor - CASE WHEN p.method = 'cash' AND s.kind = 'sale' THEN s.change_minor ELSE 0 END)::bigint AS amount
-         FROM payments p JOIN sales s ON s.id = p.sale_id LEFT JOIN customers c ON c.id = s.customer_id WHERE ${where} GROUP BY 1`,
+         FROM payments p JOIN sales s ON s.id = p.sale_id JOIN users u ON u.id = s.user_id LEFT JOIN customers c ON c.id = s.customer_id WHERE ${where} GROUP BY 1`,
       args,
     )).rows;
     return {
