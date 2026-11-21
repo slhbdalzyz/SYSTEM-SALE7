@@ -263,7 +263,7 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
           {shown === "subscription" && (LOCAL ? <LocalLicense call={call} onChange={loadLic} /> : <Subscription call={call} />)}
           {shown === "support" && <Support call={call} isOwner={isOwner} />}
           {shown === "devices" && LOCAL && <LocalNetwork call={call} isOwner={isOwner} />}
-          {shown === "devices" && <Devices call={call} storeId={store.id} storeName={store.name} go={go} isOwner={isOwner} />}
+          {shown === "devices" && <Devices call={call} storeId={store.id} storeName={store.name} stores={open} go={go} isOwner={isOwner} />}
         </div>
       </main>
     </div>
