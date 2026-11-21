@@ -5,6 +5,7 @@ import { z } from "zod";
 import { audit, inTx } from "../db";
 import { HttpError, authenticate, hashToken, type TokenPayload } from "../auth";
 import { assertPinNotLocked } from "./devices";
+import { listBanks } from "./money";
 import { assertNotLocked } from "../billing";
 import { isLocal } from "../edition";
 
@@ -128,7 +129,9 @@ export async function authRoutes(app: FastifyInstance) {
     t.features = resolveFeatures(t.plan_features, t.features);
     delete t.plan_features;
     const stores = await app.db.query(`SELECT id, name, address, phone, receipt_footer, active FROM stores WHERE tenant_id = $1 ORDER BY created_at`, [req.user.tid]);
-    return { user: u, tenant: t, stores: stores.rows, deviceId: req.user.did ?? null, storeId: req.user.sid ?? null, support: req.user.ro ? { readOnly: true } : null };
+    // The till picks the bank a transfer goes into.
+    const banks = (await listBanks(app.db, req.user.tid)).filter((b) => b.active).map((b) => ({ id: b.id, bankName: b.bankName, name: b.name }));
+    return { user: u, tenant: t, stores: stores.rows, banks, deviceId: req.user.did ?? null, storeId: req.user.sid ?? null, support: req.user.ro ? { readOnly: true } : null };
   });
 
   /** Two-step sign-in with an authenticator app (Google Authenticator, Microsoft Authenticator…). */

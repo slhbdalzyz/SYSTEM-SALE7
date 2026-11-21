@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { formatMoney, toMinor } from "@pos/shared";
 import type { Call } from "./Admin";
+import { BankSelect, useBanks } from "./banks";
 
 interface Row { id: string; category: string; amount_minor: number; note: string | null; payment_method?: string; spent_on: string; store_name: string; user_name: string | null }
 interface List { expenses: Row[]; byCategory: Record<string, number>; totalMinor: number }
@@ -12,7 +13,8 @@ const today = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Tripoli
 export function Expenses({ call, storeId, stores }: { call: Call; storeId: string | null; stores: { id: string; name: string }[] }) {
   const [month, setMonth] = useState(() => today().slice(0, 7));
   const [list, setList] = useState<List | null>(null);
-  const [f, setF] = useState({ category: CATEGORIES[0], amount: "", note: "", spentOn: today(), storeId: storeId ?? stores[0]?.id ?? "", method: "cash" });
+  const [f, setF] = useState({ category: CATEGORIES[0], amount: "", note: "", spentOn: today(), storeId: storeId ?? stores[0]?.id ?? "", method: "cash", bankId: null as string | null });
+  const banks = useBanks(call);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -25,7 +27,7 @@ export function Expenses({ call, storeId, stores }: { call: Call; storeId: strin
     setBusy(true);
     setError(null);
     try {
-      await call("/expenses", { body: { storeId: storeId ?? f.storeId, category: f.category.trim(), amountMinor: toMinor(Number(f.amount)), note: f.note || undefined, spentOn: f.spentOn, paymentMethod: f.method } });
+      await call("/expenses", { body: { storeId: storeId ?? f.storeId, category: f.category.trim(), amountMinor: toMinor(Number(f.amount)), note: f.note || undefined, spentOn: f.spentOn, paymentMethod: f.method, bankId: f.method === "cash" ? undefined : f.bankId } });
       setF({ ...f, amount: "", note: "" });
       await load();
     } catch (err) {
@@ -58,6 +60,7 @@ export function Expenses({ call, storeId, stores }: { call: Call; storeId: strin
               <option value="transfer">🏦 تحويل مصرفي</option>
             </select>
           </label>
+          {f.method !== "cash" && <BankSelect banks={banks} value={f.bankId} onChange={(id) => setF({ ...f, bankId: id })} label="من حساب" />}
           <label>التاريخ<input type="date" value={f.spentOn} max={today()} onChange={(e) => setF({ ...f, spentOn: e.target.value })} required /></label>
           {!storeId && stores.length > 1 && (
             <label>الفرع

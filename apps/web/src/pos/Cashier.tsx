@@ -13,7 +13,7 @@ import { autoBackupIfDue } from "../owner/backup";
 import type { Screen } from "../App";
 import { addLine, cartTotals, lineFor, lineTotal, priceCart, repriceFor, switchUnit, toSaleInput, type CartLine, type Deal } from "./cart";
 import { DealBox, DealDialog, KitDialog, QuoteDialog, loadKits, tierLabel } from "./business";
-import { AmountDialog, DrawerDialog, Modal, PayDialog, type Employee } from "./dialogs";
+import { AmountDialog, DrawerDialog, Modal, PayDialog, type Employee, type Payment, type TillBank } from "./dialogs";
 import { applyPrefs, loadPrefs, savePrefs, sound, type TillPrefs } from "./feel";
 import { MyPay } from "../admin/MyPay";
 import { Receipt, type ReceiptData } from "./Receipt";
@@ -69,7 +69,7 @@ const DEFAULT_ORDER: Order = { type: "takeaway" };
 const today = () => new Date().toLocaleDateString("en-CA");
 const hhmm = (d: Date) => d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
 
-type Shop = { name: string; settings: ShopSettings; type?: string };
+type Shop = { name: string; settings: ShopSettings; type?: string; banks?: TillBank[] };
 
 /** The till's keyboard: what each key does, shown on F1. */
 const KEYS: [string, string][] = [
@@ -177,10 +177,10 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
       }
       void countMine();
       try {
-        const me = await api<{ tenant: { name: string; settings: unknown; loyalty?: LoyaltySettings; business_type?: string }; stores: { id: string; receipt_footer: string | null }[]; storeId: string }>("/me", { token: session.staffToken });
+        const me = await api<{ tenant: { name: string; settings: unknown; loyalty?: LoyaltySettings; business_type?: string }; stores: { id: string; receipt_footer: string | null }[]; storeId: string; banks?: TillBank[] }>("/me", { token: session.staffToken });
         await setMeta("store", { footer: me.stores.find((s) => s.id === me.storeId)?.receipt_footer });
         // The shop's name and settings: what the receipt shows and what a cashier may do.
-        const next = { name: me.tenant.name, settings: readShopSettings(me.tenant.settings), type: me.tenant.business_type };
+        const next = { name: me.tenant.name, settings: readShopSettings(me.tenant.settings), type: me.tenant.business_type, banks: me.banks ?? [] };
         await setMeta("shop", next);
         setShop(next);
         if (me.tenant.loyalty) {
@@ -516,7 +516,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     }
   }
 
-  async function pay(payments: { method: PaymentMethod; amountMinor: number }[], employeeId: string | null = null) {
+  async function pay(payments: Payment[], employeeId: string | null = null) {
     if (!device) return;
     // Whatever the kitchen has not heard of yet goes now, so nothing paid for is left unmade.
     if (restaurant && pendingKitchen.length) await sendKitchen();
@@ -1083,7 +1083,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
           <div className="row"><span className="spacer" /><button onClick={() => { setDialog(null); focusScan(); }}>إغلاق</button></div>
         </Modal>
       )}
-      {dialog?.kind === "pay" && <PayDialog totalMinor={exchange ? totals.total - exchange.creditMinor : totals.total} customer={customer} employees={employees} rules={rules} shopMethods={shop?.settings.payMethods} hidden={shop?.settings.hiddenMethods} onPay={exchange ? (ps, emp) => pay(withCredit(ps, exchange.creditMinor), emp) : pay} onClose={() => { setDialog(null); focusScan(); }} />}
+      {dialog?.kind === "pay" && <PayDialog totalMinor={exchange ? totals.total - exchange.creditMinor : totals.total} customer={customer} employees={employees} rules={rules} shopMethods={shop?.settings.payMethods} hidden={shop?.settings.hiddenMethods} banks={shop?.banks} onPay={exchange ? (ps, emp) => pay(withCredit(ps, exchange.creditMinor), emp) : pay} onClose={() => { setDialog(null); focusScan(); }} />}
       {dialog?.kind === "weight" && (
         <AmountDialog
           title={dialog.product.name}

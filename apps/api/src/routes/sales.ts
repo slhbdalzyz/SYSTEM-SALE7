@@ -232,7 +232,15 @@ async function recordSale(app: FastifyInstance, who: TokenPayload, s: SaleInput)
       for (const p of s.payments) {
         // A shop's own way of paying only ever counts as card or transfer money.
         const label = p.label && (p.method === "card" || p.method === "transfer") ? p.label : null;
-        await tx.query(`INSERT INTO payments (tenant_id, sale_id, method, amount_minor, label) VALUES ($1,$2,$3,$4,$5)`, [tid, s.id, p.method, p.amountMinor, label]);
+        // Which bank account it lands in: the one the till chose, else (card money) the account of this till's card machine,
+        // else the shop's default account (worked out when the treasury adds up).
+        await tx.query(
+          `INSERT INTO payments (tenant_id, sale_id, method, amount_minor, label, bank_account_id) VALUES ($1,$2,$3,$4,$5,
+             CASE WHEN $3 IN ('cash', 'credit', 'payroll', 'points') THEN NULL
+                  ELSE COALESCE((SELECT id FROM bank_accounts WHERE id = $6::uuid AND tenant_id = $1),
+                                CASE WHEN $3 NOT IN ('transfer', 'cheque') THEN (SELECT card_bank_id FROM devices WHERE id = $7 AND tenant_id = $1) END) END)`,
+          [tid, s.id, p.method, p.amountMinor, label, p.bankAccountId ?? null, who.did ?? null],
+        );
       }
       if (onSalary > 0) {
         await payrollPurchase(tx, { tid, storeId: who.sid!, employeeId: s.employeeId!, employeeName: employee!.name, saleId: s.id, number: s.number, amountMinor: onSalary, createdAt: s.createdAt, by: who.sub });

@@ -5,6 +5,7 @@ import { Modal } from "../pos/dialogs";
 import type { Call } from "./Admin";
 import type { LabelDraft } from "./Labels";
 import { ItemCard } from "./ItemCard";
+import { BankSelect, useBanks } from "./banks";
 
 interface Supplier { id: string; name: string; phone: string | null; note: string | null; active: boolean; balance_minor: number; last_purchase_at: string | null }
 interface Invoice { id: string; supplier_ref: string | null; invoice_date: string; total_minor: number; paid_minor: number; payment_method: keyof typeof INVOICE_METHOD; supplier_name: string | null; store_name: string; lines: number; created_at: string }
@@ -84,6 +85,8 @@ function NewInvoice({ call, storeId, suppliers, reloadSuppliers, draft, clearDra
   const [find, setFind] = useState("");
   const [paid, setPaid] = useState<string | null>(null);
   const [method, setMethod] = useState<keyof typeof INVOICE_METHOD>("credit");
+  const [bankId, setBankId] = useState<string | null>(null);
+  const banks = useBanks(call);
   const [quick, setQuick] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ text: string; bad?: boolean } | null>(null);
   const [received, setReceived] = useState<LabelDraft[] | null>(null);
@@ -143,6 +146,7 @@ function NewInvoice({ call, storeId, suppliers, reloadSuppliers, draft, clearDra
         body: {
           storeId, supplierId, supplierRef: ref || undefined, invoiceDate: day, paymentMethod: method,
           paidMinor: method === "credit" ? undefined : paidMinor,
+          bankId: method === "credit" || method === "cash" ? undefined : bankId,
           lines: lines.map((l) => ({
             unitId: l.unitId, qtyMilli: toMinor(Number(l.qty) || 0), unitCostMinor: toMinor(Number(l.cost) || 0),
             unitPrices: l.units.flatMap((u) => { const pr = priceOf(l, u.id); return pr === null ? [] : [{ unitId: u.id, priceMinor: pr }]; }),
@@ -259,6 +263,7 @@ function NewInvoice({ call, storeId, suppliers, reloadSuppliers, draft, clearDra
         {method !== "credit" && (
           <label>المدفوع الآن<input className="num" value={paid ?? String(total / 1000)} onChange={(e) => setPaid(e.target.value)} style={{ width: 120 }} /></label>
         )}
+        {method !== "credit" && method !== "cash" && <BankSelect banks={banks} value={bankId} onChange={setBankId} label="من حساب" />}
         {total - paidMinor > 0 && <span className="badge off">يتسجل دين للمورد {formatMoney(total - paidMinor)}</span>}
         <span className="spacer" />
         {missingExpiry.length > 0 && <span className="badge bad">ناقص تاريخ صلاحية: {missingExpiry.map((l) => l.name).join("، ")}</span>}
@@ -323,7 +328,8 @@ interface Entry { at: string; type: "invoice" | "payment"; ref: string; amount_m
 
 function Suppliers({ call, list, reload }: { call: Call; list: Supplier[]; reload: () => Promise<unknown> }) {
   const [edit, setEdit] = useState<{ id?: string; name: string; phone: string; note: string } | null>(null);
-  const [pay, setPay] = useState<{ s: Supplier; amount: string; method: keyof typeof METHOD } | null>(null);
+  const [pay, setPay] = useState<{ s: Supplier; amount: string; method: keyof typeof METHOD; bankId?: string | null } | null>(null);
+  const banks = useBanks(call);
   const [statement, setStatement] = useState<{ supplier: Supplier; entries: Entry[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const owed = list.reduce((a, s) => a + Math.max(s.balance_minor, 0), 0);
@@ -389,9 +395,10 @@ function Suppliers({ call, list, reload }: { call: Call; list: Supplier[]; reloa
               {Object.entries(METHOD).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
             </select>
           </label>
+          {pay.method !== "cash" && <BankSelect banks={banks} value={pay.bankId ?? null} onChange={(id) => setPay({ ...pay, bankId: id })} label="من حساب" />}
           {error && <div className="error">{error}</div>}
           <div className="row"><span className="spacer" /><button onClick={() => setPay(null)}>إلغاء</button>
-            <button className="primary" disabled={!(Number(pay.amount) > 0)} onClick={() => run(() => call(`/suppliers/${pay.s.id}/payments`, { body: { amountMinor: toMinor(Number(pay.amount)), method: pay.method } })).then(() => setPay(null))}>تسديد</button>
+            <button className="primary" disabled={!(Number(pay.amount) > 0)} onClick={() => run(() => call(`/suppliers/${pay.s.id}/payments`, { body: { amountMinor: toMinor(Number(pay.amount)), method: pay.method, bankId: pay.method === "cash" ? undefined : pay.bankId ?? undefined } })).then(() => setPay(null))}>تسديد</button>
           </div>
         </Modal>
       )}

@@ -6,6 +6,7 @@ import { audit } from "../db";
 import { HttpError, hashToken, newDeviceToken, requirePerm, requireRole } from "../auth";
 import { assertWithinPlan } from "../billing";
 import { createDevice } from "./devices";
+import { ownBank } from "./money";
 
 const userSchema = z.object({
   name: z.string().min(2).max(120),
@@ -140,7 +141,7 @@ export async function adminRoutes(app: FastifyInstance) {
 
   app.get("/devices", managers, async (req) => {
     const r = await app.db.query(
-      `SELECT id, store_id, name, prefix, kind, active, backup, last_seen_at FROM devices WHERE tenant_id = $1 ORDER BY created_at`,
+      `SELECT id, store_id, name, prefix, kind, active, backup, last_seen_at, card_bank_id FROM devices WHERE tenant_id = $1 ORDER BY created_at`,
       [req.user.tid],
     );
     return r.rows;
@@ -155,6 +156,17 @@ export async function adminRoutes(app: FastifyInstance) {
     const { id, prefix } = await createDevice(app.db, { tenantId: req.user.tid, storeId: b.storeId, name: b.name, kind: b.kind, tokenHash: hashToken(token) });
     await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "device.register", entity: "device", entityId: id, data: { name: b.name, kind: b.kind } });
     return { id, prefix, kind: b.kind, deviceToken: token };
+  });
+
+  /** The card machine on this till pays into this bank account (none = the shop's default account). */
+  app.patch("/devices/:id/card-bank", managers, async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const b = z.object({ bankId: z.string().uuid().nullable() }).parse(req.body);
+    const bank = await ownBank(app.db, req.user.tid, b.bankId);
+    const r = await app.db.query(`UPDATE devices SET card_bank_id = $3 WHERE id = $1 AND tenant_id = $2`, [id, req.user.tid, bank]);
+    if (!r.rowCount) throw new HttpError(404, "الجهاز غير موجود");
+    await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "device.card_bank", entity: "device", entityId: id, data: { bank } });
+    return { ok: true };
   });
 
   app.patch("/devices/:id", owners, async (req) => {

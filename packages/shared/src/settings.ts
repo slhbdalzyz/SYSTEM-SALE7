@@ -74,6 +74,8 @@ export const shopSettingsSchema = z.object({
     id: z.string().regex(/^[a-z0-9]{4,12}$/),
     name: z.string().trim().min(1).max(40),
     account: z.enum(["card", "transfer"]).default("card"),
+    /** The bank account it goes into; none = the shop's default account. */
+    bankId: z.string().uuid().nullable().optional(),
     active: z.boolean().default(true),
   })).max(30).default([]),
   /** Built-in ways of paying this shop does not take, kept off the till (card, sadad, edfali…). */
