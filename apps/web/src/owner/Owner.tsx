@@ -7,6 +7,7 @@ import type { Call, Me } from "../admin/Admin";
 import { Expenses } from "../admin/Expenses";
 import { Reports } from "../admin/Reports";
 import { Alerts, ago } from "./Alerts";
+import { DeviceAccess, PendingDevices } from "../admin/DeviceAccess";
 import { AlertSettings, BackupCard, RestoreCard } from "./Settings";
 
 export interface Dashboard {
@@ -108,6 +109,7 @@ export function Owner({ go }: { go: (s: Screen) => void }) {
         </button>
       </header>
       <main className="owner-main">
+        {tab === "home" && me.user.role === "owner" && <PendingDevices call={call} />}
         {tab === "home" && <Home call={call} storeId={current} onUnread={setUnread} />}
         {tab === "reports" && <Reports call={call} storeId={current ?? open[0].id} stores={open} />}
         {tab === "alerts" && <Alerts call={call} onRead={setUnread} />}
@@ -115,7 +117,7 @@ export function Owner({ go }: { go: (s: Screen) => void }) {
         {tab === "more" && (
           <div className="stack">
             <AlertSettings call={call} isOwner={me.user.role === "owner"} />
-            {me.user.role === "owner" && <><BackupCard /><RestoreCard /></>}
+            {me.user.role === "owner" && <><DeviceAccess call={call} stores={open} /><BackupCard /><RestoreCard /></>}
             <div className="card stack">
               <b>{me.user.name}</b>
               <button onClick={full}>الإدارة الكاملة (الأصناف، المشتريات، الموظفين…)</button>

@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { audit, inTx } from "../db";
 import { HttpError, authenticate, hashToken, type TokenPayload } from "../auth";
+import { assertPinNotLocked } from "./devices";
 import { assertNotLocked } from "../billing";
 import { isLocal } from "../edition";
 
@@ -93,6 +94,7 @@ export async function authRoutes(app: FastifyInstance) {
     const d = (await app.db.query(`SELECT id, tenant_id, store_id FROM devices WHERE token_hash = $1 AND active AND kind = 'pos'`, [hashToken(b.deviceToken)])).rows[0];
     if (!d) throw new HttpError(401, "الجهاز غير معتمد");
     await assertNotLocked(app.db, d.tenant_id);
+    await assertPinNotLocked(app.db, d.tenant_id, b.userId);
     const u = (await app.db.query(`SELECT id, role, pin_hash FROM users WHERE id = $1 AND tenant_id = $2 AND active`, [b.userId, d.tenant_id])).rows[0];
     if (!u?.pin_hash || !(await bcrypt.compare(b.pin, u.pin_hash))) {
       await audit(app.db, { tenantId: d.tenant_id, userId: b.userId, deviceId: d.id, action: "user.pin_failed" });

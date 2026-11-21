@@ -34,6 +34,8 @@ if (DEMO && !session.deviceToken) session.deviceToken = "d".repeat(64);
 
 function initial(): Screen {
   if (supportMode()) return "admin";
+  // The owner's one-time WhatsApp link: approve this device first, whatever it was before.
+  if (new URLSearchParams(location.search).has("pair")) return "setup";
   // ?welcome shows the landing page even on a till (the demo's way to see it).
   if (new URLSearchParams(location.search).has("welcome")) return "setup";
   // Coming back from the card payment page: straight to the owner's subscription screen.

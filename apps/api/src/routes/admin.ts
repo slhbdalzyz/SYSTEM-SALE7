@@ -5,6 +5,7 @@ import { PERMISSION_KEYS, ROLES, effectivePermissions, type Permission } from "@
 import { audit } from "../db";
 import { HttpError, hashToken, newDeviceToken, requirePerm, requireRole } from "../auth";
 import { assertWithinPlan } from "../billing";
+import { createDevice } from "./devices";
 
 const userSchema = z.object({
   name: z.string().min(2).max(120),
@@ -150,16 +151,10 @@ export async function adminRoutes(app: FastifyInstance) {
     const b = z.object({ storeId: z.string().uuid(), name: z.string().min(1).max(60), kind: z.enum(["pos", "price_checker", "kitchen"]).default("pos") }).parse(req.body);
     const store = await app.db.query(`SELECT 1 FROM stores WHERE id = $1 AND tenant_id = $2`, [b.storeId, req.user.tid]);
     if (!store.rowCount) throw new HttpError(404, "الفرع غير موجود");
-    await assertWithinPlan(app.db, req.user.tid, "devices");
-    const n = (await app.db.query(`SELECT count(*)::int AS n FROM devices WHERE tenant_id = $1`, [req.user.tid])).rows[0].n as number;
-    const prefix = `P${n + 1}`;
     const token = newDeviceToken();
-    const r = await app.db.query(
-      `INSERT INTO devices (tenant_id, store_id, name, prefix, token_hash, kind) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-      [req.user.tid, b.storeId, b.name, prefix, hashToken(token), b.kind],
-    );
-    await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "device.register", entity: "device", entityId: r.rows[0].id, data: { name: b.name, kind: b.kind } });
-    return { id: r.rows[0].id, prefix, kind: b.kind, deviceToken: token };
+    const { id, prefix } = await createDevice(app.db, { tenantId: req.user.tid, storeId: b.storeId, name: b.name, kind: b.kind, tokenHash: hashToken(token) });
+    await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "device.register", entity: "device", entityId: id, data: { name: b.name, kind: b.kind } });
+    return { id, prefix, kind: b.kind, deviceToken: token };
   });
 
   app.patch("/devices/:id", owners, async (req) => {

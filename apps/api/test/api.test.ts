@@ -2568,6 +2568,83 @@ describe("more kinds of shop: customer prices, quotes, lists, orders, instalment
   });
 });
 
+describe("a cashier gets a new device in without the owner there", () => {
+  let o: string;
+  let sid: string;
+  let cashier: string;
+  let code: string;
+  it("asks with the shop code and the PIN, and the owner approves", async () => {
+    const reg = await call("POST", "/auth/register", undefined, { businessName: "محل الغياب", storeName: "الرئيسي", ownerName: "عمر", email: "away@test.ly", password: "password123", planCode: "chain" });
+    o = reg.body.token;
+    sid = reg.body.storeId;
+    cashier = (await call("POST", "/users", o, { name: "علي", role: "cashier", pin: "4321" })).body.id;
+    const acc = await call("GET", "/devices/access", o);
+    expect(acc.body.shopCode).toMatch(/^\d{6}$/);
+    expect(acc.body.autoApprove).toBe(false);
+    code = acc.body.shopCode;
+    expect((await call("POST", "/auth/shop-lookup", undefined, { shopCode: "000000" === code ? "000001" : "000000" })).status).toBe(404);
+    const look = await call("POST", "/auth/shop-lookup", undefined, { shopCode: code });
+    expect(look.body.shop.name).toBe("محل الغياب");
+    expect(look.body.users.map((u: { name: string }) => u.name)).toEqual(["علي"]);
+    expect((await call("POST", "/auth/device-request", undefined, { shopCode: code, storeId: sid, userId: cashier, pin: "9999", name: "جهاز جديد" })).status).toBe(401);
+    const ask = await call("POST", "/auth/device-request", undefined, { shopCode: code, storeId: sid, userId: cashier, pin: "4321", name: "جهاز جديد" });
+    expect(ask.body.status).toBe("pending");
+    // Not a device yet.
+    expect((await call("POST", "/auth/device-users", undefined, { deviceToken: ask.body.deviceToken })).status).toBe(401);
+    const st = (await call("POST", "/auth/device-request/status", undefined, { requestId: ask.body.requestId, deviceToken: ask.body.deviceToken })).body;
+    expect(st.status).toBe("pending");
+    const pending = (await call("GET", "/devices/access", o)).body.requests;
+    expect(pending).toHaveLength(1);
+    expect(pending[0].user_name).toBe("علي");
+    const alerts = (await db.query(`SELECT kind FROM alerts a JOIN tenants t ON t.id = a.tenant_id WHERE t.shop_code = $1`, [code])).rows;
+    expect(alerts.map((a) => a.kind)).toContain("device_request");
+    expect((await call("POST", `/devices/requests/${pending[0].id}/approve`, o, {})).status).toBe(200);
+    const done = (await call("POST", "/auth/device-request/status", undefined, { requestId: ask.body.requestId, deviceToken: ask.body.deviceToken })).body;
+    expect(done.status).toBe("approved");
+    expect(done.device.name).toBe("جهاز جديد");
+    const pin = await call("POST", "/auth/pin", undefined, { deviceToken: ask.body.deviceToken, userId: cashier, pin: "4321" });
+    expect(pin.status).toBe(200);
+    // A cashier cannot approve devices.
+    expect((await call("GET", "/devices/access", pin.body.token)).status).toBe(403);
+  });
+
+  it("can be refused", async () => {
+    const ask = await call("POST", "/auth/device-request", undefined, { shopCode: code, storeId: sid, userId: cashier, pin: "4321", name: "جهاز غريب" });
+    const id = (await call("GET", "/devices/access", o)).body.requests[0].id;
+    await call("POST", `/devices/requests/${id}/reject`, o, {});
+    expect((await call("POST", "/auth/device-request/status", undefined, { requestId: ask.body.requestId, deviceToken: ask.body.deviceToken })).body.status).toBe("rejected");
+    expect((await call("POST", "/auth/device-users", undefined, { deviceToken: ask.body.deviceToken })).status).toBe(401);
+  });
+
+  it("lets a device in at once when the shop says so", async () => {
+    await call("PATCH", "/devices/access", o, { autoApprove: true });
+    const ask = await call("POST", "/auth/device-request", undefined, { shopCode: code, storeId: sid, userId: cashier, pin: "4321", name: "جهاز ثاني" });
+    expect(ask.body.status).toBe("approved");
+    expect((await call("POST", "/auth/device-users", undefined, { deviceToken: ask.body.deviceToken })).status).toBe(200);
+    await call("PATCH", "/devices/access", o, { autoApprove: false });
+  });
+
+  it("approves a device with a one-time link", async () => {
+    const l = await call("POST", "/devices/links", o, { storeId: sid, name: "شاشة المطبخ", kind: "kitchen" });
+    expect(l.body.code).toMatch(/^[0-9a-f]{32}$/);
+    const p = await call("POST", "/auth/pair", undefined, { code: l.body.code });
+    expect(p.status).toBe(200);
+    expect(p.body.device.kind).toBe("kitchen");
+    expect((await call("POST", "/auth/pair", undefined, { code: l.body.code })).status).toBe(410);
+    const old = await call("POST", "/devices/links", o, { storeId: sid, name: "قديم" });
+    await db.query(`UPDATE device_links SET expires_at = now() - interval '1 minute' WHERE used_at IS NULL`);
+    expect((await call("POST", "/auth/pair", undefined, { code: old.body.code })).status).toBe(410);
+  });
+
+  it("locks a PIN after 5 wrong tries", async () => {
+    for (let i = 0; i < 5; i++) await call("POST", "/auth/device-request", undefined, { shopCode: code, storeId: sid, userId: cashier, pin: "1111", name: "x" });
+    expect((await call("POST", "/auth/device-request", undefined, { shopCode: code, storeId: sid, userId: cashier, pin: "4321", name: "x" })).status).toBe(429);
+    const renewed = (await call("POST", "/devices/shop-code", o, {})).body.shopCode;
+    expect(renewed).not.toBe(code);
+    expect((await call("POST", "/auth/shop-lookup", undefined, { shopCode: code })).status).toBe(404);
+  });
+});
+
 describe("ways of paying the shop adds itself", () => {
   it("keeps them in the settings, sells with one, and shows it by name", async () => {
     const reg = await call("POST", "/auth/register", undefined, { businessName: "محل الطرق", storeName: "الرئيسي", ownerName: "هدى", email: "paymethods@test.ly", password: "password123" });

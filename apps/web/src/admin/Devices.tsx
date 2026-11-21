@@ -3,10 +3,11 @@ import { session } from "../session";
 import { db } from "../localdb";
 import type { Screen } from "../App";
 import type { Call } from "./Admin";
+import { DeviceAccess } from "./DeviceAccess";
 
 interface D { id: string; name: string; prefix: string; kind: "pos" | "price_checker" | "kitchen"; active: boolean; backup: boolean; last_seen_at: string | null }
 
-export function Devices({ call, storeId, storeName, go, isOwner }: { call: Call; storeId: string; storeName: string; go: (s: Screen) => void; isOwner: boolean }) {
+export function Devices({ call, storeId, storeName, stores, go, isOwner }: { call: Call; storeId: string; storeName: string; stores: { id: string; name: string }[]; go: (s: Screen) => void; isOwner: boolean }) {
   const [devices, setDevices] = useState<D[]>([]);
   const [name, setName] = useState("كاشير 1");
   const [error, setError] = useState<string | null>(null);
@@ -42,6 +43,7 @@ export function Devices({ call, storeId, storeName, go, isOwner }: { call: Call;
         </div>
       )}
       {error && <div className="error">{error}</div>}
+      {isOwner && <DeviceAccess call={call} stores={stores} />}
       <div className="muted small">«نسخة يومية»: جهاز الكاشير في تطبيق ويندوز يحفظ نسخة من كل بيانات المحل في «المستندات\POS-Backups» مرة في اليوم، ويخلّي آخر 30 نسخة. فعّلها بس على جهاز في مكان آمن.</div>
       <div className="card">
         <table>
