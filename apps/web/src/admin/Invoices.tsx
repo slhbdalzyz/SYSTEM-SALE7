@@ -10,7 +10,7 @@ import { printReceipt } from "../hardware/printer";
 interface Row {
   id: string; number: string; kind: "sale" | "return"; created_at: string; total_minor: number; discount_minor: number; shift_id: string | null;
   store_name: string; device_name: string; cashier: string; customer_name: string | null; employee_name: string | null;
-  shift_opened_at: string | null; shift_closed_at: string | null; lines: number; payments: { method: string; amount: number }[]; returned_minor: number;
+  shift_opened_at: string | null; shift_closed_at: string | null; lines: number; payments: { method: string; label?: string | null; amount: number }[]; returned_minor: number;
 }
 interface List {
   rows: Row[];
@@ -22,7 +22,7 @@ interface Detail {
   store_name: string; receipt_footer: string | null; device_name: string; cashier: string; customer_name: string | null; customer_phone?: string | null; employee_name: string | null; approved_by_name: string | null;
   shift_opened_at: string | null; shift_closed_at: string | null; shift_cashier: string | null;
   lines: { id: string; product_id: string; unit_id: string; name: string; qty_milli: number; price_minor: number; discount_minor: number; tax_minor: number; total_minor: number; promo_minor: number; offer_name: string | null; tax_bp: number }[];
-  payments: { method: string; amount_minor: number }[];
+  payments: { method: string; label?: string | null; amount_minor: number }[];
   returns: { id: string; number: string; created_at: string; amount_minor: number; reason: string | null }[];
 }
 interface Shift {
@@ -75,7 +75,7 @@ export function receiptFromDetail(d: Detail, shop: { name: string; settings: Sho
       productId: l.product_id, unitId: l.unit_id, name: l.name, qtyMilli: l.qty_milli, priceMinor: l.price_minor,
       discountMinor: Math.max(0, l.discount_minor - l.promo_minor), promoMinor: l.promo_minor, offerName: l.offer_name, taxBp: l.tax_bp,
     })),
-    payments: d.payments.map((p) => ({ method: p.method as SaleInput["payments"][number]["method"], amountMinor: p.amount_minor })),
+    payments: d.payments.map((p) => ({ method: p.method as SaleInput["payments"][number]["method"], amountMinor: p.amount_minor, ...(p.label ? { label: p.label } : {}) })),
   };
   return { ...base, sale, changeMinor: d.change_minor, customerName: d.customer_name, employeeName: d.employee_name };
 }
@@ -123,7 +123,7 @@ export function Invoices({ call, storeId, stores }: { call: Call; storeId: strin
     if (!list) return;
     downloadCsv(`invoices-${from}-${to}`, ["الرقم", "النوع", "التاريخ", "الفرع", "الجهاز", "الكاشير", "الوردية", "العميل", "الأصناف", "الدفع", "الإجمالي"],
       list.rows.map((r) => [r.number, r.kind === "sale" ? "بيع" : "مرتجع", at(r.created_at), r.store_name, r.device_name, r.cashier, shiftLabel(null, r.shift_opened_at, r.shift_closed_at),
-        r.customer_name ?? "", r.lines, r.payments.map((p) => PAY[p.method] ?? p.method).join(" + "), (r.total_minor / 1000).toFixed(3)]));
+        r.customer_name ?? "", r.lines, r.payments.map((p) => p.label ?? PAY[p.method] ?? p.method).join(" + "), (r.total_minor / 1000).toFixed(3)]));
   }
 
   const sm = list?.summary;
@@ -216,7 +216,7 @@ export function Invoices({ call, storeId, stores }: { call: Call; storeId: strin
                       <td>{r.cashier}<small className="muted"> · {r.device_name}{scope === "all" ? ` · ${r.store_name}` : ""}</small></td>
                       <td><small>{r.shift_opened_at ? `${time(r.shift_opened_at)} ← ${r.shift_closed_at ? time(r.shift_closed_at) : "مفتوحة"}` : "—"}</small></td>
                       <td>{r.customer_name ?? r.employee_name ?? <span className="muted">—</span>}</td>
-                      <td><small>{r.payments.map((p) => PAY[p.method] ?? p.method).join(" + ")}</small></td>
+                      <td><small>{r.payments.map((p) => p.label ?? PAY[p.method] ?? p.method).join(" + ")}</small></td>
                       <td className="num"><b>{formatMoney(r.total_minor)}</b></td>
                     </tr>
                   ))}
@@ -325,7 +325,7 @@ function InvoiceDetail({ call, id, onClose, onOpen }: { call: Call; id: string; 
             {!ret && d.discount_minor > 0 && <div className="line"><span>الخصم</span><span className="num">{formatMoney(d.discount_minor)}</span></div>}
             {d.tax_minor !== 0 && <div className="line"><span>منها ضريبة</span><span className="num">{formatMoney(Math.abs(d.tax_minor))}</span></div>}
             <div className="line big"><span>{ret ? "المبلغ المرجع" : "الإجمالي"}</span><span className="num">{formatMoney(Math.abs(d.total_minor))}</span></div>
-            {d.payments.map((p, i) => <div key={i} className="line"><span>{PAY[p.method] ?? p.method}</span><span className="num">{formatMoney(Math.abs(p.amount_minor))}</span></div>)}
+            {d.payments.map((p, i) => <div key={i} className="line"><span>{p.label ?? PAY[p.method] ?? p.method}</span><span className="num">{formatMoney(Math.abs(p.amount_minor))}</span></div>)}
             {d.change_minor > 0 && <div className="line"><span>الباقي</span><span className="num">{formatMoney(d.change_minor)}</span></div>}
           </div>
           {d.returns.length > 0 && (

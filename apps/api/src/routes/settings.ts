@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { MODULES, readShopSettings, shopSettingsSchema, type ModuleKey } from "@pos/shared";
+import { MODULES, OTHER_METHODS, readShopSettings, shopSettingsSchema, type ModuleKey } from "@pos/shared";
 import { audit } from "../db";
 import { HttpError, authenticate, requirePerm } from "../auth";
 
@@ -56,11 +56,30 @@ export async function settingsRoutes(app: FastifyInstance) {
     return { modules: s.modules };
   });
 
+  /** The shop's own ways of paying, and which built-in ones its till leaves out. */
+  app.patch("/settings/pay-methods", { preHandler: requirePerm("settings") }, async (req) => {
+    const b = shopSettingsSchema.pick({ payMethods: true, hiddenMethods: true }).parse(req.body);
+    const ids = b.payMethods.map((m) => m.id);
+    if (new Set(ids).size !== ids.length) throw new HttpError(400, "في طريقتين بنفس الرمز");
+    const names = b.payMethods.map((m) => m.name);
+    if (new Set(names).size !== names.length) throw new HttpError(400, "في طريقتين بنفس الاسم");
+    b.hiddenMethods = b.hiddenMethods.filter((m) => (OTHER_METHODS as readonly string[]).includes(m));
+    const t = (await app.db.query(`SELECT settings FROM tenants WHERE id = $1`, [req.user.tid])).rows[0];
+    const s = readShopSettings(t?.settings);
+    s.payMethods = b.payMethods;
+    s.hiddenMethods = b.hiddenMethods;
+    await app.db.query(`UPDATE tenants SET settings = $2 WHERE id = $1`, [req.user.tid, JSON.stringify(s)]);
+    await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "settings.update", entity: "tenant", entityId: req.user.tid, data: b });
+    return { payMethods: s.payMethods, hiddenMethods: s.hiddenMethods };
+  });
+
   app.put("/settings", { preHandler: requirePerm("settings") }, async (req) => {
     const b = z.object({ name: z.string().trim().min(2).max(120), settings: shopSettingsSchema }).parse(req.body);
     // The shop's features have their own page; saving the settings page never resets them.
     const old = readShopSettings((await app.db.query(`SELECT settings FROM tenants WHERE id = $1`, [req.user.tid])).rows[0]?.settings);
     b.settings.modules = old.modules;
+    b.settings.payMethods = old.payMethods;
+    b.settings.hiddenMethods = old.hiddenMethods;
     await app.db.query(`UPDATE tenants SET name = $2, settings = $3 WHERE id = $1`, [req.user.tid, b.name, JSON.stringify(b.settings)]);
     await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "settings.update", entity: "tenant", entityId: req.user.tid, data: { name: b.name } });
     return { name: b.name, settings: b.settings };

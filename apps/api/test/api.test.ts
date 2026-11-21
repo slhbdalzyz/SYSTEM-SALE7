@@ -2567,3 +2567,40 @@ describe("more kinds of shop: customer prices, quotes, lists, orders, instalment
     expect((await call("POST", "/installments", t, { customerId: c.body.id, title: "x", totalMinor: 100, downMinor: 100, count: 1, firstDue: "2026-01-01" })).status).toBe(400);
   });
 });
+
+describe("ways of paying the shop adds itself", () => {
+  it("keeps them in the settings, sells with one, and shows it by name", async () => {
+    const reg = await call("POST", "/auth/register", undefined, { businessName: "محل الطرق", storeName: "الرئيسي", ownerName: "هدى", email: "paymethods@test.ly", password: "password123" });
+    const o = reg.body.token;
+    const sid = reg.body.storeId;
+    const bad = await call("PATCH", "/settings/pay-methods", o, { payMethods: [{ id: "aaaa1", name: "س" }, { id: "aaaa1", name: "ص" }], hiddenMethods: [] });
+    expect(bad.status).toBe(400);
+    const ok = await call("PATCH", "/settings/pay-methods", o, { payMethods: [{ id: "wal1", name: "محفظة الأمل", account: "transfer" }], hiddenMethods: ["mobicash", "cash"] });
+    expect(ok.status).toBe(200);
+    // Cash can never be put away.
+    expect(ok.body.hiddenMethods).toEqual(["mobicash"]);
+    // Saving the settings page keeps them.
+    const s = (await call("GET", "/settings", o)).body;
+    await call("PUT", "/settings", o, { name: s.name, settings: { ...s.settings, payMethods: [], hiddenMethods: [] } });
+    expect((await call("GET", "/settings", o)).body.settings.payMethods[0].name).toBe("محفظة الأمل");
+
+    const p = await call("POST", "/products", o, { name: "شاي", costMinor: 1000, units: [{ name: "علبة", priceMinor: 2000, isBase: true }] });
+    const d = await call("POST", "/devices", o, { storeId: sid, name: "كاشير" });
+    const u = await call("POST", "/users", o, { name: "رامي", role: "cashier", pin: "5555" });
+    const t = (await call("POST", "/auth/pin", undefined, { deviceToken: d.body.deviceToken, userId: u.body.id, pin: "5555" })).body.token;
+    const shift = randomUUID();
+    await call("POST", "/shifts/open", t, { id: shift, openingCashMinor: 0 });
+    const line = { productId: p.body.id, unitId: p.body.units[0].id, name: "شاي", qtyMilli: 2000, priceMinor: 2000, discountMinor: 0, taxBp: 0 };
+    const sale = { id: randomUUID(), number: "PM-1", shiftId: shift, createdAt: new Date().toISOString(), lines: [line], payments: [{ method: "cash", amountMinor: 1000 }, { method: "transfer", amountMinor: 3000, label: "محفظة الأمل" }, { method: "cash", amountMinor: 0, label: "لا يُحفظ" }], totalMinor: 4000 };
+    expect((await call("POST", "/sales/batch", t, { sales: [sale] })).status).toBe(200);
+    const rows = (await db.query(`SELECT method, label, amount_minor FROM payments WHERE sale_id = $1 ORDER BY amount_minor`, [sale.id])).rows;
+    expect(rows.map((r) => r.label)).toEqual([null, null, "محفظة الأمل"]);
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Tripoli" });
+    const inv = (await call("GET", `/invoices?from=${today}&to=${today}`, o)).body;
+    expect(inv.rows[0].payments.find((x: { label: string | null }) => x.label)?.label).toBe("محفظة الأمل");
+    expect(Number(inv.summary.byMethod["محفظة الأمل"])).toBe(3000);
+    // The treasury counts it as bank transfer money.
+    const money = (await call("GET", "/money/summary", o)).body;
+    expect(money.accounts.transfer.balanceMinor).toBe(3000);
+  });
+});

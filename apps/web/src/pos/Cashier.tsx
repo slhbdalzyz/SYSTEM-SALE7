@@ -1083,7 +1083,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
           <div className="row"><span className="spacer" /><button onClick={() => { setDialog(null); focusScan(); }}>إغلاق</button></div>
         </Modal>
       )}
-      {dialog?.kind === "pay" && <PayDialog totalMinor={exchange ? totals.total - exchange.creditMinor : totals.total} customer={customer} employees={employees} rules={rules} onPay={exchange ? (ps, emp) => pay(withCredit(ps, exchange.creditMinor), emp) : pay} onClose={() => { setDialog(null); focusScan(); }} />}
+      {dialog?.kind === "pay" && <PayDialog totalMinor={exchange ? totals.total - exchange.creditMinor : totals.total} customer={customer} employees={employees} rules={rules} shopMethods={shop?.settings.payMethods} hidden={shop?.settings.hiddenMethods} onPay={exchange ? (ps, emp) => pay(withCredit(ps, exchange.creditMinor), emp) : pay} onClose={() => { setDialog(null); focusScan(); }} />}
       {dialog?.kind === "weight" && (
         <AmountDialog
           title={dialog.product.name}
