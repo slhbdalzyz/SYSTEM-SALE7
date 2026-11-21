@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { ownBank } from "./money";
 import { audit, inTx } from "../db";
 import { daysUntil } from "@pos/shared";
 import { HttpError, authenticate, requirePerm } from "../auth";
@@ -31,6 +32,8 @@ export const purchaseSchema = z.object({
    */
   paidMinor: z.number().int().nonnegative().optional(),
   paymentMethod: z.enum(INVOICE_METHODS).default("cash"),
+  /** The bank account it was paid from (transfer, cheque or card); none = the default account. */
+  bankId: z.string().uuid().nullable().optional(),
   lines: z.array(z.object({
     unitId: z.string().uuid(),
     qtyMilli: z.number().int().positive(),
@@ -104,12 +107,12 @@ export async function purchasingRoutes(app: FastifyInstance) {
 
   app.post("/suppliers/:id/payments", managers, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
-    const b = z.object({ amountMinor: z.number().int().positive(), method: z.enum(METHODS), note: z.string().max(200).optional() }).parse(req.body);
+    const b = z.object({ amountMinor: z.number().int().positive(), method: z.enum(METHODS), note: z.string().max(200).optional(), bankId: z.string().uuid().nullable().optional() }).parse(req.body);
     const s = await app.db.query(`SELECT 1 FROM suppliers WHERE id = $1 AND tenant_id = $2`, [id, req.user.tid]);
     if (!s.rowCount) throw new HttpError(404, "المورد غير موجود");
     const r = await app.db.query(
-      `INSERT INTO supplier_payments (tenant_id, supplier_id, amount_minor, method, note, user_id) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-      [req.user.tid, id, b.amountMinor, b.method, b.note ?? null, req.user.sub],
+      `INSERT INTO supplier_payments (tenant_id, supplier_id, amount_minor, method, note, user_id, bank_account_id) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+      [req.user.tid, id, b.amountMinor, b.method, b.note ?? null, req.user.sub, b.method === "cash" ? null : await ownBank(app.db, req.user.tid, b.bankId)],
     );
     await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "supplier.payment", entity: "supplier", entityId: id, data: { amountMinor: b.amountMinor, method: b.method } });
     const bal = (await app.db.query(`SELECT balance_minor FROM supplier_balances WHERE supplier_id = $1`, [id])).rows[0].balance_minor;
@@ -153,10 +156,11 @@ export async function purchasingRoutes(app: FastifyInstance) {
       if (!b.supplierId && b.paymentMethod === "credit") throw new HttpError(400, "الآجل يحتاج مورد");
       const paid = !b.supplierId ? total : b.paymentMethod === "credit" ? 0 : (b.paidMinor ?? total);
       if (paid > total) throw new HttpError(400, "المدفوع أكبر من قيمة الفاتورة");
+      const bank = b.paymentMethod === "cash" || b.paymentMethod === "credit" ? null : await ownBank(tx, req.user.tid, b.bankId);
       const inv = (await tx.query(
-        `INSERT INTO purchase_invoices (tenant_id, store_id, supplier_id, supplier_ref, invoice_date, total_minor, note, user_id, payment_method)
-         VALUES ($1,$2,$3,$4,COALESCE($5::date, current_date),$6,$7,$8,$9) RETURNING id`,
-        [req.user.tid, b.storeId, b.supplierId ?? null, b.supplierRef ?? null, b.invoiceDate ?? null, total, b.note ?? null, req.user.sub, paid === 0 && b.supplierId ? "credit" : b.paymentMethod],
+        `INSERT INTO purchase_invoices (tenant_id, store_id, supplier_id, supplier_ref, invoice_date, total_minor, note, user_id, payment_method, bank_account_id)
+         VALUES ($1,$2,$3,$4,COALESCE($5::date, current_date),$6,$7,$8,$9,$10) RETURNING id`,
+        [req.user.tid, b.storeId, b.supplierId ?? null, b.supplierRef ?? null, b.invoiceDate ?? null, total, b.note ?? null, req.user.sub, paid === 0 && b.supplierId ? "credit" : b.paymentMethod, bank],
       )).rows[0].id as string;
       for (const l of units) {
         await tx.query(
@@ -178,8 +182,8 @@ export async function purchasingRoutes(app: FastifyInstance) {
       }
       if (b.supplierId && paid > 0) {
         await tx.query(
-          `INSERT INTO supplier_payments (tenant_id, supplier_id, invoice_id, amount_minor, method, user_id) VALUES ($1,$2,$3,$4,$5,$6)`,
-          [req.user.tid, b.supplierId, inv, paid, b.paymentMethod === "credit" ? "cash" : b.paymentMethod, req.user.sub],
+          `INSERT INTO supplier_payments (tenant_id, supplier_id, invoice_id, amount_minor, method, user_id, bank_account_id) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+          [req.user.tid, b.supplierId, inv, paid, b.paymentMethod === "credit" ? "cash" : b.paymentMethod, req.user.sub, bank],
         );
       }
       await audit(tx, { tenantId: req.user.tid, userId: req.user.sub, action: "stock.purchase", entity: "purchase", entityId: inv, data: { lines: b.lines.length, totalMinor: total, paidMinor: paid } });

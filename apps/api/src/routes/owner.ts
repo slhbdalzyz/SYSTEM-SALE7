@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { ownBank } from "./money";
 import { checkExpirySoon } from "../expiry";
 import { audit } from "../db";
 import { HttpError, authenticate, requirePerm, requireRole } from "../auth";
@@ -276,11 +277,13 @@ export async function ownerRoutes(app: FastifyInstance) {
       note: z.string().max(200).optional(),
       spentOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
       paymentMethod: z.enum(["cash", "card", "transfer"]).default("cash"),
+      bankId: z.string().uuid().nullable().optional(),
     }).parse(req.body);
     await ownStore(req.user.tid, b.storeId);
+    const bank = b.paymentMethod === "cash" ? null : await ownBank(app.db, req.user.tid, b.bankId);
     const r = await app.db.query(
-      `INSERT INTO expenses (tenant_id, store_id, category, amount_minor, note, spent_on, user_id, payment_method) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
-      [req.user.tid, b.storeId, b.category, b.amountMinor, b.note || null, b.spentOn, req.user.sub, b.paymentMethod],
+      `INSERT INTO expenses (tenant_id, store_id, category, amount_minor, note, spent_on, user_id, payment_method, bank_account_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+      [req.user.tid, b.storeId, b.category, b.amountMinor, b.note || null, b.spentOn, req.user.sub, b.paymentMethod, bank],
     );
     await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "expense.add", entity: "expense", entityId: r.rows[0].id, data: b });
     return { id: r.rows[0].id };

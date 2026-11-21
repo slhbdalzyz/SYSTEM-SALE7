@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { METHOD_LABELS, OTHER_METHODS, readShopSettings, type PayMethod } from "@pos/shared";
 import type { Call } from "./Admin";
+import { bankLabel, useBanks } from "./banks";
 
 const ACCOUNT: Record<PayMethod["account"], string> = { card: "بطاقة (نقاط البيع)", transfer: "تحويل مصرفي" };
 const newId = () => Math.random().toString(36).slice(2, 10).padEnd(6, "0");
@@ -15,6 +16,7 @@ export function PayMethodsCard({ call }: { call: Call }) {
   const [draft, setDraft] = useState<{ name: string; account: PayMethod["account"] }>({ name: "", account: "card" });
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const banks = useBanks(call);
 
   useEffect(() => {
     call<{ settings: unknown }>("/settings").then((r) => {
@@ -62,7 +64,7 @@ export function PayMethodsCard({ call }: { call: Call }) {
       </div>
       {list.length > 0 && (
         <table>
-          <thead><tr><th>طريقة المحل</th><th>تنحسب في الخزينة كـ</th><th>الحالة</th><th /></tr></thead>
+          <thead><tr><th>طريقة المحل</th><th>تنحسب في الخزينة كـ</th>{banks.length > 0 && <th>فلوسها تنزل في</th>}<th>الحالة</th><th /></tr></thead>
           <tbody>
             {list.map((m) => (
               <tr key={m.id}>
@@ -72,6 +74,14 @@ export function PayMethodsCard({ call }: { call: Call }) {
                     {(Object.keys(ACCOUNT) as PayMethod["account"][]).map((a) => <option key={a} value={a}>{ACCOUNT[a]}</option>)}
                   </select>
                 </td>
+                {banks.length > 0 && (
+                  <td>
+                    <select value={m.bankId ?? ""} onChange={(e) => change(m.id, { bankId: e.target.value || null })}>
+                      <option value="">الحساب الرئيسي</option>
+                      {banks.map((b) => <option key={b.id} value={b.id}>🏦 {bankLabel(b)}</option>)}
+                    </select>
+                  </td>
+                )}
                 <td>{m.active ? <span className="badge ok">في الكاشير</span> : <span className="badge off">موقوفة</span>}</td>
                 <td className="row">
                   <button onClick={() => change(m.id, { active: !m.active })}>{m.active ? "إيقاف" : "تشغيل"}</button>

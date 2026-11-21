@@ -2681,3 +2681,80 @@ describe("ways of paying the shop adds itself", () => {
     expect(money.accounts.transfer.balanceMinor).toBe(3000);
   });
 });
+
+describe("several bank accounts, card settlement and checking against the statement", () => {
+  it("keeps each bank apart, settles card money, and records a statement check", async () => {
+    const reg = await call("POST", "/auth/register", undefined, { businessName: "محل المصارف", storeName: "الرئيسي", ownerName: "نوري", email: "banks@test.ly", password: "password123" });
+    const o = reg.body.token;
+    const sid = reg.body.storeId;
+    // Something paid to the bank before any account exists goes to the first (default) account.
+    const p = await call("POST", "/products", o, { name: "سكر", costMinor: 1000, units: [{ name: "كيس", priceMinor: 10000, isBase: true }] });
+    const d = await call("POST", "/devices", o, { storeId: sid, name: "كاشير" });
+    const u = await call("POST", "/users", o, { name: "سعاد", role: "cashier", pin: "7777" });
+    const t = (await call("POST", "/auth/pin", undefined, { deviceToken: d.body.deviceToken, userId: u.body.id, pin: "7777" })).body.token;
+    const shift = randomUUID();
+    await call("POST", "/shifts/open", t, { id: shift, openingCashMinor: 0 });
+    const line = { productId: p.body.id, unitId: p.body.units[0].id, name: "سكر", qtyMilli: 1000, priceMinor: 10000, discountMinor: 0, taxBp: 0 };
+    const sale = (n: string, payments: object[]) => ({ id: randomUUID(), number: n, shiftId: shift, createdAt: new Date().toISOString(), lines: [line], payments, totalMinor: 10000 });
+    await call("POST", "/sales/batch", t, { sales: [sale("B-1", [{ method: "transfer", amountMinor: 10000 }])] });
+
+    const j = (await call("POST", "/money/banks", o, { bankName: "مصرف الجمهورية", accountNumber: "111", openingMinor: 500000 })).body.id;
+    const w = (await call("POST", "/money/banks", o, { bankName: "مصرف الوحدة", iban: "LY22" })).body.id;
+    const banks = (await call("GET", "/money/banks", t)).body;
+    expect(banks.map((b: { bankName: string; isDefault: boolean }) => [b.bankName, b.isDefault])).toEqual([["مصرف الجمهورية", true], ["مصرف الوحدة", false]]);
+    expect((await call("GET", "/me", t)).body.banks).toHaveLength(2);
+
+    // The till's card machine pays into Wahda; a transfer to Wahda chosen at the till.
+    expect((await call("PATCH", `/devices/${d.body.id}/card-bank`, o, { bankId: w })).status).toBe(200);
+    await call("POST", "/sales/batch", t, { sales: [sale("B-2", [{ method: "card", amountMinor: 10000 }]), sale("B-3", [{ method: "transfer", amountMinor: 10000, bankAccountId: w }])] });
+
+    let s = (await call("GET", "/money/summary", o)).body;
+    const by = (id: string) => s.banks.find((b: { id: string }) => b.id === id);
+    expect(by(j).balanceMinor).toBe(510000);
+    expect(by(w).balanceMinor).toBe(10000);
+    expect(by(w).pendingCardMinor).toBe(10000);
+    expect(s.accounts.transfer.balanceMinor).toBe(520000);
+
+    // Bank to bank, and a supplier paid from Wahda.
+    await call("POST", "/money/transfers", o, { from: "transfer", fromBankId: j, to: "transfer", toBankId: w, amountMinor: 100000 });
+    expect((await call("POST", "/money/transfers", o, { from: "transfer", fromBankId: j, to: "transfer", toBankId: j, amountMinor: 1 })).status).toBe(400);
+    const sup = (await call("POST", "/suppliers", o, { name: "مورد" })).body.id;
+    await call("POST", `/suppliers/${sup}/payments`, o, { amountMinor: 30000, method: "transfer", bankId: w });
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Tripoli" });
+    await call("POST", "/expenses", o, { storeId: sid, category: "إيجار", amountMinor: 5000, spentOn: today, paymentMethod: "transfer", bankId: j });
+
+    // The bank paid in the card money, less 150 dirham commission.
+    const st = await call("POST", "/money/settlements", o, { bankId: w, grossMinor: 10000, feeMinor: 150 });
+    expect(st.status).toBe(200);
+    s = (await call("GET", "/money/summary", o)).body;
+    expect(by(j).balanceMinor).toBe(510000 - 100000 - 5000);
+    expect(by(w).balanceMinor).toBe(10000 + 100000 - 30000 + 10000 - 150);
+    expect(by(w).pendingCardMinor).toBe(0);
+    const exp = (await call("GET", `/expenses?month=${today.slice(0, 7)}`, o)).body;
+    expect(exp.byCategory["عمولة البطاقات"]).toBe(150);
+
+    // Wahda's statement: tick everything but the supplier payment, and the difference is what is not ticked.
+    const led = (await call("GET", `/money/ledger?account=transfer&bankId=${w}&from=${today}&to=${today}`, o)).body;
+    expect(led.closingMinor).toBe(89850);
+    const keys = led.rows.filter((r: { source: string }) => r.source !== "supplier").map((r: { row_key: string }) => r.row_key);
+    expect((await call("POST", "/money/cleared", o, { rowKeys: keys, cleared: true })).status).toBe(200);
+    const rec = await call("POST", "/money/reconciliations", o, { bankId: w, statementDate: today, statementMinor: 119850 });
+    expect(rec.body.bookMinor).toBe(89850);
+    expect(rec.body.clearedMinor).toBe(119850);
+    expect(rec.body.differenceMinor).toBe(0);
+    const hist = (await call("GET", `/money/reconciliations?bankId=${w}`, o)).body;
+    expect(hist.openCount).toBe(1);
+    expect(hist.history).toHaveLength(1);
+    expect((await call("GET", "/money/summary", o)).body.banks.find((b: { id: string }) => b.id === w).lastReconciled.differenceMinor).toBe(0);
+
+    // Undoing the settlement takes its commission away too.
+    const mv = (await call("GET", `/money/ledger?account=card&bankId=${w}&from=${today}&to=${today}`, o)).body.rows.find((r: { source: string }) => r.source === "settlement");
+    await call("POST", `/money/movements/${mv.movement_id}/delete`, o);
+    expect((await call("GET", `/expenses?month=${today.slice(0, 7)}`, o)).body.byCategory["عمولة البطاقات"]).toBeUndefined();
+
+    // The default account can't be switched off until another takes its place.
+    expect((await call("PATCH", `/money/banks/${j}`, o, { active: false })).status).toBe(400);
+    await call("PATCH", `/money/banks/${w}`, o, { isDefault: true });
+    expect((await call("PATCH", `/money/banks/${j}`, o, { active: false })).status).toBe(200);
+  });
+});
