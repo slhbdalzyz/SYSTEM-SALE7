@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { numberSeq, plainNumber, readNumber } from "../invoice-number";
 import { z } from "zod";
 import { refundFor, returnInputSchema } from "@pos/shared";
 import { audit, inTx } from "../db";
@@ -8,12 +9,15 @@ import { payrollReturn } from "./payroll";
 import { addPoints } from "../loyalty";
 
 export async function returnRoutes(app: FastifyInstance) {
-  async function loadSale(tenantId: string, where: { id?: string; number?: string }) {
+  async function loadSale(tenantId: string, where: { id?: string; number?: string; seq?: string; deviceId?: string | null }) {
     const s = (await app.db.query(
       `SELECT s.id, s.number, s.kind, s.created_at, s.total_minor, s.discount_minor, s.customer_id, s.employee_id, c.name AS customer_name, u.name AS cashier
        FROM sales s JOIN users u ON u.id = s.user_id LEFT JOIN customers c ON c.id = s.customer_id
-       WHERE s.tenant_id = $1 AND ($2::uuid IS NULL OR s.id = $2) AND ($3::text IS NULL OR s.number = $3)`,
-      [tenantId, where.id ?? null, where.number ?? null],
+       WHERE s.tenant_id = $1 AND ($2::uuid IS NULL OR s.id = $2)
+         AND ($3::text IS NULL OR ${plainNumber("s.number")} = $3)
+         AND ($4::text IS NULL OR (s.kind = 'sale' AND ${numberSeq("s.number")} = $4))
+       ORDER BY (s.device_id = $5::uuid) DESC NULLS LAST, s.created_at DESC LIMIT 1`,
+      [tenantId, where.id ?? null, where.number ?? null, where.seq ?? null, where.deviceId ?? null],
     )).rows[0];
     if (!s) return null;
     const lines = (await app.db.query(
@@ -31,7 +35,12 @@ export async function returnRoutes(app: FastifyInstance) {
   /** Finds a sale by its invoice number, with how much of each line can still come back. */
   app.get("/sales/lookup", { preHandler: authenticate }, async (req) => {
     const { number } = z.object({ number: z.string().min(1).max(40) }).parse(req.query);
-    const s = await loadSale(req.user.tid, { number: number.trim().toUpperCase() });
+    // The full number, or just its count ("123"): this till's invoice first, then the latest one.
+    const n = readNumber(number);
+    const s = await loadSale(req.user.tid, {
+      ...(n === null ? { number: number.trim().toUpperCase() } : "full" in n ? { number: n.full } : { seq: n.seq }),
+      deviceId: (req.user as { did?: string }).did ?? null,
+    });
     if (!s) throw new HttpError(404, "الفاتورة غير موجودة");
     if (s.kind !== "sale") throw new HttpError(400, "هذي فاتورة مرتجع");
     return s;

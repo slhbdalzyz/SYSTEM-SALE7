@@ -213,6 +213,8 @@ describe("customers, credit and returns", () => {
 
   it("finds a sale by number with what can still be returned", async () => {
     const r = await call("GET", `/sales/lookup?number=${creditSale.number}`, cashierToken);
+    const short = creditSale.number.replace(/-0*(\d+)$/, "-$1");
+    expect((await call("GET", `/sales/lookup?number=${encodeURIComponent(short.toLowerCase())}`, cashierToken)).body.id).toBe(r.body.id);
     expect(r.body.lines[0].qty_milli).toBe(4000);
     expect(r.body.lines[0].returned_milli).toBe(0);
     expect(r.body.invoice_discount_minor).toBe(400);
@@ -1338,6 +1340,18 @@ describe("the shop's settings and the invoices page", () => {
     const byShift = (await call("GET", `/invoices?from=${today}&to=${today}&shiftId=${sale.shift_id}`, owner)).body.rows;
     expect(byShift.every((r: { shift_id: string }) => r.shift_id === sale.shift_id)).toBe(true);
     expect((await call("GET", `/invoices?from=${today}&to=${today}&q=${encodeURIComponent(sale.number)}`, owner)).body.rows[0].id).toBe(sale.id);
+    // The number however it is typed: just the count, without the zeros, in Arabic digits.
+    const ids = async (q: string, more = "") => (await call("GET", `/invoices?from=${today}&to=${today}&q=${encodeURIComponent(q)}${more}`, owner)).body.rows.map((r: { id: string }) => r.id);
+    const [, prefix, count] = /^(.*)-0*(\d+)$/.exec(sale.number)!;
+    expect(await ids(count)).toContain(sale.id);
+    expect(await ids(`${prefix.toLowerCase()}-${count}`)).toEqual([sale.id]);
+    expect(await ids(count.replace(/\d/g, (d) => "٠١٢٣٤٥٦٧٨٩"[Number(d)]))).toContain(sale.id);
+    expect(await ids(`${count}9999`)).not.toContain(sale.id);
+    // By an item on it, and by its amount.
+    expect(await ids(one.lines[0].name.slice(0, 3))).toContain(sale.id);
+    const amt = Math.abs(sale.total_minor);
+    expect((await call("GET", `/invoices?from=${today}&to=${today}&minMinor=${amt}&maxMinor=${amt}`, owner)).body.rows.every((r: { total_minor: number }) => Math.abs(r.total_minor) === amt)).toBe(true);
+    expect((await call("GET", `/invoices?from=${today}&to=${today}&minMinor=${amt}&maxMinor=${amt}`, owner)).body.rows.map((r: { id: string }) => r.id)).toContain(sale.id);
     expect((await call("GET", `/invoices?from=${today}&to=${today}&kind=return`, owner)).body.rows.every((r: { kind: string }) => r.kind === "return")).toBe(true);
     const shifts = (await call("GET", `/shifts?from=${today}&to=${today}`, owner)).body;
     const s = shifts.find((x: { id: string }) => x.id === sale.shift_id);

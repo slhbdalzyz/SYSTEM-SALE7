@@ -89,7 +89,7 @@ export function Invoices({ call, storeId, stores }: { call: Call; storeId: strin
   const [preset, setPreset] = useState("اليوم");
   const [[from, to], setRange] = useState(PRESETS["اليوم"]);
   const [scope, setScope] = useState<"store" | "all">("store");
-  const [f, setF] = useState({ shiftId: "", userId: "", kind: "", method: "", q: "" });
+  const [f, setF] = useState({ shiftId: "", userId: "", kind: "", method: "", q: "", min: "", max: "" });
   const [list, setList] = useState<List | null>(null);
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [open, setOpen] = useState<string | null>(null);
@@ -100,13 +100,16 @@ export function Invoices({ call, storeId, stores }: { call: Call; storeId: strin
   const qs = useMemo(() => {
     const p = new URLSearchParams({ from, to, limit: String(limit) });
     if (sid) p.set("storeId", sid);
-    for (const [k, v] of Object.entries(f)) if (v.trim()) p.set(k, v.trim());
+    for (const [k, v] of Object.entries(f)) if (v.trim() && k !== "min" && k !== "max") p.set(k, v.trim());
+    const money = (v: string) => Math.round(Number(v.replace(",", ".")) * 1000);
+    if (Number(f.min) > 0) p.set("minMinor", String(money(f.min)));
+    if (Number(f.max) > 0) p.set("maxMinor", String(money(f.max)));
     return p.toString();
   }, [from, to, sid, f, limit]);
 
   useEffect(() => {
     setError(null);
-    const t = setTimeout(() => void call<List>(`/invoices?${qs}`).then(setList).catch((e) => setError((e as Error).message)), f.q ? 300 : 0);
+    const t = setTimeout(() => void call<List>(`/invoices?${qs}`).then(setList).catch((e) => setError((e as Error).message)), f.q || f.min || f.max ? 300 : 0);
     return () => clearTimeout(t);
   }, [call, qs]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -153,7 +156,11 @@ export function Invoices({ call, storeId, stores }: { call: Call; storeId: strin
         </div>
         {view === "invoices" && (
           <div className="filters">
-            <input value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} placeholder="🔎 رقم الفاتورة أو اسم العميل" aria-label="بحث" />
+            <input value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} placeholder="🔎 رقم الفاتورة (123 يكفي)، العميل، تلفونه، صنف، أو الكاشير" aria-label="بحث" style={{ minWidth: 260 }} />
+            <span className="row" style={{ gap: 4 }}>
+              <input className="num" inputMode="decimal" value={f.min} onChange={(e) => setF({ ...f, min: e.target.value.replace(/[^\d.,]/g, "") })} placeholder="المبلغ من" aria-label="المبلغ من" style={{ width: 95 }} />
+              <input className="num" inputMode="decimal" value={f.max} onChange={(e) => setF({ ...f, max: e.target.value.replace(/[^\d.,]/g, "") })} placeholder="إلى" aria-label="المبلغ إلى" style={{ width: 85 }} />
+            </span>
             <select value={f.shiftId} onChange={(e) => setF({ ...f, shiftId: e.target.value })} aria-label="الوردية">
               <option value="">كل الورديات</option>
               {shifts.map((s) => <option key={s.id} value={s.id}>{shiftLabel(s.cashier, s.opened_at, s.closed_at)}</option>)}
@@ -201,7 +208,7 @@ export function Invoices({ call, storeId, stores }: { call: Call; storeId: strin
             <button onClick={csv} disabled={!list.rows.length}>⬇️ Excel (CSV)</button>
           </div>
           {list.rows.length === 0 ? (
-            <div className="muted">ما فيش فواتير في هذي الفترة{f.q || f.shiftId || f.userId || f.method || f.kind ? " بهذي الفلاتر" : ""}.</div>
+            <div className="muted">ما فيش فواتير في هذي الفترة{f.q || f.shiftId || f.userId || f.method || f.kind || f.min || f.max ? " بهذي الفلاتر" : ""}.</div>
           ) : (
             <div className="table-wrap">
               <table className="invoices">
