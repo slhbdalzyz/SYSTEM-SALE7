@@ -74,7 +74,7 @@ export const paperDots = (s: Pick<PrinterSettings, "paper" | "dots">) => (s.dots
 export const isDesktopApp = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 export const serialSupported = () => typeof navigator !== "undefined" && "serial" in navigator;
 
-async function invoke<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
+export async function invoke<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<T>(cmd, args);
 }
