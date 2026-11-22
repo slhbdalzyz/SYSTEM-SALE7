@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { registerSW } from "virtual:pwa-register";
 import { App } from "./App";
+import { matchLocalShop } from "./localGuard";
 import "./styles.css";
 
 // A device opening the app from the shop's main computer (http://192.168.1.10:7400) is not a
@@ -20,8 +21,16 @@ if (typeof crypto !== "undefined" && !crypto.randomUUID) {
 }
 
 if (import.meta.env.VITE_DEMO !== "1" && import.meta.env.VITE_LOCAL !== "1") registerSW({ immediate: true });
-createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-);
+const render = () =>
+  createRoot(document.getElementById("root")!).render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  );
+// The local edition first checks that what this browser remembers belongs to the shop on this computer.
+if (import.meta.env.VITE_LOCAL === "1") {
+  // The first run builds the database, which takes a few seconds: say so meanwhile.
+  document.getElementById("root")!.innerHTML = '<div class="center"><div class="card">جاري تشغيل النظام على الجهاز…</div></div>';
+  void matchLocalShop().finally(render);
+}
+else render();
