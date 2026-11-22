@@ -24,8 +24,9 @@ export async function localRoutes(app: FastifyInstance, opts: LocalOptions) {
 
   /** What the first screen needs: is there a shop on this computer yet, or is this the first run. */
   app.get("/local/status", async () => {
-    const t = (await app.db.query(`SELECT name FROM tenants ORDER BY created_at LIMIT 1`)).rows[0] as { name: string } | undefined;
-    return { edition: "local", shop: t ? { name: t.name } : null };
+    const t = (await app.db.query(`SELECT id, name FROM tenants ORDER BY created_at LIMIT 1`)).rows[0] as { id: string; name: string } | undefined;
+    // The id lets the app tell this shop's till data from another's (an old install, the demo).
+    return { edition: "local", shop: t ? { id: t.id, name: t.name } : null };
   });
 
   /** The Windows app asks for a clean stop when it closes, so the database is never cut off mid-write. */

@@ -42,7 +42,7 @@ describe("local edition", () => {
     expect(r.status).toBe(200);
     owner = r.body.token;
     storeId = r.body.storeId;
-    expect((await call("GET", "/local/status")).body.shop).toEqual({ name: "بقالة الحي" });
+    expect((await call("GET", "/local/status")).body.shop).toMatchObject({ id: expect.any(String), name: "بقالة الحي" });
   });
 
   it("opens everything for a 14-day trial, with no monthly plan", async () => {
