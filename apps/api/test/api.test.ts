@@ -2,10 +2,18 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { computeTotals } from "@pos/shared";
 import { buildApp } from "../src/app";
-import { createPool } from "../src/db";
+import { readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { PGlite } from "@electric-sql/pglite";
+import { createPool, type Db } from "../src/db";
 import { migrate } from "../src/migrate";
+import { PgliteDb, pgliteParsers } from "../src/pglite-db";
 
-const db = createPool(process.env.TEST_DATABASE_URL ?? "postgres://pos:pos@localhost:5432/pos_test");
+// TEST_PGLITE=1 runs the whole suite on PGlite, the desktop's local database, which has one
+// connection: a query on app.db from inside a transaction hangs there, and only this run shows it.
+const onPglite = process.env.TEST_PGLITE === "1";
+let pg: PGlite | undefined;
+let db: Db = onPglite ? (undefined as unknown as Db) : createPool(process.env.TEST_DATABASE_URL ?? "postgres://pos:pos@localhost:5432/pos_test");
 let app: Awaited<ReturnType<typeof buildApp>>;
 
 // The whole suite runs in well under a minute, past the API's 600 requests a minute per address:
@@ -26,13 +34,25 @@ let pepsi: { productId: string; piece: string; carton: string };
 let tomato: { productId: string; kg: string };
 
 beforeAll(async () => {
-  await db.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
-  await migrate(db);
+  if (onPglite) {
+    pg = await PGlite.create({ parsers: pgliteParsers });
+    await pg.exec(`CREATE TABLE schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`);
+    const dir = path.join(__dirname, "..", "migrations");
+    for (const f of readdirSync(dir).filter((f) => f.endsWith(".sql")).sort()) {
+      await pg.exec(readFileSync(path.join(dir, f), "utf8"));
+      await pg.query(`INSERT INTO schema_migrations (name) VALUES ($1)`, [f]);
+    }
+    db = new PgliteDb(pg) as unknown as Db;
+  } else {
+    await db.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    await migrate(db);
+  }
   app = await buildApp({ db, jwtSecret: "test-secret-test-secret-test-secret-123" });
-});
+}, 120_000);
 afterAll(async () => {
   await app.close();
-  await db.end();
+  if (pg) await pg.close();
+  else await db.end();
 });
 
 describe("grocery POS flow", () => {
