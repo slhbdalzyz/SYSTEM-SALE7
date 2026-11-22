@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { FEATURES, formatMoney, ROLE_NAMES, HEALTH_LABELS, platformCan, PLATFORM_ROLE_LABELS, AI_MODELS, type AiModel, type Feature, type Health, type PlatformPerm, type PlatformRole } from "@pos/shared";
+import { FEATURES, formatMoney, ROLE_NAMES, HEALTH_LABELS, platformCan, PLATFORM_ROLE_LABELS, AI_MODELS, AI_PROVIDERS, AI_DEFAULT_MODEL, AI_KEY_PREFIX, type AiProvider, type Feature, type Health, type PlatformPerm, type PlatformRole } from "@pos/shared";
 import { downloadCsv } from "../admin/charts";
 import { AgentPage, AgentsTab, AnnouncementsTab, AuditTab, CouponsTab, HealthBadge, MyAccount, openInvoice, RemindersTab, RevenueTab, TeamTab, TicketsTab } from "./Pro";
 import { api, ApiError } from "../api";
@@ -548,8 +548,8 @@ interface PlatformSettings {
   reminder_message?: string;
   company?: { name: string; phone: string; address: string; taxNo: string };
   sms?: { enabled: boolean; url: string; token: string };
-  ai?: { enabled: boolean; apiKey: string; model: AiModel; dailyLimit: number };
-  ai_usage?: { requests: number; shops: number; inputTokens: number; outputTokens: number; envKey: boolean };
+  ai?: { enabled: boolean; provider?: AiProvider; apiKey: string; model: string; dailyLimit: number };
+  ai_usage?: { requests: number; shops: number; inputTokens: number; outputTokens: number; envKey: Record<AiProvider, boolean> };
 }
 
 function Settings({ call }: { call: Call }) {
@@ -559,12 +559,15 @@ function Settings({ call }: { call: Call }) {
   if (!s) return <div className="muted">جاري التحميل…</div>;
   const company = s.company ?? { name: "", phone: "", address: "", taxNo: "" };
   const sms = s.sms ?? { enabled: false, url: "", token: "" };
-  const ai = s.ai ?? { enabled: true, apiKey: "", model: "claude-opus-5-5" as AiModel, dailyLimit: 40 };
+  const saved = s.ai ?? { enabled: true, provider: "gemini" as AiProvider, apiKey: "", model: AI_DEFAULT_MODEL.gemini, dailyLimit: 40 };
+  const ai = { ...saved, provider: saved.provider ?? (saved.apiKey ? "claude" : "gemini") as AiProvider };
   const usage = s.ai_usage;
   const save = () => {
     // Browsers like to fill a saved e-mail and password into these boxes; say which box is wrong.
     if (sms.url && !/^https?:\/\/\S+$/.test(sms.url.trim())) return setMsg({ text: "«رابط البوابة» في بطاقة الرسائل النصية لازم يكون رابط يبدا بـ https:// أو يكون فاضي. امسحه لو ما عندكش بوابة.", bad: true });
-    if (ai.apiKey && ai.apiKey !== "••••" && !ai.apiKey.trim().startsWith("sk-ant-")) return setMsg({ text: "مفتاح المساعد الذكي لازم يبدا بـ sk-ant-. انسخه كامل من console.anthropic.com.", bad: true });
+    if (ai.apiKey && ai.apiKey !== "••••" && (!ai.apiKey.trim().startsWith(AI_KEY_PREFIX[ai.provider]) || ai.apiKey.trim().length < 30)) {
+      return setMsg({ text: `مفتاح ${AI_PROVIDERS[ai.provider]} لازم يبدا بـ ${AI_KEY_PREFIX[ai.provider]} ويكون طويل. انسخه كامل من ${ai.provider === "gemini" ? "aistudio.google.com/apikey" : "console.anthropic.com"}.`, bad: true });
+    }
     return call("/platform/settings", { method: "PUT", body: { ...s, ai_usage: undefined, company, sms: { ...sms, url: sms.url.trim() }, ai: { ...ai, apiKey: ai.apiKey.trim() } } })
       .then(() => setMsg({ text: "تم الحفظ" })).catch((e) => setMsg({ text: (e as Error).message, bad: true }));
   };
@@ -606,26 +609,38 @@ function Settings({ call }: { call: Call }) {
         </div>
       </div>
       <div className="card stack">
-        <h3 style={{ margin: 0 }}>🤖 المساعد الذكي (Claude)</h3>
+        <h3 style={{ margin: 0 }}>🤖 المساعد الذكي</h3>
         <p className="muted" style={{ margin: 0 }}>
           يساعد المحلات في «من الدفتر للنظام»: يجاوب على أسئلتهم، يرتب القوائم الملصوقة، يقرا صور الدفتر، ويراجع قبل الإدخال.
-          يحتاج مفتاح API من <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer">console.anthropic.com</a> (حساب Claude العادي ما يمشيش هنا، والفاتورة تكون على حساب الـAPI).
+          يحتاج مفتاح API من الشركة اللي تختارها (الاشتراك الشخصي في ChatGPT أو Gemini أو Claude ما يمشيش هنا).
           المفتاح يتحفظ في السيرفر بس وما يوصلش للمحلات. تقدر تقفله أو تفتحه لكل باقة أو محل من «الباقات» و«المحلات» (ميزة «المساعد الذكي»).
         </p>
         <label className="row" style={{ gap: 6 }}><input type="checkbox" style={{ width: "auto" }} checked={ai.enabled} onChange={(e) => setS({ ...s, ai: { ...ai, enabled: e.target.checked } })} />تشغيل المساعد</label>
         <div className="row">
+          <label style={{ flex: 1 }}>الشركة
+            <select value={ai.provider} onChange={(e) => { const p = e.target.value as AiProvider; setS({ ...s, ai: { ...ai, provider: p, model: AI_DEFAULT_MODEL[p], apiKey: "" } }); }}>
+              {(Object.keys(AI_PROVIDERS) as AiProvider[]).map((p) => <option key={p} value={p}>{AI_PROVIDERS[p]}</option>)}
+            </select>
+          </label>
           <label style={{ flex: 2 }}>مفتاح API
-            <input type="password" name="claude-api-key" value={ai.apiKey} onChange={(e) => setS({ ...s, ai: { ...ai, apiKey: e.target.value } })} autoComplete="new-password" placeholder={usage?.envKey ? "مستعمل المفتاح اللي في إعدادات السيرفر" : "sk-ant-…"} style={{ direction: "ltr" }} />
+            <input type="password" name="ai-api-key" value={ai.apiKey} onChange={(e) => setS({ ...s, ai: { ...ai, apiKey: e.target.value } })} autoComplete="new-password"
+              placeholder={usage?.envKey?.[ai.provider] ? "مستعمل المفتاح اللي في إعدادات السيرفر" : `${AI_KEY_PREFIX[ai.provider]}…`} style={{ direction: "ltr" }} />
           </label>
           <label style={{ flex: 1 }}>النموذج
-            <select value={ai.model} onChange={(e) => setS({ ...s, ai: { ...ai, model: e.target.value as AiModel } })}>
-              {(Object.keys(AI_MODELS) as AiModel[]).map((m) => <option key={m} value={m}>{AI_MODELS[m]}</option>)}
+            <select value={ai.model} onChange={(e) => setS({ ...s, ai: { ...ai, model: e.target.value } })}>
+              {!(ai.model in AI_MODELS[ai.provider]) && <option value={ai.model}>{ai.model}</option>}
+              {Object.entries(AI_MODELS[ai.provider]).map(([m, label]) => <option key={m} value={m}>{label}</option>)}
             </select>
           </label>
           <label style={{ flex: 1 }}>الحد اليومي لكل محل
             <input className="num" type="number" min={1} max={1000} value={ai.dailyLimit} onChange={(e) => setS({ ...s, ai: { ...ai, dailyLimit: Number(e.target.value) } })} />
           </label>
         </div>
+        <small className="muted">
+          {ai.provider === "gemini"
+            ? <>المفتاح من <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">aistudio.google.com/apikey</a> (يبدا بـ AIza). فيه استعمال مجاني محدود، لكن في الخطة المجانية Google ممكن تستعمل البيانات لتحسين نماذجها؛ للمحلات الأحسن تفعّل الدفع (Billing) في حسابك.</>
+            : <>المفتاح من <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer">console.anthropic.com</a> (يبدا بـ sk-ant-api)، والفاتورة على حساب الـAPI.</>}
+        </small>
         {usage && (
           <div className="muted">
             آخر 30 يوم: {usage.requests} طلب من {usage.shops} محل · {usage.inputTokens.toLocaleString("en")} توكن داخل · {usage.outputTokens.toLocaleString("en")} توكن طالع

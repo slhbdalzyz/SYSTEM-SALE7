@@ -2874,4 +2874,43 @@ describe("the AI helper on «from paper»", () => {
     await call("PUT", "/platform/settings", staff, { ai: { enabled: false, apiKey: "••••", model: "claude-haiku-5-5", dailyLimit: 5 } });
     expect((await call("GET", "/ai/status", basic)).body).toMatchObject({ ready: false, reason: null });
   });
+
+  it("asks Gemini when the platform picks Google, with the same answers", async () => {
+    const { setGeminiFetch } = await import("../src/ai");
+    const sent: { url: string; headers: Record<string, string>; body: any }[] = [];
+    let reply: unknown = {};
+    setGeminiFetch(async (url, init) => {
+      sent.push({ url, headers: init.headers, body: JSON.parse(init.body) });
+      return { status: 200, json: async () => reply };
+    });
+    const staff = (await call("POST", "/platform/login", undefined, { email: "admin@sale7.ly", password: "platform-pass" })).body.token;
+    const shop = (await call("POST", "/auth/register", undefined, { businessName: "بقالة جوجل", storeName: "الرئيسي", ownerName: "هند", email: "ai-gemini@test.ly", password: "password123", planCode: "pro" })).body.token;
+
+    // Switching company with the key left as •••• drops the old company's key.
+    await call("PUT", "/platform/settings", staff, { ai: { enabled: true, provider: "gemini", apiKey: "••••", model: "gemini-flash-latest", dailyLimit: 5 } });
+    expect((await call("GET", "/ai/status", shop)).body).toMatchObject({ ready: false, reason: null });
+    await call("PUT", "/platform/settings", staff, { ai: { enabled: true, provider: "gemini", apiKey: "AIza-test-key", model: "gemini-flash-latest", dailyLimit: 5 } });
+    expect((await call("GET", "/platform/settings", staff)).body.ai).toMatchObject({ provider: "gemini", apiKey: "••••" });
+
+    reply = { candidates: [{ finishReason: "STOP", content: { parts: [{ text: "أهلاً" }] } }], usageMetadata: { promptTokenCount: 50, candidatesTokenCount: 7 } };
+    const c = await call("POST", "/ai/chat", shop, { messages: [{ role: "user", text: "مرحبا" }, { role: "assistant", text: "أهلين" }, { role: "user", text: "كيف ندخل الأصناف؟" }] });
+    expect(c.status).toBe(200);
+    expect(c.body.reply).toBe("أهلاً");
+    expect(sent[0].url).toContain("/models/gemini-flash-latest:generateContent");
+    expect(sent[0].headers["x-goog-api-key"]).toBe("AIza-test-key");
+    expect(sent[0].body.systemInstruction.parts[0].text).toContain("Sale7");
+    expect(sent[0].body.contents.map((x: { role: string }) => x.role)).toEqual(["user", "model", "user"]);
+
+    reply = { candidates: [{ finishReason: "STOP", content: { parts: [{ text: JSON.stringify({ rows: [{ name: "علي", phone: "0911111111", balance: "50", limit: "" }], note: "" }) }] } }] };
+    const ph = await call("POST", "/ai/photo", shop, { kind: "customers", mediaType: "image/jpeg", data: "A".repeat(400) });
+    expect(ph.body.rows[0].name).toBe("علي");
+    expect(sent[1].body.contents[0].parts[0].inlineData.mimeType).toBe("image/jpeg");
+    expect(sent[1].body.generationConfig.responseMimeType).toBe("application/json");
+
+    // Google's errors come back in words the owner can act on.
+    setGeminiFetch(async () => ({ status: 400, json: async () => ({ error: { message: "API key not valid. Please pass a valid API key." } }) }));
+    const bad = await call("POST", "/ai/chat", shop, { messages: [{ role: "user", text: "مرحبا" }] });
+    expect(bad.status).toBe(503);
+    expect(bad.body.error).toContain("مفتاح");
+  });
 });

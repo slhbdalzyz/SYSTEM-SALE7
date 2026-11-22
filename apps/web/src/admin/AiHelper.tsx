@@ -16,7 +16,7 @@ export function useAiStatus(call: Call) {
   return { status: s, shown, used, refresh };
 }
 
-export const AI_PRIVACY = "اللي تبعته للمساعد (الكلام والقوائم والصور) يمشي لشركة Anthropic صاحبة Claude باش يتقرا، وما يتستعملش لتدريب النماذج. ما تبعتش أرقام بطاقات أو كلمات سر.";
+export const AI_PRIVACY = "اللي تبعته للمساعد (الكلام والقوائم والصور) يمشي لشركة الذكاء الاصطناعي اللي يستعملها النظام (Google أو Anthropic) باش يتقرا. ما تبعتش أرقام بطاقات أو كلمات سر.";
 
 const left = (s: AiStatus) => Math.max(0, s.dailyLimit - s.usedToday);
 
