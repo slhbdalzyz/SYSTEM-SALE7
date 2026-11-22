@@ -3,7 +3,7 @@ import bcrypt from "bcryptjs";
 import { z } from "zod";
 import type { Db, Tx } from "../db";
 import { inTx } from "../db";
-import { shopHealth, verifyTotp, FEATURES, AI_MODELS, type AiModel } from "@pos/shared";
+import { shopHealth, verifyTotp, FEATURES, AI_PROVIDERS, type AiProvider } from "@pos/shared";
 import { HttpError, platformGuard } from "../auth";
 import { forgetFeatures } from "../features";
 import { daysLeft, forgetTenant, graceDays, recordSubscriptionPayment, subState } from "../billing";
@@ -209,7 +209,7 @@ export async function platformRoutes(app: FastifyInstance) {
       `SELECT COALESCE(SUM(requests), 0)::int AS requests, COUNT(DISTINCT tenant_id)::int AS shops, COALESCE(SUM(input_tokens), 0)::bigint AS "in", COALESCE(SUM(output_tokens), 0)::bigint AS "out"
          FROM ai_usage WHERE day > (now() AT TIME ZONE 'Africa/Tripoli')::date - 30`,
     )).rows[0];
-    out.ai_usage = { requests: u.requests, shops: u.shops, inputTokens: Number(u.in), outputTokens: Number(u.out), envKey: !!process.env.ANTHROPIC_API_KEY };
+    out.ai_usage = { requests: u.requests, shops: u.shops, inputTokens: Number(u.in), outputTokens: Number(u.out), envKey: { claude: !!process.env.ANTHROPIC_API_KEY, gemini: !!process.env.GEMINI_API_KEY } };
     return out;
   });
 
@@ -223,13 +223,15 @@ export async function platformRoutes(app: FastifyInstance) {
       ai: z.object({
         enabled: z.boolean(),
         apiKey: z.string().trim().max(300),
-        model: z.enum(Object.keys(AI_MODELS) as [AiModel, ...AiModel[]]),
+        provider: z.enum(Object.keys(AI_PROVIDERS) as [AiProvider, ...AiProvider[]]).default("claude"),
+        model: z.string().regex(/^[a-z0-9.-]{3,60}$/),
         dailyLimit: z.number().int().min(1).max(1000),
       }).optional(),
     }).parse(req.body);
     if (b.ai?.apiKey === "••••") {
+      // Unchanged: keep the saved key, unless the company changed (a Claude key won't open Gemini).
       const old = (await app.db.query(`SELECT value FROM platform_settings WHERE key = 'ai'`)).rows[0]?.value;
-      b.ai.apiKey = old?.apiKey ?? "";
+      b.ai.apiKey = (old?.provider ?? "claude") === b.ai.provider ? old?.apiKey ?? "" : "";
     }
     if (b.sms?.token === "••••") {
       // Unchanged: keep the token already saved.

@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { AI_FIELDS, type AiKind, type AiStatus } from "@pos/shared";
 import { HttpError, requirePerm } from "../auth";
-import { askClaude, readAiConfig } from "../ai";
+import { askAi, readAiConfig } from "../ai";
 import { tenantFeatures } from "../features";
 
 const TZ = "Africa/Tripoli";
@@ -80,10 +80,10 @@ export async function aiRoutes(app: FastifyInstance) {
   });
 
   /** Checks the shop may ask, asks, and counts it against today's cap. */
-  async function ask(tid: string, a: Parameters<typeof askClaude>[1]) {
+  async function ask(tid: string, a: Parameters<typeof askAi>[1]) {
     const s = await status(app, tid);
     if (!s.ready) throw new HttpError(403, s.reason ?? "المساعد الذكي مش مفعّل حالياً.");
-    const r = await askClaude(s.cfg, a);
+    const r = await askAi(s.cfg, a);
     await app.db.query(
       `INSERT INTO ai_usage (tenant_id, day, requests, input_tokens, output_tokens) VALUES ($1, (now() AT TIME ZONE '${TZ}')::date, 1, $2, $3)
        ON CONFLICT (tenant_id, day) DO UPDATE SET requests = ai_usage.requests + 1, input_tokens = ai_usage.input_tokens + $2, output_tokens = ai_usage.output_tokens + $3`,
