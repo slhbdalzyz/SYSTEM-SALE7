@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { FEATURES, formatMoney, ROLE_NAMES, HEALTH_LABELS, platformCan, PLATFORM_ROLE_LABELS, type Feature, type Health, type PlatformPerm, type PlatformRole } from "@pos/shared";
+import { FEATURES, formatMoney, ROLE_NAMES, HEALTH_LABELS, platformCan, PLATFORM_ROLE_LABELS, AI_MODELS, type AiModel, type Feature, type Health, type PlatformPerm, type PlatformRole } from "@pos/shared";
 import { downloadCsv } from "../admin/charts";
 import { AgentPage, AgentsTab, AnnouncementsTab, AuditTab, CouponsTab, HealthBadge, MyAccount, openInvoice, RemindersTab, RevenueTab, TeamTab, TicketsTab } from "./Pro";
 import { api, ApiError } from "../api";
@@ -548,6 +548,8 @@ interface PlatformSettings {
   reminder_message?: string;
   company?: { name: string; phone: string; address: string; taxNo: string };
   sms?: { enabled: boolean; url: string; token: string };
+  ai?: { enabled: boolean; apiKey: string; model: AiModel; dailyLimit: number };
+  ai_usage?: { requests: number; shops: number; inputTokens: number; outputTokens: number; envKey: boolean };
 }
 
 function Settings({ call }: { call: Call }) {
@@ -557,7 +559,9 @@ function Settings({ call }: { call: Call }) {
   if (!s) return <div className="muted">جاري التحميل…</div>;
   const company = s.company ?? { name: "", phone: "", address: "", taxNo: "" };
   const sms = s.sms ?? { enabled: false, url: "", token: "" };
-  const save = () => call("/platform/settings", { method: "PUT", body: { ...s, company, sms } })
+  const ai = s.ai ?? { enabled: true, apiKey: "", model: "claude-opus-5-5" as AiModel, dailyLimit: 40 };
+  const usage = s.ai_usage;
+  const save = () => call("/platform/settings", { method: "PUT", body: { ...s, ai_usage: undefined, company, sms, ai } })
     .then(() => setMsg({ text: "تم الحفظ" })).catch((e) => setMsg({ text: (e as Error).message, bad: true }));
   return (
     <div className="stack">
@@ -595,6 +599,33 @@ function Settings({ call }: { call: Call }) {
           <label style={{ flex: 2 }}>رابط البوابة<input value={sms.url} onChange={(e) => setS({ ...s, sms: { ...sms, url: e.target.value } })} placeholder="https://…" style={{ direction: "ltr" }} /></label>
           <label style={{ flex: 1 }}>المفتاح<input type="password" value={sms.token} onChange={(e) => setS({ ...s, sms: { ...sms, token: e.target.value } })} autoComplete="off" /></label>
         </div>
+      </div>
+      <div className="card stack">
+        <h3 style={{ margin: 0 }}>🤖 المساعد الذكي (Claude)</h3>
+        <p className="muted" style={{ margin: 0 }}>
+          يساعد المحلات في «من الدفتر للنظام»: يجاوب على أسئلتهم، يرتب القوائم الملصوقة، يقرا صور الدفتر، ويراجع قبل الإدخال.
+          يحتاج مفتاح API من <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer">console.anthropic.com</a> (حساب Claude العادي ما يمشيش هنا، والفاتورة تكون على حساب الـAPI).
+          المفتاح يتحفظ في السيرفر بس وما يوصلش للمحلات. تقدر تقفله أو تفتحه لكل باقة أو محل من «الباقات» و«المحلات» (ميزة «المساعد الذكي»).
+        </p>
+        <label className="row" style={{ gap: 6 }}><input type="checkbox" style={{ width: "auto" }} checked={ai.enabled} onChange={(e) => setS({ ...s, ai: { ...ai, enabled: e.target.checked } })} />تشغيل المساعد</label>
+        <div className="row">
+          <label style={{ flex: 2 }}>مفتاح API
+            <input type="password" value={ai.apiKey} onChange={(e) => setS({ ...s, ai: { ...ai, apiKey: e.target.value } })} autoComplete="off" placeholder={usage?.envKey ? "مستعمل المفتاح اللي في إعدادات السيرفر" : "sk-ant-…"} style={{ direction: "ltr" }} />
+          </label>
+          <label style={{ flex: 1 }}>النموذج
+            <select value={ai.model} onChange={(e) => setS({ ...s, ai: { ...ai, model: e.target.value as AiModel } })}>
+              {(Object.keys(AI_MODELS) as AiModel[]).map((m) => <option key={m} value={m}>{AI_MODELS[m]}</option>)}
+            </select>
+          </label>
+          <label style={{ flex: 1 }}>الحد اليومي لكل محل
+            <input className="num" type="number" min={1} max={1000} value={ai.dailyLimit} onChange={(e) => setS({ ...s, ai: { ...ai, dailyLimit: Number(e.target.value) } })} />
+          </label>
+        </div>
+        {usage && (
+          <div className="muted">
+            آخر 30 يوم: {usage.requests} طلب من {usage.shops} محل · {usage.inputTokens.toLocaleString("en")} توكن داخل · {usage.outputTokens.toLocaleString("en")} توكن طالع
+          </div>
+        )}
       </div>
       {msg && <div className={msg.bad ? "error" : "badge ok"}>{msg.text}</div>}
       <div><button className="primary" onClick={() => void save()}>حفظ</button></div>

@@ -3,7 +3,7 @@ import bcrypt from "bcryptjs";
 import { z } from "zod";
 import type { Db, Tx } from "../db";
 import { inTx } from "../db";
-import { shopHealth, verifyTotp, FEATURES } from "@pos/shared";
+import { shopHealth, verifyTotp, FEATURES, AI_MODELS, type AiModel } from "@pos/shared";
 import { HttpError, platformGuard } from "../auth";
 import { forgetFeatures } from "../features";
 import { daysLeft, forgetTenant, graceDays, recordSubscriptionPayment, subState } from "../billing";
@@ -203,6 +203,13 @@ export async function platformRoutes(app: FastifyInstance) {
     const r = await app.db.query(`SELECT key, value FROM platform_settings WHERE key NOT IN ('vapid', 'reminders_last_run')`);
     const out = Object.fromEntries(r.rows.map((x) => [x.key, x.value]));
     if (out.sms) out.sms = { ...out.sms, token: out.sms.token ? "••••" : "" };
+    // The Claude key is never sent back either; the page only learns whether one is saved.
+    if (out.ai) out.ai = { ...out.ai, apiKey: out.ai.apiKey ? "••••" : "" };
+    const u = (await app.db.query(
+      `SELECT COALESCE(SUM(requests), 0)::int AS requests, COUNT(DISTINCT tenant_id)::int AS shops, COALESCE(SUM(input_tokens), 0)::bigint AS "in", COALESCE(SUM(output_tokens), 0)::bigint AS "out"
+         FROM ai_usage WHERE day > (now() AT TIME ZONE 'Africa/Tripoli')::date - 30`,
+    )).rows[0];
+    out.ai_usage = { requests: u.requests, shops: u.shops, inputTokens: Number(u.in), outputTokens: Number(u.out), envKey: !!process.env.ANTHROPIC_API_KEY };
     return out;
   });
 
@@ -213,7 +220,17 @@ export async function platformRoutes(app: FastifyInstance) {
       reminder_message: z.string().min(10).max(1000).optional(),
       company: z.object({ name: z.string().max(120), phone: z.string().max(40), address: z.string().max(200), taxNo: z.string().max(60) }).optional(),
       sms: z.object({ enabled: z.boolean(), url: z.string().url().max(500).or(z.literal("")), token: z.string().max(500) }).optional(),
+      ai: z.object({
+        enabled: z.boolean(),
+        apiKey: z.string().trim().max(300),
+        model: z.enum(Object.keys(AI_MODELS) as [AiModel, ...AiModel[]]),
+        dailyLimit: z.number().int().min(1).max(1000),
+      }).optional(),
     }).parse(req.body);
+    if (b.ai?.apiKey === "••••") {
+      const old = (await app.db.query(`SELECT value FROM platform_settings WHERE key = 'ai'`)).rows[0]?.value;
+      b.ai.apiKey = old?.apiKey ?? "";
+    }
     if (b.sms?.token === "••••") {
       // Unchanged: keep the token already saved.
       const old = (await app.db.query(`SELECT value FROM platform_settings WHERE key = 'sms'`)).rows[0]?.value;
@@ -223,7 +240,7 @@ export async function platformRoutes(app: FastifyInstance) {
       if (v === undefined) continue;
       await app.db.query(`INSERT INTO platform_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2`, [k, JSON.stringify(v)]);
     }
-    await platformAudit(app.db, { adminId: req.user.sub, action: "settings.save", data: { ...b, sms: b.sms ? { ...b.sms, token: b.sms.token ? "set" : "" } : undefined } });
+    await platformAudit(app.db, { adminId: req.user.sub, action: "settings.save", data: { ...b, sms: b.sms ? { ...b.sms, token: b.sms.token ? "set" : "" } : undefined, ai: b.ai ? { ...b.ai, apiKey: b.ai.apiKey ? "set" : "" } : undefined } });
     return { ok: true };
   });
 

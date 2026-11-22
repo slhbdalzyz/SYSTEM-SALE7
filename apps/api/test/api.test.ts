@@ -2792,3 +2792,86 @@ describe("several bank accounts, card settlement and checking against the statem
     expect((await call("PATCH", `/money/banks/${j}`, o, { active: false })).status).toBe(200);
   });
 });
+
+describe("the AI helper on «from paper»", () => {
+  it("stays hidden without a key, is closed on the basic plan, and sorts lists, photos and checks on a higher plan", async () => {
+    const { setAiClient } = await import("../src/ai");
+    const asked: { model: string; system: string; messages: { content: unknown }[]; output_config: { effort: string; format?: { schema: { properties: Record<string, unknown> } } } }[] = [];
+    let answer = "";
+    setAiClient(async (key) => ({
+      beta: { messages: { create: async (req: never) => {
+        expect(key).toBe("sk-ant-test");
+        asked.push(req);
+        return { stop_reason: "end_turn", content: [{ type: "text", text: answer }], usage: { input_tokens: 100, output_tokens: 20 } };
+      } } },
+    }) as never);
+    const basic = (await call("POST", "/auth/register", undefined, { businessName: "بقالة أساسية", storeName: "الرئيسي", ownerName: "علي", email: "ai-basic@test.ly", password: "password123" })).body.token;
+    const pro = (await call("POST", "/auth/register", undefined, { businessName: "بقالة متقدمة", storeName: "الرئيسي", ownerName: "سالم", email: "ai-pro@test.ly", password: "password123", planCode: "pro" })).body.token;
+    const staff = (await call("POST", "/platform/login", undefined, { email: "admin@sale7.ly", password: "platform-pass" })).body.token;
+
+    // No key on the platform: nothing to show, and nothing answers.
+    expect((await call("GET", "/ai/status", pro)).body).toMatchObject({ ready: false, reason: null });
+    expect((await call("POST", "/ai/chat", pro, { messages: [{ role: "user", text: "مرحبا" }] })).status).toBe(403);
+
+    // The key is kept on the server and never sent back.
+    await call("PUT", "/platform/settings", staff, { ai: { enabled: true, apiKey: "sk-ant-test", model: "claude-opus-5-5", dailyLimit: 5 } });
+    const set = (await call("GET", "/platform/settings", staff)).body;
+    expect(set.ai.apiKey).toBe("••••");
+    await call("PUT", "/platform/settings", staff, { ai: { ...set.ai, apiKey: "••••" } });
+    expect((await db.query(`SELECT value FROM platform_settings WHERE key = 'ai'`)).rows[0].value.apiKey).toBe("sk-ant-test");
+
+    // The basic plan sees why, and can't ask (an earlier test saved the basic plan over what the migration set).
+    await db.query(`UPDATE plans SET features = features || '{"ai_helper": false}'::jsonb WHERE code = 'basic'`);
+    (await import("../src/features")).forgetFeatures();
+    expect((await call("GET", "/ai/status", basic)).body.reason).toContain("باقتك");
+    expect((await call("POST", "/ai/chat", basic, { messages: [{ role: "user", text: "مرحبا" }] })).status).toBe(403);
+    expect(asked).toHaveLength(0);
+
+    // 1. A question, knowing which step is open.
+    answer = "اكتب «صندوق» في العبوة الكبيرة.";
+    const c = await call("POST", "/ai/chat", pro, { step: "products", messages: [{ role: "user", text: "كيف ندخل الصندوق؟" }] });
+    expect(c.status).toBe(200);
+    expect(c.body).toMatchObject({ reply: answer, usedToday: 1, dailyLimit: 5 });
+    expect(asked[0].model).toBe("claude-opus-5-5");
+    expect(asked[0].system).toContain("الأصناف والكميات");
+    expect(asked[0].output_config.effort).toBe("low");
+
+    // 2. A pasted list into lines, kept to the grid's columns, lines without a name dropped.
+    answer = JSON.stringify({ rows: [{ name: "بيبسي علبة", barcode: "", category: "مشروبات", unit: "علبة", price: "1.5", cost: "", qty: "48", pack: "", packQty: "", packPrice: "", weighted: "", extra: "x" }, { name: "", price: "3" }], note: "" });
+    const s = await call("POST", "/ai/structure", pro, { kind: "products", text: "بيبسي علبة 1.5 دينار عندي 48" });
+    expect(s.status).toBe(200);
+    expect(s.body.rows).toEqual([{ name: "بيبسي علبة", barcode: "", category: "مشروبات", unit: "علبة", price: "1.5", cost: "", qty: "48", pack: "", packQty: "", packPrice: "", weighted: "" }]);
+    expect(Object.keys(asked[1].output_config.format!.schema.properties)).toEqual(["rows", "note"]);
+
+    // 3. A notebook photo goes as an image.
+    answer = JSON.stringify({ rows: [{ name: "محمد", phone: "0912345678", balance: "120", limit: "" }], note: "رقم السطر الثالث مش واضح" });
+    const ph = await call("POST", "/ai/photo", pro, { kind: "customers", mediaType: "image/jpeg", data: "A".repeat(400) });
+    expect(ph.status).toBe(200);
+    expect(ph.body.rows[0].name).toBe("محمد");
+    expect(ph.body.note).toContain("مش واضح");
+    expect((asked[2].messages[0].content as { type: string }[])[0].type).toBe("image");
+
+    // 4. Checking the grid: only lines that exist come back.
+    answer = JSON.stringify({ issues: [{ row: 1, message: "السعر أقل من التكلفة" }, { row: 9, message: "مش موجود" }] });
+    const ck = await call("POST", "/ai/check", pro, { kind: "products", rows: [{ name: "حليب", price: "1", cost: "2" }] });
+    expect(ck.body.issues).toEqual([{ row: 1, message: "السعر أقل من التكلفة" }]);
+
+    // Usage is counted per shop per day, and the cap holds.
+    const u = (await db.query(`SELECT requests, input_tokens::int AS input_tokens FROM ai_usage a JOIN tenants t ON t.id = a.tenant_id WHERE t.name = 'بقالة متقدمة'`)).rows[0];
+    expect(u).toEqual({ requests: 4, input_tokens: 400 });
+    answer = "تمام";
+    expect((await call("POST", "/ai/chat", pro, { messages: [{ role: "user", text: "شكراً" }] })).status).toBe(200);
+    const over = await call("POST", "/ai/chat", pro, { messages: [{ role: "user", text: "سؤال زيادة" }] });
+    expect(over.status).toBe(403);
+    expect(over.body.error ?? over.body.message).toContain("لليوم");
+    expect((await call("GET", "/ai/status", pro)).body).toMatchObject({ ready: false, usedToday: 5 });
+    expect((await call("GET", "/platform/settings", staff)).body.ai_usage.requests).toBeGreaterThanOrEqual(5);
+
+    // The platform can open it for one basic shop.
+    const tid = (await db.query(`SELECT id FROM tenants WHERE name = 'بقالة أساسية'`)).rows[0].id;
+    await call("PATCH", `/platform/tenants/${tid}`, staff, { features: { ai_helper: true } });
+    expect((await call("GET", "/ai/status", basic)).body.ready).toBe(true);
+    await call("PUT", "/platform/settings", staff, { ai: { enabled: false, apiKey: "••••", model: "claude-haiku-5-5", dailyLimit: 5 } });
+    expect((await call("GET", "/ai/status", basic)).body).toMatchObject({ ready: false, reason: null });
+  });
+});
