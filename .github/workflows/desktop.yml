@@ -112,6 +112,21 @@ jobs:
           sleep 3
           cat "$RUNNER_TEMP/server.log"
           grep -q "local server on" "$RUNNER_TEMP/server.log"
+      # The same as a shop: the app itself starts its server (paths as Tauri gives them, not typed by hand).
+      - name: Check the app starts its local server
+        if: ${{ !inputs.api_url && (inputs.edition || 'local') == 'local' }}
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem apps/desktop/src-tauri/target/release -Filter *.exe | Where-Object { $_.Name -notmatch 'setup|uninstall' } | Select-Object -First 1
+          Copy-Item -Recurse apps/desktop/src-tauri/server apps/desktop/src-tauri/target/release/server -Force
+          $p = Start-Process $exe.FullName -PassThru
+          $ok = $false
+          for ($i = 0; $i -lt 90; $i++) {
+            try { Invoke-RestMethod http://127.0.0.1:7400/api/health -TimeoutSec 2 | Out-Null; $ok = $true; break } catch { Start-Sleep 1 }
+          }
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          Get-Content "$env:ProgramData\Sale7\logs\server.log" -Tail 30 -ErrorAction SilentlyContinue
+          if (-not $ok) { throw "the app did not start its local server" }
       - name: Publish the update for shops (releases only)
         if: ${{ env.RELEASE_TAG != '' && !inputs.api_url && (inputs.edition || 'local') == 'local' }}
         shell: bash
