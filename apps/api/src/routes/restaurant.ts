@@ -165,8 +165,10 @@ export async function restaurantRoutes(app: FastifyInstance) {
   );
 
   // ---- Recipes ----
-  const costs = async (tid: string, ids: string[]) =>
-    new Map((await app.db.query(`SELECT id, cost_minor FROM products WHERE tenant_id = $1 AND id = ANY($2::uuid[])`, [tid, ids])).rows.map((r) => [r.id as string, Number(r.cost_minor)]));
+  // `q` is the transaction when called inside one: the local edition's database has one connection,
+  // so a query on app.db from inside a transaction would wait for it forever.
+  const costs = async (tid: string, ids: string[], q: { query: typeof app.db.query } = app.db) =>
+    new Map((await q.query(`SELECT id, cost_minor FROM products WHERE tenant_id = $1 AND id = ANY($2::uuid[])`, [tid, ids])).rows.map((r) => [r.id as string, Number(r.cost_minor)]));
 
   app.get("/recipes", products, async (req) => {
     const r = await app.db.query(
@@ -213,7 +215,7 @@ export async function restaurantRoutes(app: FastifyInstance) {
       for (const l of lines) await tx.query(`INSERT INTO recipe_lines (tenant_id, product_id, ingredient_id, qty_milli) VALUES ($1,$2,$3,$4)`, [tid, productId, l.ingredientId, l.qtyMilli]);
       // The dish costs what goes into it, so the profit in the reports is right.
       if (lines.length) {
-        const cost = recipeCost(lines, await costs(tid, lines.map((l) => l.ingredientId)));
+        const cost = recipeCost(lines, await costs(tid, lines.map((l) => l.ingredientId), tx));
         await tx.query(`UPDATE products SET cost_minor = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2`, [productId, tid, cost]);
       }
       await audit(tx, { tenantId: tid, userId: req.user.sub, action: "product.recipe", entity: "product", entityId: productId, data: { name: known.find((k) => k.id === productId)?.name, ingredients: lines.length } });

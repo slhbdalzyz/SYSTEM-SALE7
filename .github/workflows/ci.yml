@@ -27,6 +27,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm test
+      # The same API suite on PGlite, the database of the Windows app's local edition.
+      - run: pnpm --filter ./apps/api exec vitest run test/api.test.ts
+        env:
+          TEST_PGLITE: "1"
       # The production build must not pull in the demo.
       - run: node scripts/vercel-build.mjs
         env:
