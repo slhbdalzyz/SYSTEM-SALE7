@@ -561,8 +561,13 @@ function Settings({ call }: { call: Call }) {
   const sms = s.sms ?? { enabled: false, url: "", token: "" };
   const ai = s.ai ?? { enabled: true, apiKey: "", model: "claude-opus-5-5" as AiModel, dailyLimit: 40 };
   const usage = s.ai_usage;
-  const save = () => call("/platform/settings", { method: "PUT", body: { ...s, ai_usage: undefined, company, sms, ai } })
-    .then(() => setMsg({ text: "تم الحفظ" })).catch((e) => setMsg({ text: (e as Error).message, bad: true }));
+  const save = () => {
+    // Browsers like to fill a saved e-mail and password into these boxes; say which box is wrong.
+    if (sms.url && !/^https?:\/\/\S+$/.test(sms.url.trim())) return setMsg({ text: "«رابط البوابة» في بطاقة الرسائل النصية لازم يكون رابط يبدا بـ https:// أو يكون فاضي. امسحه لو ما عندكش بوابة.", bad: true });
+    if (ai.apiKey && ai.apiKey !== "••••" && !ai.apiKey.trim().startsWith("sk-ant-")) return setMsg({ text: "مفتاح المساعد الذكي لازم يبدا بـ sk-ant-. انسخه كامل من console.anthropic.com.", bad: true });
+    return call("/platform/settings", { method: "PUT", body: { ...s, ai_usage: undefined, company, sms: { ...sms, url: sms.url.trim() }, ai: { ...ai, apiKey: ai.apiKey.trim() } } })
+      .then(() => setMsg({ text: "تم الحفظ" })).catch((e) => setMsg({ text: (e as Error).message, bad: true }));
+  };
   return (
     <div className="stack">
       <div className="card stack">
@@ -596,8 +601,8 @@ function Settings({ call }: { call: Call }) {
         </p>
         <label className="row" style={{ gap: 6 }}><input type="checkbox" style={{ width: "auto" }} checked={sms.enabled} onChange={(e) => setS({ ...s, sms: { ...sms, enabled: e.target.checked } })} />تشغيل الإرسال التلقائي</label>
         <div className="row">
-          <label style={{ flex: 2 }}>رابط البوابة<input value={sms.url} onChange={(e) => setS({ ...s, sms: { ...sms, url: e.target.value } })} placeholder="https://…" style={{ direction: "ltr" }} /></label>
-          <label style={{ flex: 1 }}>المفتاح<input type="password" value={sms.token} onChange={(e) => setS({ ...s, sms: { ...sms, token: e.target.value } })} autoComplete="off" /></label>
+          <label style={{ flex: 2 }}>رابط البوابة<input type="url" name="sms-gateway-url" autoComplete="off" value={sms.url} onChange={(e) => setS({ ...s, sms: { ...sms, url: e.target.value } })} placeholder="https://…" style={{ direction: "ltr" }} /></label>
+          <label style={{ flex: 1 }}>المفتاح<input type="password" name="sms-gateway-token" value={sms.token} onChange={(e) => setS({ ...s, sms: { ...sms, token: e.target.value } })} autoComplete="new-password" /></label>
         </div>
       </div>
       <div className="card stack">
@@ -610,7 +615,7 @@ function Settings({ call }: { call: Call }) {
         <label className="row" style={{ gap: 6 }}><input type="checkbox" style={{ width: "auto" }} checked={ai.enabled} onChange={(e) => setS({ ...s, ai: { ...ai, enabled: e.target.checked } })} />تشغيل المساعد</label>
         <div className="row">
           <label style={{ flex: 2 }}>مفتاح API
-            <input type="password" value={ai.apiKey} onChange={(e) => setS({ ...s, ai: { ...ai, apiKey: e.target.value } })} autoComplete="off" placeholder={usage?.envKey ? "مستعمل المفتاح اللي في إعدادات السيرفر" : "sk-ant-…"} style={{ direction: "ltr" }} />
+            <input type="password" name="claude-api-key" value={ai.apiKey} onChange={(e) => setS({ ...s, ai: { ...ai, apiKey: e.target.value } })} autoComplete="new-password" placeholder={usage?.envKey ? "مستعمل المفتاح اللي في إعدادات السيرفر" : "sk-ant-…"} style={{ direction: "ltr" }} />
           </label>
           <label style={{ flex: 1 }}>النموذج
             <select value={ai.model} onChange={(e) => setS({ ...s, ai: { ...ai, model: e.target.value as AiModel } })}>
