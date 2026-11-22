@@ -182,7 +182,7 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
         <div className="side-brand">
           <div className="logo">{me.tenant.name.trim().slice(0, 1)}</div>
           <div style={{ minWidth: 0 }}>
-            <b className="ellipsis">{me.tenant.name}</b>
+            <b className="ellipsis" title={me.tenant.name}>{me.tenant.name}</b>
             {open.length > 1 ? (
               <select value={store.id} onChange={(e) => pickStore(e.target.value)} aria-label="الفرع">
                 {open.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
@@ -204,7 +204,7 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
         </nav>
         <div className="side-foot">
           <div className="avatar">{me.user.name.trim().slice(0, 1)}</div>
-          <div style={{ minWidth: 0, flex: 1 }}><b className="ellipsis">{me.user.name}</b><small>{me.user.job_title || ROLE_NAMES[me.user.role as keyof typeof ROLE_NAMES]}</small></div>
+          <div style={{ minWidth: 0, flex: 1 }}><b className="ellipsis" title={me.user.name}>{me.user.name}</b><small>{me.user.job_title || ROLE_NAMES[me.user.role as keyof typeof ROLE_NAMES]}</small></div>
           <button className="ghost" onClick={logout}>خروج</button>
         </div>
       </aside>
