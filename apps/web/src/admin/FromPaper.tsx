@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { formatMoney, toMinor } from "@pos/shared";
 import type { Call } from "./Admin";
+import { AiChat, AiTools, useAiStatus, type AiIssue } from "./AiHelper";
 import { BIG_UNITS, SHEETS, mapSheet, readSheetFile, readNumber, templateCsv, type Mapped, type SheetKind } from "./sheet";
 
 interface Status { products: number; stocked: number; customers: number; customers_owe: number; suppliers: number; suppliers_owed: number; cash_opening: number; sales: number }
@@ -32,6 +33,7 @@ export function FromPaper({ call, storeId, open, onHide }: { call: Call; storeId
   const [step, setStep] = useState<SheetKind | "cash" | null>(null);
   const load = useCallback(() => call<Status>("/import/status").then(setS).catch(() => {}), [call]);
   useEffect(() => void load(), [load]);
+  const ai = useAiStatus(call);
   if (!s) return <div className="muted">جاري التحميل…</div>;
   const steps: { key: SheetKind | "cash"; icon: string; title: string; done: boolean; info: string }[] = [
     { key: "products", icon: "📦", title: "الأصناف والكميات", done: s.products > 0, info: s.products ? `${s.products} صنف · ${s.stocked} بكميات` : "ما فيش أصناف" },
@@ -53,6 +55,7 @@ export function FromPaper({ call, storeId, open, onHide }: { call: Call; storeId
         </p>
         <div className="progress"><span style={{ width: `${(done / steps.length) * 100}%` }} /></div>
       </div>
+      <AiChat call={call} step={step} ai={ai} />
       <div className="paper-steps">
         {steps.map((x, i) => (
           <button key={x.key} className={`card paper-step ${x.done ? "done" : ""} ${step === x.key ? "active" : ""}`} onClick={() => setStep(step === x.key ? null : x.key)}>
@@ -61,7 +64,7 @@ export function FromPaper({ call, storeId, open, onHide }: { call: Call; storeId
           </button>
         ))}
       </div>
-      {step && step !== "cash" && <ImportStep key={step} kind={step} call={call} storeId={storeId} onDone={load} />}
+      {step && step !== "cash" && <ImportStep key={step} kind={step} call={call} storeId={storeId} onDone={load} ai={ai} />}
       {step === "cash" && <CashStep call={call} onDone={load} />}
       {done === steps.length && (
         <div className="card stack">
@@ -83,7 +86,7 @@ export function FromPaper({ call, storeId, open, onHide }: { call: Call; storeId
   );
 }
 
-function ImportStep({ kind, call, storeId, onDone }: { kind: SheetKind; call: Call; storeId: string; onDone: () => void }) {
+function ImportStep({ kind, call, storeId, onDone, ai }: { kind: SheetKind; call: Call; storeId: string; onDone: () => void; ai: ReturnType<typeof useAiStatus> }) {
   const [mode, setMode] = useState<"hand" | "file">("hand");
   const [file, setFile] = useState<string | null>(null);
   const [mapped, setMapped] = useState<Mapped<Record<string, unknown>> | null>(null);
@@ -133,7 +136,7 @@ function ImportStep({ kind, call, storeId, onDone }: { kind: SheetKind; call: Ca
         <button type="button" className={mode === "hand" ? "active" : ""} onClick={() => { setMode("hand"); setResult(null); }}>✍️ اكتب بيدك</button>
         <button type="button" className={mode === "file" ? "active" : ""} onClick={() => { setMode("file"); setResult(null); }}>📄 من ملف Excel</button>
       </div>
-      {mode === "hand" && <HandEntry kind={kind} call={call} busy={busy} onSend={(m, clear) => void send(m, clear)} />}
+      {mode === "hand" && <HandEntry kind={kind} call={call} ai={ai} busy={busy} onSend={(m, clear) => void send(m, clear)} />}
       {mode === "file" && <>
       <div className="row wrap">
         <button onClick={() => download(`sale7-${kind}-template.csv`, templateCsv(kind))}>⬇️ نزّل القالب</button>
@@ -203,7 +206,7 @@ const draftKey = (k: SheetKind) => `pos.paperDraft.${k}`;
  * Typing items, customers or suppliers straight in, one line each, no file needed.
  * Enter (or a barcode scanner) moves to the next box; a new line opens by itself.
  */
-function HandEntry({ kind, call, busy, onSend }: { kind: SheetKind; call: Call; busy: boolean; onSend: (m: Mapped<Record<string, unknown>>, clear: () => void) => void }) {
+function HandEntry({ kind, call, ai, busy, onSend }: { kind: SheetKind; call: Call; ai: ReturnType<typeof useAiStatus>; busy: boolean; onSend: (m: Mapped<Record<string, unknown>>, clear: () => void) => void }) {
   const cols = HAND[kind];
   const [grid, setGrid] = useState<string[][]>(() => {
     try {
@@ -213,6 +216,8 @@ function HandEntry({ kind, call, busy, onSend }: { kind: SheetKind; call: Call; 
     return Array.from({ length: 5 }, () => blank(cols.length));
   });
   const [cats, setCats] = useState<string[]>([]);
+  // What the helper flagged, by grid line (0-based); cleared as soon as the grid changes.
+  const [issues, setIssues] = useState<(AiIssue & { line: number })[] | null>(null);
   const box = useRef<HTMLTableSectionElement>(null);
   useEffect(() => {
     if (kind === "products") void call<{ name: string }[]>("/categories").then((c) => setCats(c.map((x) => x.name))).catch(() => {});
@@ -221,13 +226,15 @@ function HandEntry({ kind, call, busy, onSend }: { kind: SheetKind; call: Call; 
     try { localStorage.setItem(draftKey(kind), JSON.stringify(grid)); } catch { /* private mode */ }
   }, [grid, kind]);
 
-  const set = (r: number, c: number, v: string) =>
+  const set = (r: number, c: number, v: string) => {
+    setIssues(null);
     setGrid((g) => {
       const next = g.map((row, i) => (i === r ? row.map((x, j) => (j === c ? v : x)) : row));
       // Always keep an empty line at the end to type into.
       if (next[next.length - 1].some((x) => x.trim())) next.push(blank(cols.length));
       return next;
     });
+  };
   // Focus moves at once (a scanner types the next code right away); a line not drawn yet gets it after the render.
   const focus = (r: number, c: number) => {
     const find = () => box.current?.querySelector(`[data-cell="${r}-${c}"]`) as HTMLInputElement | null;
@@ -252,16 +259,31 @@ function HandEntry({ kind, call, busy, onSend }: { kind: SheetKind; call: Call; 
     try { localStorage.removeItem(draftKey(kind)); } catch { /* ignore */ }
   };
   const filled = grid.filter((r) => r.some((x) => x.trim())).length;
+  // The filled lines as the helper reads them, and where each one sits in the grid.
+  const lines = grid.map((row, i) => [row, i] as const).filter(([row]) => row.some((x) => x.trim()));
+  const aiRows = lines.map(([row]) => Object.fromEntries(cols.map((c, j) => [c.key, row[j]])));
+  const addRows = (rows: Record<string, string>[]) =>
+    setGrid((g) => {
+      const kept = g.filter((row) => row.some((x) => x.trim()));
+      const added = rows.map((r) => cols.map((c) => {
+        const v = String(r[c.key] ?? "").trim();
+        return c.kind === "check" ? (v && v !== "0" && v !== "false" ? "1" : "") : v;
+      }));
+      return [...kept, ...added, blank(cols.length)];
+    });
+  const flagged = new Map((issues ?? []).map((x) => [x.line, x.message]));
 
   return (
     <div className="stack">
+      <AiTools call={call} kind={kind} ai={ai} rows={aiRows} onRows={addRows}
+        onIssues={(l) => setIssues(l && l.map((x) => ({ ...x, line: lines[x.row - 1]?.[1] ?? -1 })).filter((x) => x.line >= 0))} />
       <div className="hand-grid">
         <table>
           <thead><tr><th style={{ width: 28 }}>#</th>{cols.map((c) => <th key={c.key} style={{ minWidth: c.w }}>{c.label}</th>)}<th /></tr></thead>
           <tbody ref={box}>
             {grid.map((row, r) => (
-              <tr key={r}>
-                <td className="muted num">{r + 1}</td>
+              <tr key={r} className={flagged.has(r) ? "ai-flag" : undefined} title={flagged.get(r)}>
+                <td className="muted num">{flagged.has(r) ? "⚠️" : r + 1}</td>
                 {cols.map((c, j) => (
                   <td key={c.key}>
                     {c.kind === "check" ? (
@@ -274,7 +296,7 @@ function HandEntry({ kind, call, busy, onSend }: { kind: SheetKind; call: Call; 
                     )}
                   </td>
                 ))}
-                <td>{row.some((x) => x.trim()) && <button className="ghost" aria-label={`امسح سطر ${r + 1}`} onClick={() => setGrid((g) => (g.length > 1 ? g.filter((_, i) => i !== r) : [blank(cols.length)]))}>✕</button>}</td>
+                <td>{row.some((x) => x.trim()) && <button className="ghost" aria-label={`امسح سطر ${r + 1}`} onClick={() => { setIssues(null); setGrid((g) => (g.length > 1 ? g.filter((_, i) => i !== r) : [blank(cols.length)])); }}>✕</button>}</td>
               </tr>
             ))}
           </tbody>
@@ -301,6 +323,11 @@ function HandEntry({ kind, call, busy, onSend }: { kind: SheetKind; call: Call; 
         {filled > 0 && <button className="ghost" onClick={() => confirm("نمسح كل اللي كتبته؟") && clear()}>مسح الكل</button>}
         <button className="primary" disabled={busy || !mapped.rows.length || mapped.errors.length > 0} onClick={() => onSend(mapped, clear)}>{busy ? "جاري الإدخال…" : `أدخل ${mapped.rows.length || ""} سطر`}</button>
       </div>
+      {issues && issues.length > 0 && (
+        <ul className="ai-issues">
+          {issues.map((x, i) => <li key={i}><button onClick={() => focus(x.line, 0)}>سطر {x.line + 1}</button>: {x.message}</li>)}
+        </ul>
+      )}
       {mapped.errors.length > 0 && <ul className="error" style={{ margin: 0, paddingInlineStart: 24 }}>{mapped.errors.slice(0, 8).map((e, i) => <li key={i}>سطر {e.row - 1}: {e.message}</li>)}</ul>}
     </div>
   );

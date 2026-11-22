@@ -33,6 +33,7 @@ export const FEATURES = {
   payroll: "الرواتب",
   offers: "العروض",
   counts: "جرد المخزون",
+  ai_helper: "المساعد الذكي",
 } as const;
 export type Feature = keyof typeof FEATURES;
 export type FeatureMap = Partial<Record<Feature, boolean>>;

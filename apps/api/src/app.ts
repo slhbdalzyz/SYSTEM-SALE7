@@ -32,6 +32,7 @@ import { zakatRoutes } from "./routes/zakat";
 import { loyaltyRoutes } from "./routes/loyalty";
 import { quickRoutes } from "./routes/quick";
 import { importRoutes } from "./routes/import";
+import { aiRoutes } from "./routes/ai";
 import { subscriptionGuard } from "./billing";
 import { checkTokenRules } from "./features";
 import { platformProRoutes, runReminders } from "./routes/platform-pro";
@@ -151,6 +152,7 @@ export async function buildApp(opts: AppOptions) {
   await app.register(loyaltyRoutes);
   await app.register(quickRoutes);
   await app.register(importRoutes);
+  await app.register(aiRoutes);
   // Issuing desktop licences is the platform's job; the shop's own computer only checks them.
   if (!isLocal()) await app.register(licenseRoutes);
   return app;

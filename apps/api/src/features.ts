@@ -23,6 +23,7 @@ export function gatedFeature(method: string, url: string): Feature | null {
   if (write && /^\/offers(\/|$)/.test(path)) return "offers";
   if (write && /^\/quick-(keys|groups)(\/|$)/.test(path)) return "quick_keys";
   if (write && /^\/loyalty\/settings$/.test(path)) return "loyalty";
+  if (write && /^\/ai\//.test(path)) return "ai_helper";
   return null;
 }
 

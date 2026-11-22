@@ -770,3 +770,18 @@ a.btn.primary { background: var(--brand); color: var(--brand-ink); border-color:
 .page-preview { overflow: hidden; background: #fff; box-shadow: 0 2px 10px rgb(0 0 0 / .12); }
 .page-preview iframe { border: 0; background: #fff; transform-origin: top left; pointer-events: none; box-sizing: border-box; }
 [dir="rtl"] .page-preview iframe { transform-origin: top right; }
+
+/* The AI helper on «من الدفتر للنظام»: a chat, and buttons over the typed grid. */
+.ai-bar { background: var(--brand-soft); border-color: var(--brand); }
+.ai-chat { border-color: var(--brand); }
+.ai-msgs { display: flex; flex-direction: column; gap: 8px; max-height: 50vh; overflow: auto; padding: 4px; }
+.ai-msg { padding: 8px 12px; border-radius: 12px; white-space: pre-wrap; line-height: 1.6; max-width: 85%; }
+.ai-msg.user { align-self: flex-start; background: var(--brand); color: var(--brand-ink); }
+.ai-msg.assistant { align-self: flex-end; background: var(--bg); border: 1px solid var(--line); }
+.ai-tools { padding: 8px 10px; border: 1px dashed var(--brand); border-radius: var(--radius); background: var(--brand-soft); }
+.ai-tools .file-pick .btn-like { display: inline-block; color: var(--ink); font-weight: 600; background: var(--panel); border: 1px solid var(--line); padding: 8px 14px; border-radius: var(--radius); }
+.ai-tools .file-pick.disabled { opacity: .5; pointer-events: none; }
+.ai-tools .file-pick:focus-within .btn-like { outline: 2px solid var(--brand); outline-offset: 2px; }
+.hand-grid tr.ai-flag td { background: var(--warn-soft); }
+.ai-issues { margin: 0; padding-inline-start: 24px; color: var(--warn); }
+.ai-issues button { all: unset; cursor: pointer; text-decoration: underline; }
