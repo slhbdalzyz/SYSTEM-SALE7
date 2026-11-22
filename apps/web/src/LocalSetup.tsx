@@ -8,6 +8,7 @@ import { session } from "./session";
 import type { Screen } from "./App";
 import { TYPES } from "./Setup";
 import { RestoreUpload } from "./admin/LocalBackup";
+import { invoke, isDesktopApp } from "./hardware/printer";
 
 export function LocalSetup({ go, login }: { go: (s: Screen) => void; login: JSX.Element }) {
   const [status, setStatus] = useState<{ shop: { name: string } | null } | null>(null);
@@ -15,9 +16,31 @@ export function LocalSetup({ go, login }: { go: (s: Screen) => void; login: JSX.
   useEffect(() => {
     api<{ shop: { name: string } | null }>("/local/status").then(setStatus).catch((e) => setError((e as Error).message));
   }, []);
-  if (error) return <div className="center"><div className="card stack" style={{ width: "min(420px, 100%)" }}><div className="error">ما قدرناش نشغّلوا قاعدة البيانات على الجهاز: {error}</div><button onClick={() => location.reload()}>إعادة المحاولة</button></div></div>;
+  if (error) return <StartError error={error} />;
   if (!status) return <div className="center"><div className="card">جاري تشغيل النظام على الجهاز…</div></div>;
   return status.shop ? login : <FirstRun go={go} />;
+}
+
+/** The server did not start: say where its log is, so the shop can send it to support. */
+function StartError({ error }: { error: string }) {
+  const [log, setLog] = useState<string | null>(null);
+  useEffect(() => {
+    if (!isDesktopApp()) return;
+    invoke<{ log_file: string } | null>("local_info", {}).then((i) => setLog(i?.log_file ?? null)).catch(() => undefined);
+  }, []);
+  return (
+    <div className="center">
+      <div className="card stack" style={{ width: "min(460px, 100%)" }}>
+        <div className="error">ما قدرناش نشغّلوا قاعدة البيانات على الجهاز: {error}</div>
+        {log && (
+          <div className="muted" style={{ fontSize: ".9rem" }}>
+            ابعت للدعم آخر الأسطر من هذا الملف: <code dir="ltr" style={{ userSelect: "all" }}>{log}</code>
+          </div>
+        )}
+        <button onClick={() => location.reload()}>إعادة المحاولة</button>
+      </div>
+    </div>
+  );
 }
 
 function FirstRun({ go }: { go: (s: Screen) => void }) {

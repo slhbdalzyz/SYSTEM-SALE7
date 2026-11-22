@@ -10,6 +10,7 @@ process.env.POS_LOCAL = "1";
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,12 +44,38 @@ function alive(pid: number) {
     return (e as NodeJS.ErrnoException).code === "EPERM";
   }
 }
+/** Whether that process is a Node one: Windows soon gives an old server's number to another program. */
+function isNode(pid: number) {
+  if (process.platform !== "win32") return true;
+  try {
+    const out = execFileSync("tasklist", ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"], { encoding: "utf8", windowsHide: true, timeout: 5000 });
+    return /node/i.test(out);
+  } catch {
+    return true; // can't tell: count it as one
+  }
+}
+/** Whether a server answers on the port (one still starting gets a few seconds). */
+async function answering(seconds: number) {
+  for (let i = 0; i < seconds * 2; i++) {
+    try {
+      if ((await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(1000) })).ok) return true;
+    } catch {
+      /* not answering */
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return false;
+}
+// A lock left by a server that did not stop cleanly (the computer turned off, the app killed while
+// updating) names a process that is gone, or one that now belongs to another program. Only a live
+// server that answers keeps the folder; otherwise the lock is old and this server takes over.
 if (existsSync(lockFile)) {
   const pid = Number(readFileSync(lockFile, "utf8"));
-  if (pid && pid !== process.pid && alive(pid)) {
+  if (pid && pid !== process.pid && alive(pid) && isNode(pid) && (await answering(20))) {
     console.error(`another server (pid ${pid}) is using ${dataDir}`);
     process.exit(3);
   }
+  if (pid && pid !== process.pid) console.log(`old lock from pid ${pid} left behind: taking over`);
 }
 writeFileSync(lockFile, String(process.pid));
 
