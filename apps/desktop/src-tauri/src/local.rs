@@ -69,8 +69,25 @@ fn spawn(node: &Path, script: &Path, data_dir: &Path, log_file: &Path, token: &s
     cmd.spawn()
 }
 
+/// Drops Windows' "\\?\" long-path prefix, which Tauri puts on the app's own folder. Node cannot
+/// start a script given that way (it fails at once with "EISDIR: illegal operation on a directory,
+/// lstat 'C:'"), so the server never ran on shops' computers. "\\?\UNC\server\share" becomes
+/// "\\server\share".
+pub fn plain(p: &Path) -> PathBuf {
+    let s = p.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{rest}"))
+    } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        p.to_path_buf()
+    }
+}
+
 /// Starts the server when this build carries one (the local edition); other builds return None.
 pub fn start(resource_dir: &Path, root: PathBuf) -> Option<LocalServer> {
+    let resource_dir = plain(resource_dir);
+    let root = plain(&root);
     let dir = resource_dir.join("server");
     let script = dir.join("server.mjs");
     if !script.exists() {
@@ -166,6 +183,14 @@ fn trim_log(path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plain_paths_for_node() {
+        assert_eq!(plain(Path::new(r"\\?\C:\Users\PC Master\AppData\Local\Sale7 POS")), PathBuf::from(r"C:\Users\PC Master\AppData\Local\Sale7 POS"));
+        assert_eq!(plain(Path::new(r"\\?\UNC\srv\share\app")), PathBuf::from(r"\\srv\share\app"));
+        assert_eq!(plain(Path::new(r"C:\ProgramData\Sale7")), PathBuf::from(r"C:\ProgramData\Sale7"));
+        assert_eq!(plain(Path::new("/opt/sale7")), PathBuf::from("/opt/sale7"));
+    }
 
     #[test]
     fn tokens_differ_and_are_long() {
