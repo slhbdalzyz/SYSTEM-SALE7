@@ -19,11 +19,12 @@ export const SHEETS = {
       qty: ["الكمية الموجودة", "الكمية", "المخزون", "qty", "quantity", "stock"],
       min: ["حد التنبيه", "الحد الأدنى", "min"],
       weighted: ["بالوزن", "موزون", "weighted"],
+      service: ["خدمة", "خدمة بدون مخزون", "service"],
     },
     example: [
-      ["سكر 1 كيلو", "6281000000011", "المواد الغذائية", "كيس", "شوال", "10", "42", "", "4.500", "3.800", "24", "5", "لا"],
-      ["بيبسي علبة", "6281000000028", "المشروبات", "علبة", "صندوق", "24", "30", "6281000000035", "1.500", "1.000", "96", "24", "لا"],
-      ["طماطم", "", "الخضروات والفواكه", "كيلو", "", "", "", "", "3.500", "2.500", "40.5", "", "نعم"],
+      ["سكر 1 كيلو", "6281000000011", "المواد الغذائية", "كيس", "شوال", "10", "42", "", "4.500", "3.800", "24", "5", "لا", "لا"],
+      ["بيبسي علبة", "6281000000028", "المشروبات", "علبة", "صندوق", "24", "30", "6281000000035", "1.500", "1.000", "96", "24", "لا", "لا"],
+      ["طماطم", "", "الخضروات والفواكه", "كيلو", "", "", "", "", "3.500", "2.500", "40.5", "", "نعم", "لا"],
     ],
   },
   customers: {
@@ -133,11 +134,13 @@ export function mapSheet(kind: SheetKind, table: unknown[][]): Mapped<Record<str
       let price = p0, cost = c0, qty = q0;
       const code = (k: string) => String(cell(r, k) ?? "").replace(/\.0+$/, "").replace(/\s/g, "");
       const barcode = code("barcode");
-      const weighted = yes(cell(r, "weighted"));
+      // A service (a repair, a fitting) has no stock: no quantity, no weighing, no box.
+      const service = yes(cell(r, "service"));
+      const weighted = !service && yes(cell(r, "weighted"));
       let unit = str(r, "unit");
       let pack = str(r, "pack");
       let packPrice = packPriceIn;
-      if (per !== undefined && !weighted) {
+      if (per !== undefined && !weighted && !service) {
         if (per < 2 || !Number.isInteger(per)) return errors.push({ row: line, message: `العدد في العبوة لازم رقم صحيح أكبر من 1: ${per}` });
         // «صندوق فيه 24» typed in the unit box: the whole line is per box, and the piece is worked out from it.
         if (!pack && BIG_UNITS.includes(unit)) {
@@ -148,15 +151,16 @@ export function mapSheet(kind: SheetKind, table: unknown[][]): Mapped<Record<str
           if (qty !== undefined) qty = qty * per;
         }
         pack ||= "صندوق";
-      } else if (pack && !weighted) {
+      } else if (pack && !weighted && !service) {
         return errors.push({ row: line, message: `اكتب كم حبة في الـ${pack}` });
       }
-      const withPack = per !== undefined && !weighted;
+      const withPack = per !== undefined && !weighted && !service;
       const packCode = withPack ? code("packBarcode") : "";
       lines.push(line);
       rows.push({
         name, ...(barcode ? { barcode } : {}), ...(str(r, "category") ? { category: str(r, "category") } : {}), ...(unit ? { unit } : {}),
-        priceMinor: toMinor(price ?? 0), costMinor: toMinor(cost ?? 0), qtyMilli: toMinor(qty ?? 0), minStockMilli: toMinor(min ?? 0), weighted,
+        priceMinor: toMinor(price ?? 0), costMinor: toMinor(cost ?? 0), qtyMilli: service ? 0 : toMinor(qty ?? 0), minStockMilli: service ? 0 : toMinor(min ?? 0), weighted,
+        ...(service ? { service: true } : {}),
         ...(withPack ? { packUnit: pack, packFactorMilli: toMinor(per!), ...(packPrice !== undefined ? { packPriceMinor: toMinor(packPrice) } : {}), ...(packCode ? { packBarcode: packCode } : {}) } : {}),
       });
     } else {

@@ -124,7 +124,7 @@ function ImportStep({ kind, call, storeId, onDone, ai }: { kind: SheetKind; call
   const preview = mapped?.rows.slice(0, 8) ?? [];
   const show = (r: Record<string, unknown>) =>
     kind === "products"
-      ? [r.packUnit ? `${r.name} (${r.packUnit} = ${Number(r.packFactorMilli) / 1000})` : r.name, r.barcode ?? "تلقائي", r.category ?? "—", formatMoney(Number(r.priceMinor)), String(Number(r.qtyMilli) / 1000) + (r.weighted ? " كغ" : "")]
+      ? [r.packUnit ? `${r.name} (${r.packUnit} = ${Number(r.packFactorMilli) / 1000})` : r.name, r.barcode ?? "تلقائي", r.category ?? "—", formatMoney(Number(r.priceMinor)), r.service ? "خدمة" : String(Number(r.qtyMilli) / 1000) + (r.weighted ? " كغ" : "")]
       : [r.name, r.phone ?? "—", formatMoney(Number(r.balanceMinor))];
   const cols = kind === "products" ? ["الصنف", "الباركود", "القسم", "السعر", "الكمية"] : ["الاسم", "الهاتف", kind === "customers" ? "الدين" : "المستحق له"];
 
@@ -193,7 +193,7 @@ const HAND: Record<SheetKind, { key: string; label: string; kind?: "num" | "mone
     { key: "unit", label: "الوحدة", kind: "list", w: 80 }, { key: "price", label: "سعر البيع", kind: "money", w: 90 }, { key: "cost", label: "التكلفة", kind: "money", w: 90 },
     { key: "qty", label: "الكمية", kind: "num", w: 80 },
     { key: "pack", label: "العبوة الكبيرة", kind: "list", w: 100 }, { key: "packQty", label: "فيها كم", kind: "num", w: 70 }, { key: "packPrice", label: "سعر العبوة", kind: "money", w: 90 },
-    { key: "weighted", label: "بالوزن", kind: "check", w: 56 },
+    { key: "weighted", label: "بالوزن", kind: "check", w: 56 }, { key: "service", label: "خدمة", kind: "check", w: 56 },
   ],
   customers: [{ key: "name", label: "اسم العميل *", w: 200 }, { key: "phone", label: "الهاتف", kind: "num", w: 130 }, { key: "balance", label: "الدين القديم", kind: "money", w: 110 }, { key: "limit", label: "حد الدين", kind: "money", w: 100 }],
   suppliers: [{ key: "name", label: "اسم المورد *", w: 220 }, { key: "phone", label: "الهاتف", kind: "num", w: 130 }, { key: "balance", label: "المستحق له", kind: "money", w: 120 }],
