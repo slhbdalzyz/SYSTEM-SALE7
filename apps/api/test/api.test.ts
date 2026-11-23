@@ -1596,6 +1596,17 @@ describe("moving a shop from paper", () => {
     expect(water.units.find((u: { isBase: boolean }) => !u.isBase)).toMatchObject({ name: "شد", factorMilli: 12000, priceMinor: 6000 });
   });
 
+  it("brings in services from a spreadsheet as services, with no stock", async () => {
+    const r = await call("POST", "/import/products", t, { storeId: store, rows: [
+      { name: "تركيب لصقة شاشة", category: "خدمات", priceMinor: 5000, qtyMilli: 999000, minStockMilli: 2000, service: true },
+    ] });
+    expect(r.body).toMatchObject({ created: 1, stocked: 0 });
+    const ps = (await call("GET", `/products?storeId=${store}`, t)).body;
+    const fit = ps.find((p: { name: string }) => p.name === "تركيب لصقة شاشة");
+    expect(fit).toMatchObject({ isService: true, minStockMilli: 0 });
+    expect(fit.stockMilli ?? 0).toBe(0);
+  });
+
   it("puts «from paper» away from the menu and brings it back, keeping the other settings", async () => {
     await call("PUT", "/settings", t, { name: "بقالة الحاج", settings: { phone: "0910000000" } });
     expect((await call("PATCH", "/settings/menu", t, { hidePaper: true })).body.menu.hidePaper).toBe(true);
@@ -1640,7 +1651,7 @@ describe("moving a shop from paper", () => {
     const st = (await call("GET", `/suppliers/${s.id}/statement`, t)).body;
     expect(st.entries[0]).toMatchObject({ type: "opening", balance_minor: 800000 });
     const status = (await call("GET", "/import/status", t)).body;
-    expect(status).toMatchObject({ products: 5, stocked: 4, customers: 2, customers_owe: 100000, suppliers: 1, suppliers_owed: 800000, cash_opening: 0, sales: 0 });
+    expect(status).toMatchObject({ products: 6, stocked: 4, customers: 2, customers_owe: 100000, suppliers: 1, suppliers_owed: 800000, cash_opening: 0, sales: 0 });
   });
 });
 
