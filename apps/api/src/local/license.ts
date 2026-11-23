@@ -13,6 +13,8 @@ interface Store {
   key: string | null;
   /** The latest time this computer has seen: a clock turned back past it means someone is cheating the date. */
   lastSeen: string | null;
+  /** When the first shop was set up on this computer: the trial runs from then, even if the shop is cleared and set up again. */
+  trialFrom?: string;
   checkedOnlineAt: string | null;
 }
 
@@ -104,7 +106,11 @@ export class LocalLicense {
     if (lic) {
       await db.query(`UPDATE tenants SET status = 'active', status_reason = NULL, paid_until = ($2::date + interval '1 day' - interval '1 second') WHERE id = $1`, [t.id, lic.until]);
     } else {
-      await db.query(`UPDATE tenants SET status = 'trial', status_reason = NULL, paid_until = created_at + interval '${TRIAL_DAYS} days' WHERE id = $1`, [t.id]);
+      if (!this.store.trialFrom) {
+        this.store.trialFrom = new Date(t.created_at).toISOString();
+        this.save();
+      }
+      await db.query(`UPDATE tenants SET status = 'trial', status_reason = NULL, paid_until = LEAST(created_at, $2::timestamptz) + interval '${TRIAL_DAYS} days' WHERE id = $1`, [t.id, this.store.trialFrom]);
     }
     forgetTenant(t.id);
   }

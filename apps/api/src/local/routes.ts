@@ -2,7 +2,8 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { timingSafeEqual } from "node:crypto";
 import { z } from "zod";
-import { audit } from "../db";
+import bcrypt from "bcryptjs";
+import { audit, inTx } from "../db";
 import { authenticate, HttpError, requireRole } from "../auth";
 import type { LocalBackups } from "./backup";
 import type { LocalLicense } from "./license";
@@ -17,6 +18,15 @@ export interface LocalOptions {
   network?: { get: () => { lan: boolean; port: number; addresses: string[]; web: boolean }; set: (lan: boolean) => Promise<void> };
 }
 
+/** What "clear the records" empties: everything that happened, none of how the shop is set up. */
+const ACTIVITY = [
+  "sale_lines", "payments", "kitchen_tickets", "coupon_redemptions", "loyalty_entries", "sales", "drawer_moves", "shifts",
+  "purchase_lines", "purchase_invoices", "customer_payments", "supplier_payments", "stock_movements",
+  "stock_count_lines", "stock_counts", "stock_transfer_lines", "stock_transfers", "breakdown_lines", "breakdowns", "product_serials",
+  "money_cleared", "money_movements", "bank_reconciliations", "expenses", "payroll_entries", "payroll_months",
+  "quotes", "repairs", "installment_plans", "zakat_reports", "alerts", "audit_log", "ai_usage",
+];
+
 const MAX_BACKUP = 2 * 1024 * 1024 * 1024;
 
 export async function localRoutes(app: FastifyInstance, opts: LocalOptions) {
@@ -24,9 +34,10 @@ export async function localRoutes(app: FastifyInstance, opts: LocalOptions) {
 
   /** What the first screen needs: is there a shop on this computer yet, or is this the first run. */
   app.get("/local/status", async () => {
-    const t = (await app.db.query(`SELECT id, name FROM tenants ORDER BY created_at LIMIT 1`)).rows[0] as { id: string; name: string } | undefined;
-    // The id lets the app tell this shop's till data from another's (an old install, the demo).
-    return { edition: "local", shop: t ? { id: t.id, name: t.name } : null };
+    const t = (await app.db.query(`SELECT id, name, settings->>'resetAt' AS reset_at FROM tenants ORDER BY created_at LIMIT 1`)).rows[0] as { id: string; name: string; reset_at: string | null } | undefined;
+    // The id lets the app tell this shop's till data from another's (an old install, the demo);
+    // resetAt tells it the shop's records were cleared, so its own copy of them is old.
+    return { edition: "local", shop: t ? { id: t.id, name: t.name, resetAt: t.reset_at } : null };
   });
 
   /** The Windows app asks for a clean stop when it closes, so the database is never cut off mid-write. */
@@ -111,6 +122,32 @@ export async function localRoutes(app: FastifyInstance, opts: LocalOptions) {
     const b = z.object({ password: z.string().max(200).optional() }).parse(req.body ?? {});
     await restore(backups.read(p.name, p.where), b.password || null);
     return { ok: true };
+  });
+
+  /**
+   * Clearing the database. "activity" keeps the shop as it is set up (items, customers, suppliers,
+   * staff, devices, settings) and drops every record of what happened: sales, purchases, stock,
+   * money, debts, shifts. "all" drops the shop itself: the app opens on the first-run setup again.
+   * A backup is made first, so either can be undone from the list.
+   */
+  app.post("/local/reset", { preHandler: owner }, async (req) => {
+    const b = z.object({ mode: z.enum(["activity", "all"]), password: z.string().min(1).max(200) }).parse(req.body);
+    const u = (await app.db.query(`SELECT password_hash FROM users WHERE id = $1 AND tenant_id = $2`, [req.user.sub, req.user.tid])).rows[0];
+    if (!u?.password_hash || !(await bcrypt.compare(b.password, u.password_hash))) throw new HttpError(403, "كلمة السر غلط");
+    const backup = await backups.run();
+    if (b.mode === "all") {
+      // One shop per computer: every table of the shop hangs off its row.
+      await app.db.query(`TRUNCATE tenants CASCADE`);
+    } else {
+      await inTx(app.db, async (tx) => {
+        await tx.query(`TRUNCATE ${ACTIVITY.join(", ")}`);
+        await tx.query(`UPDATE customers SET opening_balance_minor = 0`);
+        await tx.query(`UPDATE suppliers SET opening_balance_minor = 0`);
+        await tx.query(`UPDATE tenants SET settings = settings || jsonb_build_object('resetAt', now()::text)`);
+      });
+      await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "local.reset", data: { mode: b.mode, backup } });
+    }
+    return { ok: true, backup };
   });
 
   // A file the owner brings (from a USB stick, or on a new computer before any shop exists).

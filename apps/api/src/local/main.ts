@@ -149,6 +149,10 @@ const networkCtl: { set: (lan: boolean) => Promise<void> } = { set: async () => 
 
 const shutdownToken = process.env.POS_SHUTDOWN_TOKEN ?? "";
 const app = await buildApp({ db: db as unknown as Db, jwtSecret, logger: false });
+// A shop set up again after clearing everything gets the licence (or what is left of the trial) at once.
+app.addHook("onResponse", async (req, reply) => {
+  if (req.method === "POST" && req.url === "/auth/register" && reply.statusCode === 200) await license.apply(db).catch(() => undefined);
+});
 await app.register(localRoutes, {
   shutdownToken,
   stop: () => void stop("asked"),
