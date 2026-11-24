@@ -3203,3 +3203,47 @@ describe("the cashier screen the owner sets", () => {
     expect((await call("GET", "/settings", till)).body.settings.tillLayout.devices[d.body.id]).toBe("touch");
   });
 });
+
+describe("the cashier screen's frames, colours and customer slides", () => {
+  it("keeps the shop's own frames and picks, checks them, and passes the platform's library to shops", async () => {
+    const reg = await call("POST", "/auth/register", undefined, { businessName: "محل الهياكل", storeName: "الرئيسي", ownerName: "مريم", email: "frames@test.ly", password: "password123" });
+    const o = reg.body.token;
+    const d = await call("POST", "/devices", o, { storeId: reg.body.storeId, name: "تابلت" });
+    const mine = { id: "c-mine", name: "هيكلي", icon: "🧩", cols: [{ w: "1fr", blocks: ["scan", "scan", "cart"] }], bottom: ["keys"], sheet: false, collapseKeys: false, showGrid: false, sideCats: false };
+    const body = { frame: { shop: "c-mine", devices: { [d.body.id]: "tablet", [randomUUID()]: "wide" }, users: {} }, structures: [mine], theme: { name: "blue", density: "compact", font: "tahoma" } };
+    // A ready frame's name can't be taken, and a width that isn't on the list is refused.
+    expect((await call("PATCH", "/settings/till-layout", o, { ...body, structures: [{ ...mine, id: "classic" }] })).status).toBe(400);
+    expect((await call("PATCH", "/settings/till-layout", o, { ...body, structures: [{ ...mine, cols: [{ w: "9999px", blocks: [] }] }] })).status).toBe(400);
+    const r = await call("PATCH", "/settings/till-layout", o, body);
+    expect(r.body.error ?? r.status).toBe(200);
+    const t = r.body.tillLayout;
+    expect(Object.keys(t.frame.devices)).toEqual([d.body.id]);
+    // Each part once, and the total (needed to sell) put in the last column.
+    expect(t.structures[0].cols[0].blocks).toEqual(["scan", "cart", "totals"]);
+    expect(t.theme).toEqual({ name: "blue", density: "compact", font: "tahoma" });
+
+    const staff = (await call("POST", "/platform/login", undefined, { email: "admin@sale7.ly", password: "platform-pass" })).body.token;
+    expect((await call("PUT", "/platform/till-structures", o, { structures: [] })).status).toBe(403);
+    const pub = await call("PUT", "/platform/till-structures", staff, { structures: [{ ...mine, id: "p-bakery", name: "مخبز" }] });
+    expect(pub.body.error ?? pub.status).toBe(200);
+    const lib = await call("GET", "/till-structures/library", o);
+    expect(lib.body.structures.map((x: { id: string }) => x.id)).toEqual(["p-bakery"]);
+  });
+
+  it("keeps the customer screen's slides apart from the settings, and every till reads them", async () => {
+    const reg = await call("POST", "/auth/register", undefined, { businessName: "محل الشاشة", storeName: "الرئيسي", ownerName: "علي", email: "ads@test.ly", password: "password123" });
+    const o = reg.body.token;
+    expect((await call("GET", "/settings/display-ads", o)).body).toEqual({ seconds: 8, duringSale: false, slides: [] });
+    const slide = { id: "s1", title: "عرض الأسبوع", text: "الأرز بـ 25", image: "data:image/jpeg;base64,AAAA", bg: "#1d4ed8" };
+    expect((await call("PUT", "/settings/display-ads", o, { seconds: 5, slides: [{ ...slide, image: "javascript:alert(1)" }] })).status).toBe(400);
+    const r = await call("PUT", "/settings/display-ads", o, { seconds: 5, duringSale: true, slides: [slide] });
+    expect(r.body.error ?? r.status).toBe(200);
+    const d = await call("POST", "/devices", o, { storeId: reg.body.storeId, name: "كاشير" });
+    const u = await call("POST", "/users", o, { name: "هدى", role: "cashier", pin: "1357" });
+    const till = (await call("POST", "/auth/pin", undefined, { deviceToken: d.body.deviceToken, userId: u.body.id, pin: "1357" })).body.token;
+    expect((await call("GET", "/settings/display-ads", till)).body.slides[0].title).toBe("عرض الأسبوع");
+    expect((await call("PUT", "/settings/display-ads", till, { slides: [] })).status).toBe(403);
+    // The pictures don't ride along with the settings every till reads at sign-in.
+    expect(JSON.stringify((await call("GET", "/settings", till)).body)).not.toContain("عرض الأسبوع");
+  });
+});

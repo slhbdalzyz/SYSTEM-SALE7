@@ -107,6 +107,87 @@ export function layoutForBusiness(t: BusinessType | string | null | undefined): 
   }
 }
 
+
+/**
+ * The screen's frame, apart from the buttons: where the search, the tiles, the cart, the total
+ * and the buttons sit. Up to three columns (the first is on the right, as Arabic reads) and an
+ * optional bar under them, which on a tablet becomes a sheet pulled up from the bottom.
+ */
+export const TILL_BLOCKS = ["scan", "grid", "quick", "tabs", "cart", "totals", "keys"] as const;
+export type TillBlock = (typeof TILL_BLOCKS)[number];
+export const TILL_BLOCK_LABELS: Record<TillBlock, string> = {
+  scan: "🔎 الباركود والبحث", grid: "🟦 مربعات الأصناف", quick: "🔘 الأزرار السريعة", tabs: "👥 الزبائن المفتوحين",
+  cart: "🛒 السلة", totals: "💰 المجموع", keys: "⌨️ الأزرار والدفع",
+};
+/** A screen can't sell without these. */
+export const REQUIRED_BLOCKS: TillBlock[] = ["scan", "cart", "totals", "keys"];
+export const COLUMN_WIDTHS = ["1fr", "1.3fr", "1.6fr", "2fr", "260px", "300px", "340px", "380px", "440px"] as const;
+
+export const structureSchema = z.object({
+  id: z.string().regex(/^[a-z0-9_-]{1,40}$/),
+  name: z.string().trim().min(1).max(40),
+  icon: z.string().max(8).default("🧩"),
+  cols: z.array(z.object({ w: z.enum(COLUMN_WIDTHS), blocks: z.array(z.enum(TILL_BLOCKS)).max(TILL_BLOCKS.length) })).min(1).max(3),
+  /** Blocks in a bar under the columns. */
+  bottom: z.array(z.enum(TILL_BLOCKS)).max(TILL_BLOCKS.length).default([]),
+  /** The bar is a sheet the cashier pulls up (a tablet held upright). */
+  sheet: z.boolean().default(false),
+  /** Only the first buttons show; the rest open from «⋯ المزيد». */
+  collapseKeys: z.boolean().default(false),
+  /** The tiles show on every layout, not only the restaurant's and the clothes shop's. */
+  showGrid: z.boolean().default(false),
+  /** The departments run down the side of the tiles instead of across the top. */
+  sideCats: z.boolean().default(false),
+});
+export type TillStructure = z.infer<typeof structureSchema>;
+
+const col = (w: (typeof COLUMN_WIDTHS)[number], ...blocks: TillBlock[]) => ({ w, blocks });
+const MAIN: TillBlock[] = ["scan", "grid", "quick", "tabs", "cart"];
+export const STRUCTURES: TillStructure[] = [
+  { id: "classic", name: "كلاسيكي", icon: "🧾", cols: [col("1fr", ...MAIN), col("380px", "totals", "keys")], bottom: [], sheet: false, collapseKeys: false, showGrid: false, sideCats: false },
+  { id: "mirror", name: "معكوس", icon: "🔁", cols: [col("380px", "totals", "keys"), col("1fr", ...MAIN)], bottom: [], sheet: false, collapseKeys: false, showGrid: false, sideCats: false },
+  { id: "three", name: "ثلاث أعمدة", icon: "🍽️", cols: [col("1.3fr", "scan", "grid", "quick"), col("1.3fr", "tabs", "cart"), col("340px", "totals", "keys")], bottom: [], sheet: false, collapseKeys: false, showGrid: true, sideCats: true },
+  { id: "wide", name: "سوبرماركت عريض", icon: "🛒", cols: [col("1fr", ...MAIN)], bottom: ["totals", "keys"], sheet: false, collapseKeys: false, showGrid: false, sideCats: false },
+  { id: "compact", name: "مضغوط (لابتوب)", icon: "💻", cols: [col("1fr", ...MAIN), col("300px", "totals", "keys")], bottom: [], sheet: false, collapseKeys: true, showGrid: false, sideCats: false },
+  { id: "tablet", name: "تابلت عمودي", icon: "📲", cols: [col("1fr", "scan", "grid", "quick")], bottom: ["tabs", "cart", "totals", "keys"], sheet: true, collapseKeys: true, showGrid: true, sideCats: false },
+];
+export const STRUCTURE_TEXT: Record<string, string> = {
+  classic: "السلة يمين والمجموع والأزرار يسار.",
+  mirror: "المجموع والأزرار يمين والسلة يسار.",
+  three: "الأقسام والمربعات، وبعدها السلة، وبعدها المجموع.",
+  wide: "السلة بعرض الشاشة، والمجموع والدفع في شريط تحت.",
+  compact: "للشاشات الصغيرة: أزرار أقل والباقي في «المزيد».",
+  tablet: "المربعات فوق، والسلة والدفع تطلع من تحت.",
+};
+
+/** Each block once, and the ones a sale needs always somewhere. */
+export function normalizeStructure(st: TillStructure): TillStructure {
+  const seen = new Set<TillBlock>();
+  const keep = (list: TillBlock[]) => list.filter((b) => (seen.has(b) ? false : (seen.add(b), true)));
+  const cols = st.cols.map((c) => ({ ...c, blocks: keep(c.blocks) }));
+  const bottom = keep(st.bottom);
+  const missing = REQUIRED_BLOCKS.filter((b) => !seen.has(b));
+  if (missing.length) cols[cols.length - 1].blocks.push(...missing);
+  return { ...st, cols, bottom };
+}
+
+export const TILL_THEMES = ["light", "dark", "blue", "green", "purple", "sand", "contrast"] as const;
+export type TillTheme = (typeof TILL_THEMES)[number];
+export const THEME_INFO: Record<TillTheme, { label: string; bg: string; panel: string; brand: string; ink: string }> = {
+  light: { label: "فاتح", bg: "#f1f5f9", panel: "#ffffff", brand: "#0f766e", ink: "#0f172a" },
+  dark: { label: "داكن", bg: "#0b1220", panel: "#111827", brand: "#14b8a6", ink: "#e2e8f0" },
+  blue: { label: "أزرق", bg: "#eff6ff", panel: "#ffffff", brand: "#1d4ed8", ink: "#0f172a" },
+  green: { label: "أخضر", bg: "#f0fdf4", panel: "#ffffff", brand: "#15803d", ink: "#052e16" },
+  purple: { label: "بنفسجي", bg: "#f5f3ff", panel: "#ffffff", brand: "#6d28d9", ink: "#1e1b4b" },
+  sand: { label: "رملي", bg: "#f5efe3", panel: "#fffdf8", brand: "#b45309", ink: "#292524" },
+  contrast: { label: "تباين عالي", bg: "#ffffff", panel: "#ffffff", brand: "#000000", ink: "#000000" },
+};
+export const TILL_FONTS = ["system", "tahoma", "arial", "naskh", "kufi"] as const;
+export const FONT_LABELS: Record<(typeof TILL_FONTS)[number], string> = { system: "خط الجهاز", tahoma: "Tahoma", arial: "Arial", naskh: "نسخ", kufi: "كوفي" };
+export const TILL_DENSITIES = ["comfortable", "compact"] as const;
+
+const pickMap = z.record(z.string().uuid(), z.string().max(40));
+
 const layoutId = z.enum(TILL_LAYOUTS);
 
 export const tillLayoutSchema = z.object({
@@ -126,6 +207,16 @@ export const tillLayoutSchema = z.object({
   bigTotal: z.boolean().nullable().default(null),
   /** The notes on the one-tap cash buttons, in dinars. */
   cashNotes: z.array(z.number().positive().max(1000)).max(6).default([50, 20, 10, 5]),
+  /** The screen's frame for the shop, a till and a cashier: a ready one's id or one of the shop's own. */
+  frame: z.object({ shop: z.string().max(40).default("classic"), devices: pickMap.default({}), users: pickMap.default({}) }).default({}),
+  /** Frames the owner built or copied from the platform's library. */
+  structures: z.array(structureSchema).max(20).default([]),
+  /** Colours, spacing and type; a cashier can pick other colours for themselves. */
+  theme: z.object({
+    name: z.enum(TILL_THEMES).default("light"),
+    density: z.enum(TILL_DENSITIES).default("comfortable"),
+    font: z.enum(TILL_FONTS).default("system"),
+  }).default({}),
 });
 export type TillLayoutSettings = z.infer<typeof tillLayoutSchema>;
 
@@ -167,3 +258,56 @@ export function keyOf(s: TillLayoutSettings, a: TillAction): string {
   const m = keyMap(s);
   return Object.keys(m).find((k) => m[k] === a) ?? "";
 }
+
+/** A frame by id: the ready ones, then the shop's own; anything unknown is the classic one. */
+export function structureById(s: Pick<TillLayoutSettings, "structures">, id: string | null | undefined): TillStructure {
+  const st = STRUCTURES.find((x) => x.id === id) ?? s.structures.find((x) => x.id === id) ?? STRUCTURES[0];
+  return normalizeStructure(st);
+}
+
+/** The frame this cashier gets on this till: the cashier's, else the till's, else the shop's. */
+export function pickStructure(s: TillLayoutSettings, deviceId?: string | null, userId?: string | null): TillStructure {
+  const known = (id?: string) => !!id && (STRUCTURES.some((x) => x.id === id) || s.structures.some((x) => x.id === id));
+  const u = userId ? s.frame.users[userId] : undefined;
+  const d = deviceId ? s.frame.devices[deviceId] : undefined;
+  return structureById(s, known(u) ? u : known(d) ? d : s.frame.shop);
+}
+
+/** A frame as a short code, to paste in another shop. */
+export function structureCode(st: TillStructure): string {
+  const json = JSON.stringify({ v: 1, ...st });
+  const bytes = new TextEncoder().encode(json);
+  let bin = "";
+  bytes.forEach((b) => (bin += String.fromCharCode(b)));
+  return `SALE7-FRAME:${btoa(bin)}`;
+}
+
+/** Reads a pasted frame code; null if it isn't one. */
+export function readStructureCode(code: string): TillStructure | null {
+  try {
+    const m = code.trim().match(/^SALE7-FRAME:([A-Za-z0-9+/=]+)$/);
+    if (!m) return null;
+    const bin = atob(m[1]);
+    const json = new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
+    const r = structureSchema.safeParse(JSON.parse(json));
+    return r.success ? normalizeStructure(r.data) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The customer screen's slides between sales: the shop's offers, its name, a picture. */
+export const displayAdsSchema = z.object({
+  seconds: z.number().int().min(3).max(60).default(8),
+  /** Show the slides beside the bill while the cashier rings items up, not only between sales. */
+  duringSale: z.boolean().default(false),
+  slides: z.array(z.object({
+    id: z.string().regex(/^[a-z0-9_-]{1,40}$/),
+    title: z.string().trim().max(80).default(""),
+    text: z.string().trim().max(200).default(""),
+    /** A small picture (a data: URL made on the owner's computer) or a link to one. */
+    image: z.string().max(400_000).regex(/^(data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+|https:\/\/\S+)$/).nullable().default(null),
+    bg: z.string().regex(/^#[0-9a-fA-F]{6}$/).default("#0f766e"),
+  })).max(8).default([]),
+});
+export type DisplayAds = z.infer<typeof displayAdsSchema>;

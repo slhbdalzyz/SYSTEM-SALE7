@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { FramesTab } from "./Frames";
 import { FEATURES, formatMoney, ROLE_NAMES, HEALTH_LABELS, platformCan, PLATFORM_ROLE_LABELS, AI_MODELS, AI_PROVIDERS, AI_DEFAULT_MODEL, AI_KEY_PREFIX, type AiProvider, type Feature, type Health, type PlatformPerm, type PlatformRole } from "@pos/shared";
 import { downloadCsv } from "../admin/charts";
 import { AgentPage, AgentsTab, AnnouncementsTab, AuditTab, CouponsTab, HealthBadge, MyAccount, openInvoice, RemindersTab, RevenueTab, TeamTab, TicketsTab } from "./Pro";
@@ -93,6 +94,7 @@ const TABS: Record<string, { label: string; perm: PlatformPerm | null }> = {
   agents: { label: "الوكلاء", perm: "agents" },
   plans: { label: "الباقات", perm: "plans" },
   licenses: { label: "تراخيص سطح المكتب", perm: "payments" },
+  frames: { label: "هياكل الكاشير", perm: "settings" },
   team: { label: "الفريق", perm: "team" },
   audit: { label: "السجل", perm: "audit" },
   errors: { label: "أخطاء السيرفر", perm: "errors" },
@@ -138,6 +140,7 @@ function Console({ call, logout }: { call: Call; logout: () => void }) {
           {current === "agents" && <AgentsTab call={call} open={setTenant} />}
           {current === "plans" && <Plans call={call} />}
           {current === "licenses" && <LicensesTab call={call} />}
+          {current === "frames" && <FramesTab call={call} />}
           {current === "team" && <TeamTab call={call} />}
           {current === "audit" && <AuditTab call={call} open={setTenant} />}
           {current === "errors" && <Errors call={call} />}

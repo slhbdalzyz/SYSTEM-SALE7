@@ -4,8 +4,9 @@ import {
   keyMap, layoutForBusiness, readShopSettings, tillButtons, type TillAction, type TillButton, type TillLayout, type TillLayoutSettings,
 } from "@pos/shared";
 import type { Call } from "./Admin";
+import { TillFrameSection } from "./TillFrameSection";
 
-interface Device { id: string; name: string; kind?: string; store_name?: string }
+interface Device { id: string; name: string; kind?: string; store_id?: string }
 interface User { id: string; name: string; role: string; active?: boolean }
 
 /**
@@ -90,7 +91,7 @@ export function TillLayoutCard({ call, businessType }: { call: Call; businessTyp
           <summary>واجهة خاصة لجهاز أو لكاشير</summary>
           <div className="stack" style={{ gap: 6, marginTop: 8 }}>
             {devices.map((d) => (
-              <label key={d.id} className="row" style={{ gap: 8 }}>🖥 {d.name}{d.store_name ? <small className="muted"> · {d.store_name}</small> : null}
+              <label key={d.id} className="row" style={{ gap: 8 }}>🖥 {d.name}
                 <select value={s.devices[d.id] ?? ""} onChange={(e) => pickFor("devices", d.id, e.target.value)} style={{ width: "auto" }}>
                   <option value="">زي المحل</option>
                   {TILL_LAYOUTS.map((id) => <option key={id} value={id}>{LAYOUT_SPECS[id].icon} {LAYOUT_SPECS[id].label}</option>)}
@@ -143,6 +144,9 @@ export function TillLayoutCard({ call, businessType }: { call: Call; businessTyp
         </div>
       </details>
 
+      <hr />
+      <TillFrameSection call={call} s={s} save={(n) => void save(n)} devices={devices} users={users} />
+      <hr />
       <label className="check">
         <input type="checkbox" checked={s.bigTotal ?? LAYOUT_SPECS[shopLayout].bigTotal} onChange={(e) => void save({ ...s, bigTotal: e.target.checked })} />
         المجموع كبير فوق، مع عدد القطع والباقي للزبون
