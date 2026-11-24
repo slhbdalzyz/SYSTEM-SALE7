@@ -9,6 +9,7 @@ import { Staff } from "./Staff";
 import { Devices } from "./Devices";
 import { PayMethodsCard } from "./PayMethods";
 import { ShiftCard } from "./ShiftCard";
+import { TillLayoutCard } from "./TillLayoutCard";
 import { LoyaltyCard } from "./LoyaltyCard";
 import { QuickKeys } from "./QuickKeys";
 import { Customers } from "./Customers";
@@ -254,7 +255,7 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
           {shown === "offers" && <Offers call={call} storeId={store.id} stores={me.stores} />}
           {shown === "customers" && <Customers call={call} isOwner={me.user.role === "owner"} tiers={mods.tiers} />}
           {shown === "invoices" && <Invoices call={call} storeId={store.id} stores={open} />}
-          {shown === "settings" && <><ShopSettings call={call} storeName={store.name} onSaved={loadMe} openAlerts={() => setTab("alerts")} /><PayMethodsCard call={call} /><ShiftCard call={call} />{me.tenant.features?.loyalty !== false && <LoyaltyCard call={call} isOwner={me.user.role === "owner"} />}<SecurityCard call={call} /></>}
+          {shown === "settings" && <><ShopSettings call={call} storeName={store.name} onSaved={loadMe} openAlerts={() => setTab("alerts")} /><PayMethodsCard call={call} /><TillLayoutCard call={call} businessType={me.tenant.business_type} /><ShiftCard call={call} />{me.tenant.features?.loyalty !== false && <LoyaltyCard call={call} isOwner={me.user.role === "owner"} />}<SecurityCard call={call} /></>}
           {shown === "mypay" && !can("settings") && <SecurityCard call={call} />}
           {shown === "alerts" && <><Alerts call={call} /><AlertSettings call={call} isOwner={isOwner} /></>}
           {shown === "expenses" && <Expenses call={call} storeId={store.id} stores={open} />}
