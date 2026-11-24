@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { formatMoney, fromMinor, toMinor } from "@pos/shared";
 import type { Call } from "../admin/Admin";
 import { session } from "../session";
-import { buildBackup, commitRestore, downloadBlob, readManifest, uploadBackup, type BackupManifest } from "./backup";
+import { buildBackup, commitRestore, downloadBlob, readManifest, uploadBackup, type BackupManifest, type RestorePart } from "./backup";
 import { disablePush, enablePush, pushEnabled, pushSupported } from "./push";
 
 interface S { lowStock: boolean; returnOverMinor: number; discountOverMinor: number; cashDiffOverMinor: number; overCreditLimit: boolean; expiryDays: number; pushKey: string | null }
@@ -130,7 +130,20 @@ const TABLE_NAMES: [string, string][] = [["products", "صنف"], ["sales", "فا
  * Puts the shop back as a backup file had it. The file is checked and uploaded first; the swap
  * happens only after the owner's password, all at once, and a copy of today's data comes first.
  */
-export function RestoreCard() {
+const PARTS: [RestorePart, string, string][] = [
+  ["products", "الأصناف", "الأقسام والأصناف بأسعارها وباركوداتها وعبواتها، بدون كميات"],
+  ["customers", "العملاء", "العملاء بأرقامهم وحدود دينهم"],
+  ["suppliers", "الموردين", "الموردين وأرقامهم"],
+  ["moves", "الفواتير وكل الحركات", "المبيعات والمشتريات والدفعات والمخزون والمصروفات، ومعاها الأصناف والعملاء والموردين اللي تحتاجهم. الديون والكميات ترجع زي ما كانت"],
+];
+
+/**
+ * Puts the shop back as a backup file had it, or (partsOnly, or the owner picks parts) adds
+ * only some of the file to what the shop has now: after «بداية جديدة», say, the customers alone.
+ */
+export function RestoreCard({ partsOnly = false }: { partsOnly?: boolean } = {}) {
+  const [whole, setWhole] = useState(!partsOnly);
+  const [parts, setParts] = useState<RestorePart[]>([]);
   const [file, setFile] = useState<File | null>(null);
   const [m, setM] = useState<BackupManifest | null>(null);
   const [saveFirst, setSaveFirst] = useState(true);
@@ -169,7 +182,7 @@ export function RestoreCard() {
         setJob(id);
       }
       setBusy("نرجّعوا البيانات…");
-      await commitRestore(session.adminToken, id, password);
+      await commitRestore(session.adminToken, id, password, whole ? undefined : parts);
       setDone(true);
     } catch (e) {
       const msg = (e as Error).message;
@@ -185,16 +198,25 @@ export function RestoreCard() {
   if (done) {
     return (
       <div className="card stack">
-        <b>استرجاع نسخة احتياطية</b>
-        <div className="notice">تم الاسترجاع ✓ البيانات رجعت زي ما كانت يوم {m && new Date(m.createdAt).toLocaleString("en-GB")}. أجهزة الكاشير تحدّث الأصناف بروحها أول ما تتصل.</div>
+        <b>{partsOnly ? "استرجاع جزء من النسخة" : "استرجاع نسخة احتياطية"}</b>
+        <div className="notice">
+          {whole
+            ? <>تم الاسترجاع ✓ البيانات رجعت زي ما كانت يوم {m && new Date(m.createdAt).toLocaleString("en-GB")}.</>
+            : <>تم ✓ رجعنا {PARTS.filter(([k]) => parts.includes(k)).map(([, l]) => l).join(" و")} من نسخة يوم {m && new Date(m.createdAt).toLocaleString("en-GB")}، وزدناهم على اللي عندك.</>}
+          {" "}أجهزة الكاشير تحدّث الأصناف بروحها أول ما تتصل.
+        </div>
         <button className="primary" onClick={() => location.reload()}>تحديث الصفحة</button>
       </div>
     );
   }
   return (
     <div className="card stack">
-      <b>استرجاع نسخة احتياطية</b>
-      <span className="muted small">لو صار مشكل، رجّع بيانات المحل من ملف نسخة احتياطية نزّلته قبل.</span>
+      <b>{partsOnly ? "استرجاع جزء من النسخة" : "استرجاع نسخة احتياطية"}</b>
+      <span className="muted small">
+        {partsOnly
+          ? "ترجّع جزء بس من ملف نسخة احتياطية (ملف .ndjson.gz اللي ينزل قبل التصفير)، ويتزاد على اللي عندك بدون ما يمسح شي."
+          : "لو صار مشكل، رجّع بيانات المحل من ملف نسخة احتياطية نزّلته قبل، كامل أو جزء منه بس."}
+      </span>
       <input type="file" accept=".gz,.ndjson,application/gzip,application/x-ndjson" disabled={!!busy} onChange={(e) => pick(e.target.files?.[0])} />
       {m && (
         <>
@@ -202,16 +224,35 @@ export function RestoreCard() {
             النسخة من يوم <b>{new Date(m.createdAt).toLocaleString("en-GB")}</b>، فيها{" "}
             {TABLE_NAMES.filter(([n]) => count(n)).map(([n, label]) => `${count(n)} ${label}`).join("، ") || "بيانات قليلة"}.
           </div>
-          <div className="notice">
-            الاسترجاع يرجّع المحل زي ما كان في التاريخ هذا: أي مبيعات أو أصناف أو مشتريات صارت بعده تنمسح.
-            قبل ما تبدا، تأكد إن كل أجهزة الكاشير متصلة وبعتت مبيعاتها. كلمات السر والاشتراك ما يتغيروش.
-          </div>
+          {!partsOnly && (
+            <div className="row" style={{ gap: 12, flexWrap: "wrap" }}>
+              <label className="check"><input type="radio" name="restore-whole" checked={whole} disabled={!!busy || !!job} onChange={() => setWhole(true)} /> النسخة كاملة</label>
+              <label className="check"><input type="radio" name="restore-whole" checked={!whole} disabled={!!busy || !!job} onChange={() => setWhole(false)} /> جزء منها بس</label>
+            </div>
+          )}
+          {!whole && (
+            <div className="stack" style={{ gap: 4 }}>
+              {PARTS.map(([k, label, hint]) => (
+                <label key={k} className="check" style={{ alignItems: "flex-start" }}>
+                  <input type="checkbox" checked={parts.includes(k)} disabled={!!busy} onChange={(e) => setParts(e.target.checked ? [...parts, k] : parts.filter((x) => x !== k))} />
+                  <span><b>{label}</b> <span className="muted small">{hint}</span></span>
+                </label>
+              ))}
+              <span className="muted small">اللي موجود عندك توا ما يتغيّرش: الصنف أو العميل اللي موجود بنفس الاسم أو الباركود أو الرقم ما يتكررش.</span>
+            </div>
+          )}
+          {whole && (
+            <div className="notice">
+              الاسترجاع يرجّع المحل زي ما كان في التاريخ هذا: أي مبيعات أو أصناف أو مشتريات صارت بعده تنمسح.
+              قبل ما تبدا، تأكد إن كل أجهزة الكاشير متصلة وبعتت مبيعاتها. كلمات السر والاشتراك ما يتغيروش.
+            </div>
+          )}
           <label className="check"><input type="checkbox" checked={saveFirst} disabled={!!busy || !!job} onChange={(e) => setSaveFirst(e.target.checked)} /> نزّل نسخة من البيانات الحالية قبل</label>
           <label>
             كلمة السر متاعك للتأكيد
             <input type="password" autoComplete="current-password" value={password} disabled={!!busy} onChange={(e) => setPassword(e.target.value)} />
           </label>
-          <button className="danger" onClick={run} disabled={!!busy || !password}>{busy ?? "استرجاع النسخة"}</button>
+          <button className={whole ? "danger" : "primary"} onClick={run} disabled={!!busy || !password || (!whole && !parts.length)}>{busy ?? (whole ? "استرجاع النسخة" : "استرجاع اللي اخترته")}</button>
         </>
       )}
       {error && <div className="error">{error}</div>}

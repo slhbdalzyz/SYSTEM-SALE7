@@ -14,6 +14,8 @@ interface Store {
   /** The latest time this computer has seen: a clock turned back past it means someone is cheating the date. */
   lastSeen: string | null;
   checkedOnlineAt: string | null;
+  /** When the first shop on this computer was made: the trial runs from then. */
+  trialFrom?: string | null;
 }
 
 interface Q {
@@ -104,7 +106,16 @@ export class LocalLicense {
     if (lic) {
       await db.query(`UPDATE tenants SET status = 'active', status_reason = NULL, paid_until = ($2::date + interval '1 day' - interval '1 second') WHERE id = $1`, [t.id, lic.until]);
     } else {
-      await db.query(`UPDATE tenants SET status = 'trial', status_reason = NULL, paid_until = created_at + interval '${TRIAL_DAYS} days' WHERE id = $1`, [t.id]);
+      // The trial counts from the first shop ever made on this computer, so starting again
+      // («إعادة ضبط») does not start a new trial.
+      if (!this.store.trialFrom) {
+        this.store.trialFrom = new Date(t.created_at).toISOString();
+        this.save();
+      }
+      await db.query(
+        `UPDATE tenants SET status = 'trial', status_reason = NULL, paid_until = LEAST(created_at, $2::timestamptz) + interval '${TRIAL_DAYS} days' WHERE id = $1`,
+        [t.id, this.store.trialFrom],
+      );
     }
     forgetTenant(t.id);
   }

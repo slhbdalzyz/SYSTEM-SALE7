@@ -27,6 +27,7 @@ import { moneyRoutes } from "./routes/money";
 import { settingsRoutes } from "./routes/settings";
 import { invoiceRoutes } from "./routes/invoices";
 import { restoreRoutes } from "./routes/restore";
+import { resetRoutes } from "./routes/reset";
 import { countRoutes } from "./routes/counts";
 import { zakatRoutes } from "./routes/zakat";
 import { loyaltyRoutes } from "./routes/loyalty";
@@ -143,6 +144,7 @@ export async function buildApp(opts: AppOptions) {
   await app.register(subscriptionRoutes);
   await app.register(ownerRoutes);
   await app.register(restoreRoutes);
+  await app.register(resetRoutes);
   await app.register(payrollRoutes);
   await app.register(moneyRoutes);
   await app.register(settingsRoutes);

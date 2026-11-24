@@ -131,6 +131,26 @@ async function restore(file: Buffer, password: string | null) {
   console.log("restored a backup");
 }
 
+/** Puts an empty database in place of this one, for «إعادة ضبط». The one it replaces is kept aside. */
+async function wipe() {
+  const tmp = path.join(dataDir, `db-fresh-${Date.now()}`);
+  const fresh = await PGlite.create(tmp, { parsers: pgliteParsers });
+  await migrate(fresh, migrationsDir);
+  await fresh.close();
+  await db.exclusive(async () => {
+    await pg.close();
+    const aside = path.join(root, "backups", "replaced");
+    mkdirSync(aside, { recursive: true });
+    renameSync(dbDir, path.join(aside, `db-${Date.now()}`));
+    for (const old of readdirSync(aside).sort().slice(0, -3)) rmSync(path.join(aside, old), { recursive: true, force: true });
+    renameSync(tmp, dbDir);
+    pg = await PGlite.create(dbDir, { parsers: pgliteParsers });
+    db.swap(pg);
+  });
+  await license.apply(db);
+  console.log("started again with an empty database");
+}
+
 // The platform's public key is put in the server when the Windows app is built (see build-local-server.mjs).
 const publicKeys = (process.env.POS_LICENSE_PUBLIC_KEY ?? "").split(",").map((k) => k.trim()).filter(Boolean);
 const cloudUrl = process.env.POS_CLOUD_URL === "" ? null : (process.env.POS_CLOUD_URL ?? "https://sale7-pos.vercel.app/api");
@@ -154,6 +174,7 @@ await app.register(localRoutes, {
   stop: () => void stop("asked"),
   backups,
   restore,
+  wipe,
   license,
   network: { get: () => ({ lan: readNetwork(dataDir).lan, port, addresses: lanAddresses(), web: !!webDir }), set: (lan) => networkCtl.set(lan) },
 });

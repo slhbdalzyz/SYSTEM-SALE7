@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { ownBank } from "./money";
 import { checkExpirySoon } from "../expiry";
-import { audit } from "../db";
+import { audit, type Db } from "../db";
 import { HttpError, authenticate, requirePerm, requireRole } from "../auth";
 import { DEFAULT_ALERT_SETTINGS, alertSettings, checkZakatDue, flushPushes, pushPublicKey } from "../alerts";
 
@@ -312,33 +312,12 @@ export async function ownerRoutes(app: FastifyInstance) {
 
   /** What a backup will hold. The client then fetches each table page by page. */
   app.get("/backup", { preHandler: backupAllowed }, async (req) => {
-    const counts = await Promise.all(
-      BACKUP_TABLES.map(async (t) => {
-        const r = await app.db.query(`SELECT count(*)::int AS n FROM ${t.name} WHERE ${t.own ?? "tenant_id"} = $1`, [req.user.tid]);
-        return { name: t.name, rows: r.rows[0].n as number };
-      }),
-    );
-    const v = (await app.db.query(`SELECT max(name) AS v FROM schema_migrations`).catch(() => ({ rows: [{ v: null }] }))).rows[0].v;
+    const m = await backupManifest(app.db, req.user.tid);
     await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, deviceId: req.user.did ?? null, action: "backup.start" });
-    return { format: "pos-backup-1", schema: v, tenantId: req.user.tid, createdAt: new Date().toISOString(), tables: counts };
+    return m;
   });
 
-  app.get("/backup/:table", { preHandler: backupAllowed }, async (req) => {
-    const { table } = z.object({ table: z.string() }).parse(req.params);
-    const q = z.object({ after: z.string().max(40).optional(), limit: z.coerce.number().int().min(1).max(2000).default(1000) }).parse(req.query);
-    const t = BACKUP_TABLES.find((x) => x.name === table);
-    if (!t) throw new HttpError(404, "جدول غير معروف");
-    if (q.after && !(t.key === "bigint" ? /^\d+$/ : /^[0-9a-f-]{36}$/).test(q.after)) throw new HttpError(400, "بيانات غير صحيحة");
-    const r = await app.db.query(
-      `SELECT * FROM ${t.name} WHERE ${t.own ?? "tenant_id"} = $1 AND ($2::${t.key} IS NULL OR id > $2::${t.key}) ORDER BY id LIMIT $3`,
-      [req.user.tid, q.after ?? null, q.limit],
-    );
-    const rows = r.rows.map((row) => {
-      for (const c of t.omit ?? []) delete row[c];
-      return row;
-    });
-    return { rows, next: rows.length === q.limit ? String(rows[rows.length - 1].id) : null };
-  });
+  app.get("/backup/:table", { preHandler: backupAllowed }, async (req) => backupPage(app.db, req.user.tid, req.params, req.query));
 
   /** The owner turns daily backups on or off for one till. */
   app.patch("/devices/:id/backup", owners, async (req) => {
@@ -349,4 +328,34 @@ export async function ownerRoutes(app: FastifyInstance) {
     await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "device.backup", entity: "device", entityId: id, data: { backup } });
     return { ok: true };
   });
+}
+
+/** A shop's backup manifest: the format, the schema it came from, and each table's row count. */
+export async function backupManifest(db: Db, tid: string) {
+  const counts = await Promise.all(
+    BACKUP_TABLES.map(async (t) => {
+      const r = await db.query(`SELECT count(*)::int AS n FROM ${t.name} WHERE ${t.own ?? "tenant_id"} = $1`, [tid]);
+      return { name: t.name, rows: r.rows[0].n as number };
+    }),
+  );
+  const v = (await db.query(`SELECT max(name) AS v FROM schema_migrations`).catch(() => ({ rows: [{ v: null }] }))).rows[0].v;
+  return { format: "pos-backup-1", schema: v, tenantId: tid, createdAt: new Date().toISOString(), tables: counts };
+}
+
+/** One page of one table of a shop's backup. */
+export async function backupPage(db: Db, tid: string, params: unknown, query: unknown) {
+  const { table } = z.object({ table: z.string() }).parse(params);
+  const q = z.object({ after: z.string().max(40).optional(), limit: z.coerce.number().int().min(1).max(2000).default(1000) }).parse(query);
+  const t = BACKUP_TABLES.find((x) => x.name === table);
+  if (!t) throw new HttpError(404, "جدول غير معروف");
+  if (q.after && !(t.key === "bigint" ? /^\d+$/ : /^[0-9a-f-]{36}$/).test(q.after)) throw new HttpError(400, "بيانات غير صحيحة");
+  const r = await db.query(
+    `SELECT * FROM ${t.name} WHERE ${t.own ?? "tenant_id"} = $1 AND ($2::${t.key} IS NULL OR id > $2::${t.key}) ORDER BY id LIMIT $3`,
+    [tid, q.after ?? null, q.limit],
+  );
+  const rows = r.rows.map((row) => {
+    for (const c of t.omit ?? []) delete row[c];
+    return row;
+  });
+  return { rows, next: rows.length === q.limit ? String(rows[rows.length - 1].id) : null };
 }

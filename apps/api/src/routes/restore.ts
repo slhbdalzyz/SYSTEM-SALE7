@@ -4,6 +4,8 @@ import { z } from "zod";
 import { audit, inTx, type Tx } from "../db";
 import { HttpError, requireRole } from "../auth";
 import { BACKUP_TABLES } from "./owner";
+import { CARRIED } from "./reset";
+import { FLOWS } from "./money";
 
 /**
  * Restoring a backup file made by GET /backup.
@@ -34,6 +36,24 @@ const TENANT_COLS = ["name", "currency", "business_type", "phone", "alert_settin
 const REPLACE = BACKUP_TABLES.filter((t) => !MERGE.includes(t.name) && !SKIP.includes(t.name));
 const RESTORED = BACKUP_TABLES.filter((t) => !SKIP.includes(t.name) || t.name === "tenants");
 const MAX_ROWS = 5_000_000;
+
+/**
+ * A partial restore brings back only some parts of a file and adds them to what the shop has now,
+ * without removing anything: after «بداية جديدة», the owner can bring back the customers alone,
+ * or the old invoices. What is already here wins; see restoreParts.
+ */
+export const PARTS = ["products", "customers", "suppliers", "moves"] as const;
+type Part = (typeof PARTS)[number];
+const PART_TABLES: Record<Part, string[]> = {
+  products: ["categories", "products", "product_units", "barcodes", "quick_groups", "quick_keys", "offers", "kits"],
+  customers: ["customers"],
+  suppliers: ["suppliers"],
+  moves: [
+    "shifts", "sales", "sale_lines", "payments", "loyalty_entries", "customer_payments", "purchase_invoices", "purchase_lines",
+    "supplier_payments", "stock_transfers", "stock_transfer_lines", "stock_movements", "product_serials", "repairs", "quotes",
+    "installment_plans", "expenses", "payroll_months", "payroll_entries", "money_movements", "alerts",
+  ],
+};
 
 const manifestSchema = z.object({
   format: z.literal("pos-backup-1"),
@@ -92,7 +112,7 @@ export async function restoreRoutes(app: FastifyInstance) {
   /** Swaps the shop's data for the file's. Asks for the owner's password again. */
   app.post("/restore/:id/commit", owners, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
-    const { password } = z.object({ password: z.string().min(1).max(200) }).parse(req.body);
+    const { password, parts } = z.object({ password: z.string().min(1).max(200), parts: z.array(z.enum(PARTS)).max(PARTS.length).optional() }).parse(req.body);
     const j = await job(id, req.user.tid);
     const me = (await app.db.query(`SELECT password_hash FROM users WHERE id = $1 AND tenant_id = $2`, [req.user.sub, req.user.tid])).rows[0];
     if (!me?.password_hash || !(await bcrypt.compare(password, me.password_hash))) throw new HttpError(401, "كلمة السر غلط");
@@ -106,6 +126,14 @@ export async function restoreRoutes(app: FastifyInstance) {
     if ((staged.tenants ?? 0) > 1) throw new HttpError(400, "الملف هذا مش نسخة احتياطية صحيحة");
 
     const tid = req.user.tid;
+    if (parts?.length) {
+      const added = await inTx(app.db, (tx) => restoreParts(tx, id, tid, req.user.sub, parts, j.manifest.createdAt)).catch((e: { code?: string }) => {
+        if (e instanceof HttpError) throw e;
+        if (e.code && /^23/.test(e.code)) throw new HttpError(400, `ما قدرناش نرجّعوا الجزء هذا: البيانات فيها تعارض (${e.code}). ما تغيّر شي`);
+        throw e;
+      });
+      return { ok: true, rows: added };
+    }
     const counts = await inTx(app.db, async (tx) => {
       await tx.query(`SELECT 1 FROM tenants WHERE id = $1 FOR UPDATE`, [tid]);
       const cols = await columns(tx);
@@ -221,4 +249,229 @@ async function sameShopOnly(tx: Tx, tid: string) {
     );
     if (bad.rowCount) throw new HttpError(400, "النسخة فيها بيانات مش تابعة للمحل هذا");
   }
+}
+
+/**
+ * Adds the chosen parts of the staged file to the shop, keeping everything that is here now.
+ *
+ *  - Old invoices need their items, customers and suppliers, so «moves» brings those too.
+ *  - A row already here (same id) is left as it is.
+ *  - A row that is the same thing under another id (a department with the same name, a customer
+ *    with the same phone, an item with the same barcode or name, brought back from Excel) is
+ *    matched to the one here, and everything in the file that pointed at it points at it instead.
+ *  - Invoice, quote, repair and transfer numbers taken since are given new ones.
+ *  - A row that still can't go in is left out, with whatever depends on it.
+ *  - Bringing back the history replaces the opening figures that stood in for it (what
+ *    «بداية جديدة» carried over, opening stock and balances entered again from Excel), so
+ *    nothing is counted twice.
+ */
+async function restoreParts(tx: Tx, job: string, tid: string, ownerId: string, parts: Part[], createdAt: string) {
+  const moves = parts.includes("moves");
+  const chosen = new Set<string>(moves ? Object.values(PART_TABLES).flat() : parts.flatMap((p) => PART_TABLES[p]));
+  const order = BACKUP_TABLES.filter((t) => chosen.has(t.name) || MERGE.includes(t.name));
+  const names = order.map((t) => t.name);
+  await tx.query(`SELECT 1 FROM tenants WHERE id = $1 FOR UPDATE`, [tid]);
+  const cols = await columns(tx);
+  const fks = (await foreignKeys(tx)).filter((f) => names.includes(f.child) && names.includes(f.parent) && f.child !== f.parent);
+  // Only the parts asked for: the rest of the file is dropped from the staging area.
+  await tx.query(`DELETE FROM restore_rows WHERE job_id = $1 AND NOT (tbl = ANY($2))`, [job, names]);
+  const staged = (t: string) => `(SELECT * FROM restore_rows WHERE job_id = $1 AND tbl = '${t}') s`;
+  /** The same customer: the same phone, or the same name when neither has a phone. */
+  const sameCustomer = `(c.phone = s.row->>'phone' OR (c.phone IS NULL AND s.row->>'phone' IS NULL AND c.name = s.row->>'name'))`;
+
+  // A link to a table that comes later in the file (a sale's quote, a payroll line's expense) is
+  // dropped: those columns are optional, and the row would otherwise point at nothing yet.
+  for (const f of fks) {
+    if (names.indexOf(f.parent) > names.indexOf(f.child) && f.nullable) {
+      await tx.query(`UPDATE restore_rows SET row = row - '${f.col}' WHERE job_id = $1 AND tbl = $2`, [job, f.child]);
+    }
+  }
+
+  if (moves) {
+    // The history comes back, so the opening figures that stood in for it go. Customers and
+    // suppliers start from what the file had for them, and their invoices count on top, once.
+    await tx.query(`DELETE FROM loyalty_entries WHERE tenant_id = $1 AND note = $2 AND created_at >= $3::timestamptz`, [tid, CARRIED, createdAt]);
+    await tx.query(
+      `UPDATE customers c SET opening_balance_minor = COALESCE((s.row->>'opening_balance_minor')::bigint, 0)
+         FROM ${staged("customers")} WHERE c.tenant_id = $2 AND (c.id = (s.row->>'id')::uuid OR ${sameCustomer})`,
+      [job, tid],
+    );
+    await tx.query(
+      `UPDATE suppliers c SET opening_balance_minor = COALESCE((s.row->>'opening_balance_minor')::bigint, 0)
+         FROM ${staged("suppliers")} WHERE c.tenant_id = $2 AND (c.id = (s.row->>'id')::uuid OR c.name = s.row->>'name')`,
+      [job, tid],
+    );
+  }
+
+  await tx.query(`CREATE TEMP TABLE IF NOT EXISTS restore_map (old_id uuid PRIMARY KEY, new_id uuid NOT NULL)`);
+  await tx.query(`CREATE TEMP TABLE IF NOT EXISTS restore_gone (id uuid PRIMARY KEY)`);
+  /** Rows of `table` that are already here under another id: the file points at those instead. */
+  const match = async (table: string, sql: string) => {
+    if (!names.includes(table)) return;
+    await tx.query(`DELETE FROM restore_map`);
+    await tx.query(`INSERT INTO restore_map (old_id, new_id) SELECT DISTINCT ON (old_id) old_id, new_id FROM (${sql}) x WHERE old_id <> new_id ORDER BY old_id`, [job, tid]);
+    for (const f of fks.filter((x) => x.parent === table)) {
+      await tx.query(
+        `UPDATE restore_rows s SET row = jsonb_set(s.row, '{${f.col}}', to_jsonb(m.new_id::text)) FROM restore_map m
+          WHERE s.job_id = $1 AND s.tbl = $2 AND s.row->>'${f.col}' = m.old_id::text`,
+        [job, f.child],
+      );
+    }
+    await tx.query(`DELETE FROM restore_rows s USING restore_map m WHERE s.job_id = $1 AND s.tbl = $2 AND s.row->>'id' = m.old_id::text`, [job, table]);
+  };
+  await match("categories", `SELECT (s.row->>'id')::uuid AS old_id, c.id AS new_id FROM ${staged("categories")} JOIN categories c ON c.tenant_id = $2 AND c.name = s.row->>'name'`);
+  await match("customers", `SELECT (s.row->>'id')::uuid AS old_id, c.id AS new_id FROM ${staged("customers")} JOIN customers c ON c.tenant_id = $2 AND ${sameCustomer}`);
+  await match("suppliers", `SELECT (s.row->>'id')::uuid AS old_id, c.id AS new_id FROM ${staged("suppliers")} JOIN suppliers c ON c.tenant_id = $2 AND c.name = s.row->>'name'`);
+  await match("kits", `SELECT (s.row->>'id')::uuid AS old_id, k.id AS new_id FROM ${staged("kits")} JOIN kits k ON k.tenant_id = $2 AND k.name = s.row->>'name'`);
+  // The same item: one of its barcodes is here, or the same name, or the same scale code.
+  await match(
+    "products",
+    `SELECT (u.row->>'product_id')::uuid AS old_id, cu.product_id AS new_id
+       FROM restore_rows b
+       JOIN restore_rows u ON u.job_id = b.job_id AND u.tbl = 'product_units' AND u.row->>'id' = b.row->>'unit_id'
+       JOIN barcodes cb ON cb.tenant_id = $2 AND cb.code = b.row->>'code'
+       JOIN product_units cu ON cu.id = cb.unit_id
+      WHERE b.job_id = $1 AND b.tbl = 'barcodes'
+     UNION ALL
+     SELECT (s.row->>'id')::uuid, p.id FROM ${staged("products")} JOIN products p ON p.tenant_id = $2 AND lower(p.name) = lower(s.row->>'name')
+     UNION ALL
+     SELECT (s.row->>'id')::uuid, p.id FROM ${staged("products")} JOIN products p ON p.tenant_id = $2 AND p.scale_code = s.row->>'scale_code'`,
+  );
+  // Their packings: the one here of the same size; any other size is added to the item here.
+  await match(
+    "product_units",
+    `SELECT (s.row->>'id')::uuid AS old_id, u.id AS new_id FROM ${staged("product_units")}
+       JOIN product_units u ON u.tenant_id = $2 AND u.product_id::text = s.row->>'product_id' AND u.factor_milli = (s.row->>'factor_milli')::bigint`,
+  );
+  if (names.includes("barcodes")) {
+    await tx.query(`DELETE FROM restore_rows s USING barcodes b WHERE s.job_id = $1 AND s.tbl = 'barcodes' AND b.tenant_id = $2 AND b.code = s.row->>'code'`, [job, tid]);
+  }
+  if (moves) {
+    // Opening stock entered since (carried by the reset, or from Excel) gives way to the real history.
+    await tx.query(
+      `DELETE FROM stock_movements m WHERE m.tenant_id = $2 AND m.kind = 'adjust' AND m.note IN ($3, 'رصيد أول المدة') AND m.created_at >= $4::timestamptz
+          AND m.product_id::text IN (SELECT s.row->>'product_id' FROM restore_rows s WHERE s.job_id = $1 AND s.tbl = 'stock_movements')`,
+      [job, tid, CARRIED, createdAt],
+    );
+  }
+  // Numbers taken since by new invoices, quotes, repairs or transfers: the old ones get new numbers.
+  if (names.includes("sales")) {
+    await tx.query(
+      `UPDATE restore_rows s SET row = jsonb_set(s.row, '{number}', to_jsonb((s.row->>'number') || '-ق'))
+        WHERE s.job_id = $1 AND s.tbl = 'sales'
+          AND EXISTS (SELECT 1 FROM sales x WHERE x.tenant_id = $2 AND x.number = s.row->>'number' AND x.id::text <> s.row->>'id')`,
+      [job, tid],
+    );
+  }
+  for (const t of ["quotes", "repairs", "stock_transfers"]) {
+    if (!names.includes(t)) continue;
+    await tx.query(
+      `WITH top AS (
+         SELECT GREATEST((SELECT COALESCE(max(number), 0) FROM ${t} WHERE tenant_id = $2),
+                         (SELECT COALESCE(max((r.row->>'number')::int), 0) FROM restore_rows r WHERE r.job_id = $1 AND r.tbl = '${t}')) AS n
+       ), clash AS (
+         SELECT s.seq, row_number() OVER (ORDER BY s.seq) AS n FROM restore_rows s
+          WHERE s.job_id = $1 AND s.tbl = '${t}'
+            AND EXISTS (SELECT 1 FROM ${t} x WHERE x.tenant_id = $2 AND x.number = (s.row->>'number')::int AND x.id::text <> s.row->>'id')
+       )
+       UPDATE restore_rows s SET row = jsonb_set(s.row, '{number}', to_jsonb(top.n + clash.n)) FROM clash, top WHERE s.seq = clash.seq`,
+      [job, tid],
+    );
+  }
+  if (names.includes("product_serials")) {
+    await tx.query(`DELETE FROM restore_rows s USING product_serials p WHERE s.job_id = $1 AND s.tbl = 'product_serials' AND p.tenant_id = $2 AND p.serial = s.row->>'serial'`, [job, tid]);
+  }
+
+  // The treasury before, to take what the old rows bring back off the opening line the reset left.
+  const treasury = async () =>
+    new Map((await tx.query(`WITH f AS (${FLOWS}) SELECT account, COALESCE(bank_id::text, '') AS bank, sum(amount)::bigint AS n FROM f GROUP BY 1, 2`, [tid])).rows.map((r) => [`${r.account}|${r.bank}`, Number(r.n)]));
+  const moneyBefore = moves ? await treasury() : null;
+
+  const out: Record<string, number> = {};
+  for (const t of order) {
+    const added = await loadMissing(tx, job, tid, t, cols[t.name] ?? []);
+    if (added && !MERGE.includes(t.name)) out[t.name] = added;
+    // What is still not here (it clashed with something) is left out, with what points at it.
+    const children = fks.filter((f) => f.parent === t.name);
+    if (!children.length || t.key !== "uuid") continue;
+    await tx.query(`DELETE FROM restore_gone`);
+    await tx.query(
+      `INSERT INTO restore_gone SELECT DISTINCT (s.row->>'id')::uuid FROM restore_rows s
+        WHERE s.job_id = $1 AND s.tbl = $3 AND s.row ? 'id'
+          AND NOT EXISTS (SELECT 1 FROM ${t.name} x WHERE x.id::text = s.row->>'id' AND x.tenant_id = $2)`,
+      [job, tid, t.name],
+    );
+    if (!Number((await tx.query(`SELECT count(*) AS n FROM restore_gone`)).rows[0].n)) continue;
+    for (const f of children) {
+      if (t.name === "users") {
+        // Someone who can't come back: what they did stays, under the owner's name.
+        await tx.query(
+          `UPDATE restore_rows s SET row = jsonb_set(s.row, '{${f.col}}', to_jsonb($3::text)) FROM restore_gone g WHERE s.job_id = $1 AND s.tbl = $2 AND s.row->>'${f.col}' = g.id::text`,
+          [job, f.child, ownerId],
+        );
+      } else if (f.nullable) {
+        await tx.query(`UPDATE restore_rows s SET row = s.row - '${f.col}' FROM restore_gone g WHERE s.job_id = $1 AND s.tbl = $2 AND s.row->>'${f.col}' = g.id::text`, [job, f.child]);
+      } else {
+        await tx.query(`DELETE FROM restore_rows s USING restore_gone g WHERE s.job_id = $1 AND s.tbl = $2 AND s.row->>'${f.col}' = g.id::text`, [job, f.child]);
+      }
+    }
+  }
+  if (moneyBefore) {
+    // The opening line held the whole history's money; the history is back, so it keeps only the
+    // part the file could not bring back (cash taken out of the drawer, say).
+    const after = await treasury();
+    const carried = (await tx.query(
+      `SELECT id, account, COALESCE(bank_account_id::text, '') AS bank, amount_minor FROM money_movements WHERE tenant_id = $1 AND kind = 'opening' AND note = $2 AND created_at >= $3::timestamptz`,
+      [tid, CARRIED, createdAt],
+    )).rows;
+    for (const c of carried) {
+      const key = `${c.account}|${c.bank}`;
+      const left = Number(c.amount_minor) - ((after.get(key) ?? 0) - (moneyBefore.get(key) ?? 0));
+      if (left) await tx.query(`UPDATE money_movements SET amount_minor = $2 WHERE id = $1`, [c.id, left]);
+      else await tx.query(`DELETE FROM money_movements WHERE id = $1`, [c.id]);
+    }
+  }
+  await tx.query(`DROP TABLE IF EXISTS restore_map`);
+  await tx.query(`DROP TABLE IF EXISTS restore_gone`);
+  await sameShopOnly(tx, tid);
+  await tx.query(`UPDATE tenants SET restored_at = now() WHERE id = $1`, [tid]);
+  await audit(tx, { tenantId: tid, userId: ownerId, action: "backup.restore_parts", data: { parts, backupCreatedAt: createdAt, rows: out } });
+  await tx.query(`DELETE FROM restore_jobs WHERE id = $1`, [job]);
+  return out;
+}
+
+/** Single-column foreign keys, and whether the column may be left empty. */
+async function foreignKeys(tx: Tx) {
+  const r = await tx.query(
+    `SELECT c.conrelid::regclass::text AS child, a.attname AS col, c.confrelid::regclass::text AS parent, NOT a.attnotnull AS nullable
+       FROM pg_constraint c
+       JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
+      WHERE c.contype = 'f' AND array_length(c.conkey, 1) = 1`,
+  );
+  const bare = (n: string) => n.replace(/^.*\./, "").replace(/"/g, "");
+  return (r.rows as { child: string; col: string; parent: string; nullable: boolean }[]).map((f) => ({ ...f, child: bare(f.child), parent: bare(f.parent) }));
+}
+
+/** Inserts the staged rows of one table that are not here yet, and says how many went in. */
+async function loadMissing(tx: Tx, job: string, tid: string, t: (typeof BACKUP_TABLES)[number], current: string[]): Promise<number> {
+  const inFile = new Set(
+    (await tx.query(`SELECT DISTINCT jsonb_object_keys(row) AS k FROM restore_rows WHERE job_id = $1 AND tbl = $2`, [job, t.name])).rows.map((x) => x.k as string),
+  );
+  if (!inFile.size) return 0;
+  const secrets = new Set(t.omit ?? []);
+  let cols = current.filter((c) => (inFile.has(c) || c === "tenant_id") && !secrets.has(c));
+  if (t.key === "bigint") cols = cols.filter((c) => c !== "id");
+  const insertCols = [...cols];
+  const values = cols.map((c) => (c === "tenant_id" ? "$2::uuid" : `r.${q(c)}`));
+  if (t.name === "devices") {
+    insertCols.push("token_hash");
+    values.push(`'restored:' || gen_random_uuid()`);
+  }
+  const r = await tx.query(
+    `INSERT INTO ${t.name} (${insertCols.map(q).join(", ")}) ` +
+      `SELECT ${values.join(", ")} FROM restore_rows s, jsonb_populate_record(null::${t.name}, s.row) r ` +
+      `WHERE s.job_id = $1 AND s.tbl = $3 ORDER BY s.seq ON CONFLICT DO NOTHING`,
+    [job, tid, t.name],
+  );
+  return r.rowCount ?? 0;
 }

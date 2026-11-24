@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { audit } from "../db";
+import { checkOwnerPassword } from "../routes/reset";
 import { authenticate, HttpError, requireRole } from "../auth";
 import type { LocalBackups } from "./backup";
 import type { LocalLicense } from "./license";
@@ -13,6 +14,8 @@ export interface LocalOptions {
   stop: () => void;
   backups?: LocalBackups;
   restore?: (file: Buffer, password: string | null) => Promise<void>;
+  /** Puts an empty database in place of this one (the old one is kept aside), for a fresh start. */
+  wipe?: () => Promise<void>;
   license?: LocalLicense;
   network?: { get: () => { lan: boolean; port: number; addresses: string[]; web: boolean }; set: (lan: boolean) => Promise<void> };
 }
@@ -125,6 +128,23 @@ export async function localRoutes(app: FastifyInstance, opts: LocalOptions) {
       return { ok: true };
     });
   });
+
+  const wipe = opts.wipe;
+  if (wipe) {
+    /**
+     * «إعادة ضبط»: this computer goes back to the first-run screen, as if just installed. A backup
+     * is made first, and the old database is kept aside too; the licence stays with the computer.
+     */
+    app.post("/local/wipe", { preHandler: owner, config: { rateLimit: { max: 5, timeWindow: "1 minute" } } }, async (req) => {
+      const b = z.object({ password: z.string().min(1).max(200), confirm: z.string().transform((s) => s.trim()) }).parse(req.body);
+      if (b.confirm !== "تصفير") throw new HttpError(400, "اكتب كلمة «تصفير» للتأكيد");
+      await checkOwnerPassword(app.db, req.user.tid, req.user.sub, b.password);
+      const name = await backups.run();
+      await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "local.wipe", data: { backup: name } });
+      await wipe();
+      return { ok: true, backup: name };
+    });
+  }
 
   async function ownerOnly(req: FastifyRequest) {
     await authenticate(req);

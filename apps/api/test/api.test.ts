@@ -8,6 +8,8 @@ import { PGlite } from "@electric-sql/pglite";
 import { createPool, type Db } from "../src/db";
 import { migrate } from "../src/migrate";
 import { PgliteDb, pgliteParsers } from "../src/pglite-db";
+import { CATALOG_TABLES, KEEP_TABLES, MOVES_TABLES } from "../src/routes/reset";
+import { FLOWS } from "../src/routes/money";
 
 // TEST_PGLITE=1 runs the whole suite on PGlite, the desktop's local database, which has one
 // connection: a query on app.db from inside a transaction hangs there, and only this run shows it.
@@ -2923,5 +2925,179 @@ describe("the AI helper on «from paper»", () => {
     const bad = await call("POST", "/ai/chat", shop, { messages: [{ role: "user", text: "مرحبا" }] });
     expect(bad.status).toBe(503);
     expect(bad.body.error).toContain("مفتاح");
+  });
+});
+
+describe("starting again: «بداية جديدة», saving parts, bringing parts back", () => {
+  type Line = { t: string; r: Record<string, unknown> };
+  async function backup(token: string) {
+    const manifest = (await call("GET", "/backup", token)).body;
+    const lines: Line[] = [];
+    for (const t of manifest.tables as { name: string }[]) {
+      let after: string | null = null;
+      do {
+        const page: { rows: Record<string, unknown>[]; next: string | null } = (await call("GET", `/backup/${t.name}?limit=1000${after ? `&after=${after}` : ""}`, token)).body;
+        lines.push(...page.rows.map((r) => ({ t: t.name, r: JSON.parse(JSON.stringify(r)) })));
+        after = page.next;
+      } while (after);
+    }
+    return { manifest, lines };
+  }
+  async function restoreParts(token: string, b: { manifest: unknown; lines: Line[] }, parts: string[]) {
+    const start = await call("POST", "/restore", token, { manifest: b.manifest });
+    expect(start.status).toBe(200);
+    for (let i = 0; i < b.lines.length; i += 500) expect((await call("POST", `/restore/${start.body.id}/rows`, token, { rows: b.lines.slice(i, i + 500) })).status).toBe(200);
+    return call("POST", `/restore/${start.body.id}/commit`, token, { password: "password123", parts });
+  }
+  let tid: string;
+  /** Where the shop stands: stock, what customers and suppliers owe, the treasury, points. */
+  async function standing() {
+    const one = async (sql: string) => (await db.query(sql, [tid])).rows.map((r) => JSON.stringify(Object.values(r).map((v) => (typeof v === "bigint" ? Number(v) : v))));
+    return {
+      stock: await one(`SELECT p.name, m.store_id, sum(m.qty_milli)::bigint FROM stock_movements m JOIN products p ON p.id = m.product_id WHERE m.tenant_id = $1 GROUP BY 1, 2 HAVING sum(m.qty_milli) <> 0 ORDER BY 1, 2`),
+      customers: await one(`SELECT c.name, COALESCE(c.phone, ''), b.balance_minor FROM customers c JOIN customer_balances b ON b.customer_id = c.id WHERE c.tenant_id = $1 AND b.balance_minor <> 0 ORDER BY 1, 2`),
+      suppliers: await one(`SELECT s.name, b.balance_minor FROM suppliers s JOIN supplier_balances b ON b.supplier_id = s.id WHERE s.tenant_id = $1 AND b.balance_minor <> 0 ORDER BY 1`),
+      money: await one(`WITH f AS (${FLOWS}) SELECT account, COALESCE(bank_id::text, ''), sum(amount)::bigint FROM f GROUP BY 1, 2 HAVING sum(amount) <> 0 ORDER BY 1, 2`),
+      points: await one(`SELECT customer_id, sum(points)::bigint FROM loyalty_entries WHERE tenant_id = $1 GROUP BY 1 HAVING sum(points) <> 0 ORDER BY 1`),
+    };
+  }
+  const count = async (t: string) => Number((await db.query(`SELECT count(*) AS n FROM ${t} WHERE tenant_id = $1`, [tid])).rows[0].n);
+  let before: Awaited<ReturnType<typeof standing>>;
+  let saved: Awaited<ReturnType<typeof backup>>;
+  let sales: number;
+
+  it("places every table of a shop's data on purpose: kept, history, or what the shop has", async () => {
+    const r = await db.query(`SELECT table_name FROM information_schema.columns WHERE table_schema = current_schema() AND column_name = 'tenant_id' AND table_name IN (SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema() AND table_type = 'BASE TABLE')`);
+    const placed = new Set([...KEEP_TABLES, ...MOVES_TABLES, ...CATALOG_TABLES]);
+    expect(r.rows.map((x) => x.table_name as string).filter((t) => !placed.has(t))).toEqual([]);
+    expect(KEEP_TABLES.length + MOVES_TABLES.length + CATALOG_TABLES.length).toBe(placed.size);
+  });
+
+  it("asks the owner's password and the word «تصفير», and waits for open shifts to close", async () => {
+    tid = (await db.query(`SELECT tenant_id FROM users WHERE email = 'salem@test.ly'`)).rows[0].tenant_id;
+    expect((await call("POST", "/reset", cashierToken, { mode: "moves", password: "password123", confirm: "تصفير" })).status).toBe(403);
+    expect((await call("POST", "/reset", owner, { mode: "moves", password: "password123", confirm: "نعم" })).status).toBe(400);
+    expect((await call("POST", "/reset", owner, { mode: "moves", password: "wrong-pass", confirm: "تصفير" })).status).toBe(401);
+    await db.query(`UPDATE shifts SET closed_at = now() WHERE tenant_id = $1 AND closed_at IS NULL`, [tid]);
+    await db.query(`UPDATE shifts SET closed_at = NULL WHERE id = (SELECT id FROM shifts WHERE tenant_id = $1 ORDER BY opened_at DESC LIMIT 1)`, [tid]);
+    const open = await call("POST", "/reset", owner, { mode: "moves", password: "password123", confirm: "تصفير" });
+    expect(open.status).toBe(409);
+    expect(open.body.error).toContain("وردية");
+    await db.query(`UPDATE shifts SET closed_at = now() WHERE tenant_id = $1 AND closed_at IS NULL`, [tid]);
+    expect((await call("GET", "/reset/preview", owner)).body).toMatchObject({ openShifts: 0 });
+  });
+
+  it("saves the items with or without stock, the customers and the suppliers in the sheets' own columns", async () => {
+    const withQty = (await call("GET", `/export/products?storeId=${storeId}`, owner)).body.rows;
+    const pepsiRow = withQty.find((p: { name: string }) => p.name === "بيبسي");
+    expect(pepsiRow).toMatchObject({ unit: "علبة", price_minor: 1500, barcode: "1111111111116", pack: "كرتونة", pack_factor: 24000, pack_barcode: "2222222222222" });
+    const stock = Number((await db.query(`SELECT COALESCE(sum(qty_milli), 0) AS n FROM stock_movements WHERE product_id = $1 AND store_id = $2`, [pepsi.productId, storeId])).rows[0].n);
+    expect(pepsiRow.qty).toBe(stock);
+    const noQty = (await call("GET", `/export/products?storeId=${storeId}&qty=0`, owner)).body.rows;
+    expect(noQty.every((p: { qty: number }) => p.qty === 0)).toBe(true);
+    const cs = (await call("GET", "/export/customers", owner)).body.rows;
+    expect(cs.length).toBeGreaterThan(0);
+    expect(cs[0]).toHaveProperty("balance");
+    expect(Array.isArray((await call("GET", "/export/suppliers", owner)).body.rows)).toBe(true);
+    expect((await call("GET", "/export/suppliers", cashierToken)).status).toBe(403);
+  });
+
+  it("wipes the history but keeps every balance, the stock and the treasury where they stood", async () => {
+    saved = await backup(owner);
+    before = await standing();
+    sales = await count("sales");
+    const products = await count("products");
+    expect(sales).toBeGreaterThan(0);
+    const r = await call("POST", "/reset", owner, { mode: "moves", password: "password123", confirm: " تصفير " });
+    expect(r.body.error ?? r.status).toBe(200);
+    expect(await count("sales")).toBe(0);
+    expect(await count("purchase_invoices")).toBe(0);
+    expect(await count("expenses")).toBe(0);
+    expect(await count("products")).toBe(products);
+    expect(await standing()).toEqual(before);
+    // The account stays: the owner signs in, the tills reload everything.
+    expect((await call("POST", "/auth/login", undefined, { email: "salem@test.ly", password: "password123" })).status).toBe(200);
+    expect((await call("GET", `/sync/catalog?since=${encodeURIComponent(new Date(Date.now() - 1000).toISOString())}`, cashierToken)).body.full).toBe(true);
+    expect((await db.query(`SELECT count(*)::int AS n FROM audit_log WHERE tenant_id = $1 AND action = 'data.reset'`, [tid])).rows[0].n).toBe(1);
+  });
+
+  it("brings the old invoices back on top, without counting anything twice", async () => {
+    const r = await restoreParts(owner, saved, ["moves"]);
+    expect(r.body.error ?? r.status).toBe(200);
+    expect(await count("sales")).toBe(sales);
+    const now = await standing();
+    for (const k of Object.keys(before) as (keyof typeof before)[]) expect([k, now[k]]).toEqual([k, before[k]]);
+  });
+
+  it("wipes everything but the account, then brings back only the customers, and then the items", async () => {
+    const r = await call("POST", "/reset", owner, { mode: "all", password: "password123", confirm: "تصفير" });
+    expect(r.body.error ?? r.status).toBe(200);
+    for (const t of ["products", "customers", "suppliers", "sales", "categories", "stock_movements"]) expect(await count(t)).toBe(0);
+    expect(await count("users")).toBeGreaterThan(0);
+    expect(await count("stores")).toBeGreaterThan(0);
+
+    const c = await restoreParts(owner, saved, ["customers"]);
+    expect(c.body.error ?? c.status).toBe(200);
+    expect(await count("customers")).toBe(saved.lines.filter((l) => l.t === "customers").length);
+    expect(await count("products")).toBe(0);
+    // The same file again adds nothing.
+    expect((await restoreParts(owner, saved, ["customers"])).body.rows).toEqual({});
+
+    const p = await restoreParts(owner, saved, ["products"]);
+    expect(p.body.error ?? p.status).toBe(200);
+    expect(await count("products")).toBe(saved.lines.filter((l) => l.t === "products").length);
+    expect(await count("sales")).toBe(0);
+    expect((await call("GET", "/products?storeId=" + storeId, owner)).body.find((x: { name: string }) => x.name === "بيبسي").stockMilli ?? 0).toBe(0);
+  });
+
+  it("matches items and customers typed in again from Excel, and gives taken invoice numbers new ones", async () => {
+    await call("POST", "/reset", owner, { mode: "all", password: "password123", confirm: "تصفير" });
+    // The owner brings the items back from Excel first, with today's stock, under new ids...
+    const old = saved.lines.filter((l) => l.t === "products").slice(0, 3);
+    const unitOf = (pid: unknown) => saved.lines.find((l) => l.t === "product_units" && l.r.product_id === pid && l.r.is_base)!.r;
+    const codeOf = (uid: unknown) => saved.lines.find((l) => l.t === "barcodes" && l.r.unit_id === uid)?.r.code as string | undefined;
+    // (with the stock the file had: what «📦» saved just before the reset)
+    const qtyOf = (pid: unknown) => saved.lines.filter((l) => l.t === "stock_movements" && l.r.product_id === pid).reduce((a, l) => a + Number(l.r.qty_milli), 0);
+    const rows = old.map((l) => ({ name: l.r.name as string, barcode: codeOf(unitOf(l.r.id).id), priceMinor: Number(unitOf(l.r.id).price_minor), qtyMilli: Math.max(0, qtyOf(l.r.id)) }));
+    expect((await call("POST", "/import/products", owner, { storeId, rows })).body.created).toBe(3);
+    // ...and a sale on a till took number one of the old invoices' numbers.
+    const taken = saved.lines.find((l) => l.t === "sales")!.r.number as string;
+    const store = (await db.query(`SELECT id FROM stores WHERE tenant_id = $1 LIMIT 1`, [tid])).rows[0].id;
+    const dev = (await db.query(`SELECT id FROM devices WHERE tenant_id = $1 LIMIT 1`, [tid])).rows[0].id;
+    const user = (await db.query(`SELECT id FROM users WHERE email = 'salem@test.ly'`)).rows[0].id;
+    await db.query(
+      `INSERT INTO sales (id, tenant_id, store_id, device_id, user_id, number, subtotal_minor, discount_minor, tax_minor, total_minor, paid_minor, change_minor, status, created_at)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, 0, 0, 0, 0, 0, 0, 'completed', now())`,
+      [tid, store, dev, user, taken],
+    ).catch(async () => undefined);
+
+    const r = await restoreParts(owner, saved, ["moves"]);
+    expect(r.body.error ?? r.status).toBe(200);
+    // One item each, not two; their stock is the history's, not the history's plus the Excel line.
+    for (const l of old) expect(Number((await db.query(`SELECT count(*) AS n FROM products WHERE tenant_id = $1 AND lower(name) = lower($2)`, [tid, l.r.name])).rows[0].n)).toBe(1);
+    expect((await standing()).stock).toEqual(before.stock);
+    expect((await standing()).customers).toEqual(before.customers);
+    const numbers = (await db.query(`SELECT number FROM sales WHERE tenant_id = $1 AND number LIKE $2`, [tid, `${taken}%`])).rows.map((x) => x.number);
+    if (numbers.length > 1) expect(numbers).toContain(`${taken}-ق`);
+    expect(await count("sales")).toBeGreaterThanOrEqual(sales);
+  });
+
+  it("lets platform staff who edit shops reset a shop, after their own password and the shop's backup", async () => {
+    const staff = (await call("POST", "/platform/login", undefined, { email: "admin@sale7.ly", password: "platform-pass" })).body.token;
+    // A shop's own owner can't use the platform's door.
+    expect((await call("POST", `/platform/tenants/${tid}/reset`, owner, { mode: "all", password: "password123", confirm: "تصفير" })).status).toBe(403);
+    expect((await call("GET", `/platform/tenants/${tid}/reset/preview`, staff)).body.openShifts).toBe(0);
+    const m = await call("GET", `/platform/tenants/${tid}/backup`, staff);
+    expect(m.body.format).toBe("pos-backup-1");
+    const page = await call("GET", `/platform/tenants/${tid}/backup/users?limit=50`, staff);
+    expect(page.body.rows.length).toBeGreaterThan(0);
+    expect(page.body.rows[0].password_hash).toBeUndefined();
+    expect((await call("POST", `/platform/tenants/${tid}/reset`, staff, { mode: "all", password: "nope", confirm: "تصفير" })).status).toBe(401);
+    expect((await call("POST", `/platform/tenants/${tid}/reset`, staff, { mode: "all", password: "platform-pass", confirm: "لا" })).status).toBe(400);
+    const r = await call("POST", `/platform/tenants/${tid}/reset`, staff, { mode: "all", password: "platform-pass", confirm: "تصفير" });
+    expect(r.body.error ?? r.status).toBe(200);
+    expect(await count("products")).toBe(0);
+    expect(await count("users")).toBeGreaterThan(0);
+    expect(Number((await db.query(`SELECT count(*) AS n FROM platform_audit WHERE tenant_id = $1 AND action = 'tenant.reset'`, [tid])).rows[0].n)).toBe(1);
   });
 });

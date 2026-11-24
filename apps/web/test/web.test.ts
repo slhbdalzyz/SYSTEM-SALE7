@@ -271,6 +271,25 @@ describe("reading an .xlsx file", async () => {
   });
 });
 
+describe("saving parts of the shop as Excel", async () => {
+  const { readXlsx, mapSheet, writeXlsx, headersOf } = await import("../src/admin/sheet");
+  it("writes a file «من الدفتر للنظام» reads back: barcodes as text, services without stock", async () => {
+    const blob = writeXlsx("الأصناف", [
+      headersOf("products"),
+      ["بيبسي علبة", "06281000000028", "المشروبات", "علبة", "صندوق", 24, 30, "6281000000035", 1.5, 1, 96, 24, "لا", "لا"],
+      ["تركيب لصقة شاشة", "", "خدمات", "جهاز", "", null, null, "", 5, 0, null, null, "لا", "نعم"],
+      ["محمد & <أولاده>", "", "", "قطعة", "", null, null, "", 2, 1, 3, null, "لا", "لا"],
+    ]);
+    const rows = readXlsx(new Uint8Array(await blob.arrayBuffer()));
+    expect(rows[1][1]).toBe("06281000000028");
+    const m = mapSheet("products", rows);
+    expect(m.errors).toEqual([]);
+    expect(m.rows[0]).toMatchObject({ name: "بيبسي علبة", barcode: "06281000000028", unit: "علبة", priceMinor: 1500, qtyMilli: 96000, packUnit: "صندوق", packFactorMilli: 24000, packPriceMinor: 30000, packBarcode: "6281000000035" });
+    expect(m.rows[1]).toMatchObject({ name: "تركيب لصقة شاشة", service: true, qtyMilli: 0, unit: "جهاز" });
+    expect(m.rows[2]).toMatchObject({ name: "محمد & <أولاده>", qtyMilli: 3000 });
+  });
+});
+
 describe("phones by IMEI", async () => {
   const { toSaleInput } = await import("../src/pos/cart");
   const { receiptRows } = await import("../src/hardware/receiptImage");
