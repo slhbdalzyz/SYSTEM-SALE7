@@ -109,9 +109,9 @@ describe("the shop's computer", () => {
     const tid = (await pg.query<{ id: string }>(`SELECT id FROM tenants`)).rows[0].id;
     setLocalDeviceLimit(0);
     try {
-      await expect(assertWithinPlan(db, tid, "devices", "pos")).rejects.toThrow("كاشير");
-      await expect(assertWithinPlan(db, tid, "devices", "kitchen")).resolves.toBeUndefined();
-      await expect(assertWithinPlan(db, tid, "devices", "price_checker")).resolves.toBeUndefined();
+      await expect(assertWithinPlan(db as unknown as Db, tid, "devices", "pos")).rejects.toThrow("كاشير");
+      await expect(assertWithinPlan(db as unknown as Db, tid, "devices", "kitchen")).resolves.toBeUndefined();
+      await expect(assertWithinPlan(db as unknown as Db, tid, "devices", "price_checker")).resolves.toBeUndefined();
     } finally {
       setLocalDeviceLimit(null);
     }
