@@ -561,7 +561,7 @@ export function TeamTab({ call }: { call: Call }) {
 interface AuditRow { id: string; at: string; action: string; data: Record<string, unknown> | null; tenant_id: string | null; tenant_name: string | null; admin_name: string | null; admin_role: PlatformRole | null }
 const ACTION_LABEL: Record<string, string> = {
   "admin.login": "دخول", "admin.2fa_on": "فعّل التحقق بخطوتين", "admin.2fa_off": "لغى التحقق بخطوتين", "admin.2fa_failed": "رمز تحقق غلط",
-  "payment.record": "سجّل دفعة", "tenant.update": "عدّل محل", "plan.save": "عدّل باقة", "settings.save": "عدّل الإعدادات",
+  "payment.record": "سجّل دفعة", "tenant.update": "عدّل محل", "tenant.reset": "صفّر محل", "tenant.backup": "نزّل نسخة محل", "plan.save": "عدّل باقة", "settings.save": "عدّل الإعدادات",
   "team.add": "أضاف عضو", "team.edit": "عدّل عضو", "coupon.add": "أضاف كوبون", "coupon.edit": "عدّل كوبون",
   "agent.add": "أضاف وكيل", "agent.edit": "عدّل وكيل", "agent.payout": "صرف عمولة", "announcement.add": "نشر إعلان", "announcement.edit": "عدّل إعلان", "announcement.delete": "حذف إعلان",
   "ticket.reply": "رد على تذكرة", "support.login": "دخل حساب محل للدعم", "reminders.run": "فحص التذكيرات", "reminder.sent": "بعت تذكير",

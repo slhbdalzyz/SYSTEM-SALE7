@@ -5,8 +5,9 @@ import { isDesktopApp } from "../scale";
 
 interface Manifest { format: string; schema: string | null; tenantId: string; createdAt: string; tables: { name: string; rows: number }[] }
 
-export async function buildBackup(token: string | null, onProgress?: (done: number, total: number) => void): Promise<{ blob: Blob; name: string; rows: number }> {
-  const m = await api<Manifest>("/backup", { token });
+/** `base` is where the backup is read from: the shop's own, or a shop's through the platform. */
+export async function buildBackup(token: string | null, onProgress?: (done: number, total: number) => void, base = ""): Promise<{ blob: Blob; name: string; rows: number }> {
+  const m = await api<Manifest>(`${base}/backup`, { token });
   const total = m.tables.reduce((a, t) => a + t.rows, 0);
   const parts: string[] = [JSON.stringify({ manifest: m }) + "\n"];
   let done = 0;
@@ -14,7 +15,7 @@ export async function buildBackup(token: string | null, onProgress?: (done: numb
     let after: string | null = null;
     do {
       const qs: string = after ? `?limit=1000&after=${after}` : "?limit=1000";
-      const page: { rows: unknown[]; next: string | null } = await api(`/backup/${t.name}${qs}`, { token });
+      const page: { rows: unknown[]; next: string | null } = await api(`${base}/backup/${t.name}${qs}`, { token });
       for (const r of page.rows) parts.push(JSON.stringify({ t: t.name, r }) + "\n");
       done += page.rows.length;
       onProgress?.(done, total);

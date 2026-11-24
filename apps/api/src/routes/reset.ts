@@ -2,8 +2,10 @@ import type { FastifyInstance } from "fastify";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { audit, inTx, type Tx } from "../db";
-import { HttpError, requireRole } from "../auth";
+import { HttpError, platformGuard, requireRole } from "../auth";
 import { FLOWS } from "./money";
+import { backupManifest, backupPage } from "./owner";
+import { platformAudit } from "./platform";
 
 /**
  * «بداية جديدة»: the owner wipes the shop's data and starts again, keeping the account.
@@ -61,34 +63,83 @@ export async function resetRoutes(app: FastifyInstance) {
   const owners = { preHandler: requireRole("owner") };
 
   /** What each level would remove, for the screen before the owner decides. */
-  app.get("/reset/preview", owners, async (req) => {
-    const tid = req.user.tid;
-    const n = async (sql: string) => Number((await app.db.query(sql, [tid])).rows[0].n);
-    const [products, customers, suppliers, sales, purchases, openShifts] = await Promise.all([
-      n(`SELECT count(*) AS n FROM products WHERE tenant_id = $1`),
-      n(`SELECT count(*) AS n FROM customers WHERE tenant_id = $1`),
-      n(`SELECT count(*) AS n FROM suppliers WHERE tenant_id = $1`),
-      n(`SELECT count(*) AS n FROM sales WHERE tenant_id = $1`),
-      n(`SELECT count(*) AS n FROM purchase_invoices WHERE tenant_id = $1`),
-      n(`SELECT count(*) AS n FROM shifts WHERE tenant_id = $1 AND closed_at IS NULL`),
-    ]);
-    return { products, customers, suppliers, sales, purchases, openShifts };
-  });
+  app.get("/reset/preview", owners, async (req) => preview(app.db, req.user.tid));
 
   app.post("/reset", { ...owners, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req) => {
     const b = z.object({ mode: z.enum(RESET_MODES), password: z.string().min(1).max(200), confirm: confirmWord }).parse(req.body);
     const tid = req.user.tid;
     await checkOwnerPassword(app.db, tid, req.user.sub, b.password);
-    const open = (await app.db.query(`SELECT count(*)::int AS n FROM shifts WHERE tenant_id = $1 AND closed_at IS NULL`, [tid])).rows[0].n as number;
-    // A till with an open shift would send sales for a shift that no longer exists.
-    if (open) throw new HttpError(409, `فيه ${open} وردية مفتوحة. سكّر كل الورديات وخلّي أجهزة الكاشير تبعت مبيعاتها، وبعدها صفّر`);
+    await noOpenShifts(app.db, tid);
     const out = await inTx(app.db, (tx) => resetShop(tx, tid, req.user.sub, b.mode));
+    return { ok: true, ...out };
+  });
+
+  // ---- The same from the platform back office, for a shop that asks for it ----
+  // Only platform staff who may edit shops (owner, manager). Their own password again, and the
+  // shop's full backup is downloaded on their screen first, so the shop can have it back.
+  const editors = { preHandler: platformGuard("edit") };
+  const shopId = (p: unknown) => z.object({ id: z.string().uuid() }).parse(p).id;
+  async function shopOwner(id: string) {
+    const r = await app.db.query(`SELECT id FROM users WHERE tenant_id = $1 AND role = 'owner' ORDER BY active DESC, created_at LIMIT 1`, [id]);
+    if (!r.rows[0]) throw new HttpError(404, "المحل غير موجود أو ما عندهش مالك");
+    return r.rows[0].id as string;
+  }
+
+  app.get("/platform/tenants/:id/reset/preview", editors, async (req) => {
+    const id = shopId(req.params);
+    await shopOwner(id);
+    return preview(app.db, id);
+  });
+
+  app.get("/platform/tenants/:id/backup", editors, async (req) => {
+    const id = shopId(req.params);
+    await shopOwner(id);
+    await platformAudit(app.db, { adminId: req.platform!.id, tenantId: id, action: "tenant.backup" });
+    return backupManifest(app.db, id);
+  });
+
+  app.get("/platform/tenants/:id/backup/:table", editors, async (req) => {
+    const p = z.object({ id: z.string().uuid(), table: z.string() }).parse(req.params);
+    return backupPage(app.db, p.id, { table: p.table }, req.query);
+  });
+
+  app.post("/platform/tenants/:id/reset", { ...editors, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } }, async (req) => {
+    const id = shopId(req.params);
+    const b = z.object({ mode: z.enum(RESET_MODES), password: z.string().min(1).max(200), confirm: confirmWord }).parse(req.body);
+    const me = (await app.db.query(`SELECT password_hash FROM platform_admins WHERE id = $1`, [req.platform!.id])).rows[0];
+    if (!me?.password_hash || !(await bcrypt.compare(b.password, me.password_hash))) throw new HttpError(401, "كلمة السر غلط");
+    const owner = await shopOwner(id);
+    await noOpenShifts(app.db, id);
+    const out = await inTx(app.db, async (tx) => {
+      const r = await resetShop(tx, id, owner, b.mode, req.platform!.name);
+      await platformAudit(tx, { adminId: req.platform!.id, tenantId: id, action: "tenant.reset", data: { mode: b.mode, removed: r.removed } });
+      return r;
+    });
     return { ok: true, ...out };
   });
 }
 
+async function preview(db: { query: Tx["query"] }, tid: string) {
+  const n = async (sql: string) => Number((await db.query(sql, [tid])).rows[0].n);
+  const [products, customers, suppliers, sales, purchases, openShifts] = await Promise.all([
+    n(`SELECT count(*) AS n FROM products WHERE tenant_id = $1`),
+    n(`SELECT count(*) AS n FROM customers WHERE tenant_id = $1`),
+    n(`SELECT count(*) AS n FROM suppliers WHERE tenant_id = $1`),
+    n(`SELECT count(*) AS n FROM sales WHERE tenant_id = $1`),
+    n(`SELECT count(*) AS n FROM purchase_invoices WHERE tenant_id = $1`),
+    n(`SELECT count(*) AS n FROM shifts WHERE tenant_id = $1 AND closed_at IS NULL`),
+  ]);
+  return { products, customers, suppliers, sales, purchases, openShifts };
+}
+
+/** A till with an open shift would send sales for a shift that no longer exists. */
+async function noOpenShifts(db: { query: Tx["query"] }, tid: string) {
+  const open = (await db.query(`SELECT count(*)::int AS n FROM shifts WHERE tenant_id = $1 AND closed_at IS NULL`, [tid])).rows[0].n as number;
+  if (open) throw new HttpError(409, `فيه ${open} وردية مفتوحة. سكّر كل الورديات وخلّي أجهزة الكاشير تبعت مبيعاتها، وبعدها صفّر`);
+}
+
 /** Wipes one shop's data at the given level, in the caller's transaction. */
-export async function resetShop(tx: Tx, tid: string, userId: string, mode: ResetMode) {
+export async function resetShop(tx: Tx, tid: string, userId: string, mode: ResetMode, byPlatform?: string) {
   await tx.query(`SELECT 1 FROM tenants WHERE id = $1 FOR UPDATE`, [tid]);
   const keepState = mode !== "all";
   let stock: { store_id: string; product_id: string; qty: number }[] = [];
@@ -144,6 +195,6 @@ export async function resetShop(tx: Tx, tid: string, userId: string, mode: Reset
   }
   // Tills that synced before now reload everything, as after a restore.
   await tx.query(`UPDATE tenants SET restored_at = now() WHERE id = $1`, [tid]);
-  await audit(tx, { tenantId: tid, userId, action: "data.reset", data: { mode, removed, carried: { stock: stock.length, points: points.length, money: money.length } } });
+  await audit(tx, { tenantId: tid, userId, action: "data.reset", data: { mode, ...(byPlatform ? { byPlatform } : {}), removed, carried: { stock: stock.length, points: points.length, money: money.length } } });
   return { removed, carried: { stock: stock.length, points: points.length, money: money.length } };
 }

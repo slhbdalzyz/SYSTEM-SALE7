@@ -3081,4 +3081,23 @@ describe("starting again: «بداية جديدة», saving parts, bringing part
     if (numbers.length > 1) expect(numbers).toContain(`${taken}-ق`);
     expect(await count("sales")).toBeGreaterThanOrEqual(sales);
   });
+
+  it("lets platform staff who edit shops reset a shop, after their own password and the shop's backup", async () => {
+    const staff = (await call("POST", "/platform/login", undefined, { email: "admin@sale7.ly", password: "platform-pass" })).body.token;
+    // A shop's own owner can't use the platform's door.
+    expect((await call("POST", `/platform/tenants/${tid}/reset`, owner, { mode: "all", password: "password123", confirm: "تصفير" })).status).toBe(403);
+    expect((await call("GET", `/platform/tenants/${tid}/reset/preview`, staff)).body.openShifts).toBe(0);
+    const m = await call("GET", `/platform/tenants/${tid}/backup`, staff);
+    expect(m.body.format).toBe("pos-backup-1");
+    const page = await call("GET", `/platform/tenants/${tid}/backup/users?limit=50`, staff);
+    expect(page.body.rows.length).toBeGreaterThan(0);
+    expect(page.body.rows[0].password_hash).toBeUndefined();
+    expect((await call("POST", `/platform/tenants/${tid}/reset`, staff, { mode: "all", password: "nope", confirm: "تصفير" })).status).toBe(401);
+    expect((await call("POST", `/platform/tenants/${tid}/reset`, staff, { mode: "all", password: "platform-pass", confirm: "لا" })).status).toBe(400);
+    const r = await call("POST", `/platform/tenants/${tid}/reset`, staff, { mode: "all", password: "platform-pass", confirm: "تصفير" });
+    expect(r.body.error ?? r.status).toBe(200);
+    expect(await count("products")).toBe(0);
+    expect(await count("users")).toBeGreaterThan(0);
+    expect(Number((await db.query(`SELECT count(*) AS n FROM platform_audit WHERE tenant_id = $1 AND action = 'tenant.reset'`, [tid])).rows[0].n)).toBe(1);
+  });
 });

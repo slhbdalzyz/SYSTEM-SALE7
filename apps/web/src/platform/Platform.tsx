@@ -4,6 +4,7 @@ import { downloadCsv } from "../admin/charts";
 import { AgentPage, AgentsTab, AnnouncementsTab, AuditTab, CouponsTab, HealthBadge, MyAccount, openInvoice, RemindersTab, RevenueTab, TeamTab, TicketsTab } from "./Pro";
 import { api, ApiError } from "../api";
 import { LicensesTab } from "./Licenses";
+import { buildBackup, downloadBlob } from "../owner/backup";
 import { session, tokenValid } from "../session";
 import { METHOD_LABEL, STATE_BADGE, STATE_LABEL, date, parseMoney, type Plan, type SubState } from "../billing";
 
@@ -285,6 +286,8 @@ function describe(action: string, d: Record<string, unknown> | null): string {
   if (action === "payment.record" && d) return `سجّل دفعة: ${d.months} شهر · ${METHOD_LABEL[d.method as string] ?? d.method} · ${formatMoney(Number(d.amountMinor))}${d.coupon ? ` · كوبون ${d.coupon}` : ""}${d.invoice ? ` · فاتورة ${d.invoice}` : ""}`;
   if (action === "support.login") return "دخل حساب المحل للدعم (قراءة بس)";
   if (action === "ticket.reply") return `رد على طلب الدعم #${d?.number}`;
+  if (action === "tenant.reset") return `صفّر بيانات المحل (${RESET_MODES.find((m) => m.id === d?.mode)?.title ?? d?.mode})`;
+  if (action === "tenant.backup") return "نزّل نسخة المحل الكاملة";
   if (action === "reminder.sent") return `بعت تذكير تجديد (${d?.channel})`;
   if (action === "tenant.update" && d) {
     const parts: string[] = [];
@@ -297,6 +300,72 @@ function describe(action: string, d: Record<string, unknown> | null): string {
     return parts.join(" · ") || "تعديل";
   }
   return action;
+}
+
+const RESET_MODES = [
+  { id: "moves", title: "مسح الحركات بس", text: "المبيعات والمشتريات والمصروفات والدفعات تنمسح. الكميات والديون والخزينة تبقى كرصيد أول." },
+  { id: "stock", title: "مسح الحركات وتصفير المخزون", text: "زي اللي قبله، والكميات كلها تبدا من صفر." },
+  { id: "all", title: "مسح كل البيانات", text: "الأصناف والعملاء والموردين وكل الحركات. الحساب والموظفين والأجهزة والاشتراك يبقوا." },
+] as const;
+
+/** «🧹 تصفير المحل» for a shop that asks for it: its full backup downloads here first. */
+function ShopReset({ call, id, name, done }: { call: Call; id: string; name: string; done: () => Promise<unknown> }) {
+  const [open, setOpen] = useState(false);
+  const [p, setP] = useState<{ products: number; customers: number; suppliers: number; sales: number; purchases: number; openShifts: number } | null>(null);
+  const [mode, setMode] = useState<(typeof RESET_MODES)[number]["id"]>("moves");
+  const [password, setPassword] = useState("");
+  const [word, setWord] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [msg, setMsg] = useState<{ text: string; bad?: boolean } | null>(null);
+  useEffect(() => {
+    if (open) void call<NonNullable<typeof p>>(`/platform/tenants/${id}/reset/preview`).then(setP).catch((e) => setMsg({ text: (e as Error).message, bad: true }));
+  }, [open, call, id]);
+
+  async function run() {
+    setMsg(null);
+    try {
+      setBusy("ناخذوا نسخة المحل الكاملة…");
+      const b = await buildBackup(session.platformToken, (d, t) => setBusy(`ناخذوا نسخة المحل… ${d}/${t}`), `/platform/tenants/${id}`);
+      downloadBlob(b.blob, b.name.replace("backup-", "shop-before-reset-"));
+      setBusy("نصفّروا…");
+      await call(`/platform/tenants/${id}/reset`, { body: { mode, password, confirm: word } });
+      setMsg({ text: "تم تصفير المحل ✓ ملف نسخته نزل عندك، ويقدر صاحب المحل يرجّع منه اللي يبيه من «استرجاع جزء من النسخة»." });
+      setPassword("");
+      setWord("");
+      setP(null);
+      await done();
+      void call<NonNullable<typeof p>>(`/platform/tenants/${id}/reset/preview`).then(setP);
+    } catch (e) {
+      setMsg({ text: (e as Error).message, bad: true });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  if (!open) {
+    return <div className="card row"><b>🧹 تصفير المحل</b><span className="muted">لمحل طلب يبدا من جديد</span><span className="spacer" /><button className="danger" onClick={() => setOpen(true)}>تصفير بيانات المحل…</button></div>;
+  }
+  return (
+    <div className="card stack">
+      <h3 style={{ margin: 0 }}>🧹 تصفير بيانات «{name}»</h3>
+      {p && <span className="muted">عنده توا {p.products} صنف، {p.customers} عميل، {p.suppliers} مورد، {p.sales} فاتورة بيع، {p.purchases} فاتورة شراء.</span>}
+      {RESET_MODES.map((m) => (
+        <label key={m.id} className="check" style={{ alignItems: "flex-start" }}>
+          <input type="radio" name={`reset-${id}`} checked={mode === m.id} disabled={!!busy} onChange={() => setMode(m.id)} />
+          <span><b>{m.title}</b><br /><span className="muted">{m.text}</span></span>
+        </label>
+      ))}
+      {p && p.openShifts > 0 && <div className="error">عند المحل {p.openShifts} وردية مفتوحة. لازم يسكّرها وأجهزة الكاشير تبعت مبيعاتها قبل التصفير.</div>}
+      <div className="notice">قبل التصفير تنزل نسخة المحل الكاملة على جهازك. ما فيش رجعة إلا منها، فابعتها لصاحب المحل أو احتفظ بيها.</div>
+      <div className="row" style={{ alignItems: "end" }}>
+        <label>كلمة السر متاعك<input type="password" autoComplete="current-password" value={password} disabled={!!busy} onChange={(e) => setPassword(e.target.value)} /></label>
+        <label>اكتب «تصفير» للتأكيد<input value={word} disabled={!!busy} onChange={(e) => setWord(e.target.value)} autoComplete="off" /></label>
+        <button className="danger" onClick={run} disabled={!!busy || !password || word.trim() !== "تصفير" || !!p?.openShifts}>{busy ?? "صفّر المحل"}</button>
+        <button onClick={() => setOpen(false)} disabled={!!busy}>إلغاء</button>
+      </div>
+      {msg && <div className={msg.bad ? "error" : "notice"}>{msg.text}</div>}
+    </div>
+  );
 }
 
 function TenantDetail({ call, id, back, can }: { call: Call; id: string; back: () => void; can: (p: PlatformPerm) => boolean }) {
@@ -433,6 +502,8 @@ function TenantDetail({ call, id, back, can }: { call: Call; id: string; back: (
           </div>
         </div>
       )}
+
+      {can("edit") && <ShopReset call={call} id={id} name={t.name} done={load} />}
 
       <div className="card">
         <h3 style={{ marginTop: 0 }}>الدفعات</h3>
