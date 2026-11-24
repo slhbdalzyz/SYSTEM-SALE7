@@ -1,3 +1,4 @@
+import { CloseShiftButton } from "../admin/ShiftCard";
 import { useCallback, useEffect, useState } from "react";
 import { formatMoney, formatQty } from "@pos/shared";
 import { api, ApiError } from "../api";
@@ -231,7 +232,7 @@ function Home({ call, storeId, onUnread }: { call: Call; storeId: string | null;
         {d.openShifts.map((s) => (
           <div key={s.id} className="kv">
             <span>{s.cashier} <span className="muted small">· {s.device}{d.stores.length > 1 ? ` · ${s.storeName}` : ""} · فتح {ago(s.openedAt)}</span></span>
-            <span><span className="muted small">في الدرج </span><b className="num">{formatMoney(s.expectedCashMinor)}</b></span>
+            <span><span className="muted small">في الدرج </span><b className="num">{formatMoney(s.expectedCashMinor)}</b> <CloseShiftButton call={call} id={s.id} onDone={() => void load()} /></span>
           </div>
         ))}
       </section>

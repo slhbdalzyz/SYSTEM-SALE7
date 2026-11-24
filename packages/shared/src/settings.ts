@@ -3,6 +3,39 @@ import { DEFAULT_DEBT_MESSAGE, DEFAULT_INVOICE_MESSAGE } from "./whatsapp";
 
 const text = (max: number) => z.string().trim().max(max).default("");
 
+/** Libyan notes and coins, in dinars, for counting the drawer note by note. */
+export const DEFAULT_NOTES = [50, 20, 10, 5, 1, 0.5, 0.25];
+
+export const shiftSettingsSchema = z.object({
+  /** 1: the cashier counts the drawer note by note; the total adds itself up. */
+  countNotes: z.boolean().default(false),
+  notes: z.array(z.number().positive().max(1000)).max(15).default(DEFAULT_NOTES),
+  /** 2: the cashier never sees the expected cash or the difference; only the owner does. */
+  blind: z.boolean().default(false),
+  /** 3: before closing, the till lists held bills, open tables and sales not sent yet. */
+  preChecks: z.boolean().default(false),
+  /** 4: a difference bigger than this needs a reason and/or a manager's PIN. */
+  diffCheck: z.boolean().default(false),
+  diffLimitMinor: z.number().int().min(0).default(5000),
+  needReason: z.boolean().default(true),
+  needManager: z.boolean().default(false),
+  /** 5: the cashier leaves change in the drawer for the next shift, which opens with it. */
+  handover: z.boolean().default(false),
+  floatMinor: z.number().int().min(0).default(0),
+  /** 6: the cashier also enters the card machine's total and the transfers seen. */
+  cardCheck: z.boolean().default(false),
+  /** 7: a shift still open at this time (HH:MM, Libya) closes by itself; "" = never. */
+  autoCloseAt: z.string().regex(/^(|([01]\d|2[0-3]):[0-5]\d)$/).default(""),
+  /** 8: the till can print a report of the shift so far without closing it. */
+  xReport: z.boolean().default(false),
+  /** 9: the closing report goes to this WhatsApp number. */
+  whatsappZ: z.boolean().default(false),
+  whatsappPhone: text(40),
+  /** 10: a shortage becomes a deduction on the cashier's pay. */
+  shortageToPayroll: z.boolean().default(false),
+});
+export type ShiftSettings = z.infer<typeof shiftSettingsSchema>;
+
 /**
  * The shop's own settings: who it is (printed on every receipt), its bank account, what the
  * receipt shows, and how the till behaves. One document per shop; every field has a default so
@@ -59,6 +92,8 @@ export const shopSettingsSchema = z.object({
     /** Ask before clearing a cart with items in it. */
     confirmClear: z.boolean().default(true),
   }).default({}),
+  /** How a shift closes. Every option is off until the owner turns it on in «🧾 قفل الوردية». */
+  shift: shiftSettingsSchema.default({}),
   /** Side-menu pages the owner put away once done with them. */
   menu: z.object({
     /** «من الدفتر للنظام»: hidden after the shop moved off paper. */

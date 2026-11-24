@@ -350,3 +350,40 @@ describe("prices by kind of customer on the till", () => {
     expect(s.delivery?.address).toBe("قرجي");
   });
 });
+
+describe("the shift report with the shop's closing options", async () => {
+  const { receiptRows } = await import("../src/hardware/receiptImage");
+  const { nonCash, zText } = await import("../src/pos/shiftReport");
+  const base = { storeName: "المحل", deviceName: "كاشير 1", cashierName: "أحمد" };
+  const z = {
+    openedAt: "2026-11-24T06:00:00Z", closedAt: "2026-11-24T14:00:00Z", openingCashMinor: 20000, sales: 3, salesMinor: 45000,
+    byMethod: { cash: 30000, card: 10000, transfer: 5000 }, discountMinor: 0, promoMinor: 0, returns: 0, returnsMinor: 0, debtPaidCashMinor: 0,
+    expectedCashMinor: 50000, countedCashMinor: 45000, items: [],
+    notes: { "20": 2, "5": 1 }, card: { counted: 9000, expected: 10000 }, transfer: { counted: 5000, expected: 5000 }, floatMinor: 20000, reason: "باقي غلط", approvedBy: "عادل",
+  };
+
+  it("splits card money from transfers", () => {
+    expect(nonCash({ cash: 1, card: 2, sadad: 3, transfer: 4, cheque: 5, credit: 6 })).toEqual({ card: 5, transfer: 9 });
+  });
+
+  it("prints the count note by note, the card machine, the change left and who approved", () => {
+    const t = JSON.stringify(receiptRows({ ...base, shift: z }));
+    for (const s of ["2 × 20", "1 × 5", "الكاش المتوقع", "عجز", "البطاقة", "فكّة للوردية الجاية", "للخزنة", "25.000", "باقي غلط", "عادل"]) expect(t).toContain(s);
+  });
+
+  it("leaves out the expected cash and the difference on a blind close, and prints an X report without a count", () => {
+    const blind = JSON.stringify(receiptRows({ ...base, shift: { ...z, blind: true } }));
+    expect(blind).not.toContain("الكاش المتوقع");
+    expect(blind).not.toContain("عجز");
+    expect(blind).toContain("الكاش الموجود");
+    const x = JSON.stringify(receiptRows({ ...base, shift: { ...z, x: true } }));
+    expect(x).toContain("تقرير X");
+    expect(x).not.toContain("الكاش الموجود");
+  });
+
+  it("writes the WhatsApp message with the difference even when the close was blind", () => {
+    const t = zText({ ...z, blind: true }, { shop: "المحل", device: "كاشير 1", cashier: "أحمد" });
+    expect(t).toContain("عجز: 5.000");
+    expect(t).toContain("فكّة للوردية الجاية");
+  });
+});

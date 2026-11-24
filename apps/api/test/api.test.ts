@@ -3111,3 +3111,73 @@ describe("starting again: «بداية جديدة», saving parts, bringing part
     expect(Number((await db.query(`SELECT count(*) AS n FROM platform_audit WHERE tenant_id = $1 AND action = 'tenant.reset'`, [tid])).rows[0].n)).toBe(1);
   });
 });
+
+describe("closing a shift the way the shop chose", () => {
+  it("keeps the count, the card check, the change left and the reason; a manager signs; a shortage goes on pay; the owner and the clock close", async () => {
+    const reg = await call("POST", "/auth/register", undefined, { businessName: "محل الورديات", storeName: "الرئيسي", ownerName: "نوري", email: "shifts@test.ly", password: "password123" });
+    const o = reg.body.token;
+    const sid = reg.body.storeId;
+    const off = (await call("GET", "/settings", o)).body.settings.shift;
+    expect(off.blind).toBe(false);
+    expect(off.autoCloseAt).toBe("");
+    const set = { ...off, countNotes: true, diffCheck: true, diffLimitMinor: 1000, needReason: true, needManager: true, handover: true, floatMinor: 20000, cardCheck: true, shortageToPayroll: true };
+    expect((await call("PATCH", "/settings/shift", o, { ...set, autoCloseAt: "25:00" })).status).toBe(400);
+    expect((await call("PATCH", "/settings/shift", o, set)).status).toBe(200);
+    // Saving the settings page does not undo them.
+    const s = (await call("GET", "/settings", o)).body;
+    await call("PUT", "/settings", o, { name: s.name, settings: { ...s.settings, shift: off } });
+    expect((await call("GET", "/settings", o)).body.settings.shift.needManager).toBe(true);
+
+    const p = await call("POST", "/products", o, { name: "قهوة", costMinor: 1000, units: [{ name: "كيس", priceMinor: 5000, isBase: true }] });
+    const d = await call("POST", "/devices", o, { storeId: sid, name: "كاشير 1" });
+    const cashier = await call("POST", "/users", o, { name: "مروان", role: "cashier", pin: "4321" });
+    const boss = await call("POST", "/users", o, { name: "عادل", role: "manager", pin: "8765" });
+    const t = (await call("POST", "/auth/pin", undefined, { deviceToken: d.body.deviceToken, userId: cashier.body.id, pin: "4321" })).body.token;
+    const shift = randomUUID();
+    await call("POST", "/shifts/open", t, { id: shift, openingCashMinor: 20000 });
+    const line = { productId: p.body.id, unitId: p.body.units[0].id, name: "قهوة", qtyMilli: 3000, priceMinor: 5000, discountMinor: 0, taxBp: 0 };
+    const sale = { id: randomUUID(), number: "SH-1", shiftId: shift, createdAt: new Date().toISOString(), lines: [line], payments: [{ method: "cash", amountMinor: 10000 }, { method: "card", amountMinor: 5000 }], totalMinor: 15000 };
+    expect((await call("POST", "/sales/batch", t, { sales: [sale] })).status).toBe(200);
+    const now = (await call("GET", "/shifts/current", t)).body.shift;
+    expect([now.expected, now.card]).toEqual([30000, 5000]);
+
+    // A wrong PIN, and a cashier's PIN, do not sign.
+    expect((await call("POST", `/shifts/${shift}/approve`, t, { userId: boss.body.id, pin: "0000" })).status).toBe(403);
+    expect((await call("POST", `/shifts/${shift}/approve`, t, { userId: cashier.body.id, pin: "4321" })).status).toBe(403);
+    expect((await call("POST", `/shifts/${shift}/approve`, t, { userId: boss.body.id, pin: "8765", reason: "رجّع باقي غلط" })).status).toBe(200);
+
+    // 5,000 short: counted 25 (one 20 and one 5), card machine 4.5, change left 20.
+    const close = await call("POST", `/shifts/${shift}/close`, t, { closingCashMinor: 25000, notes: { "20": 1, "5": 1 }, cardCountedMinor: 4500, transferCountedMinor: 0, floatMinor: 20000 });
+    expect(close.body.error ?? close.status).toBe(200);
+    expect([close.body.differenceMinor, close.body.cardExpectedMinor, close.body.deducted]).toEqual([-5000, 5000, true]);
+    const row = (await db.query(`SELECT counted_notes, card_counted_minor, float_minor, diff_reason, approved_by, close_kind, closed_by FROM shifts WHERE id = $1`, [shift])).rows[0];
+    expect(row.counted_notes).toEqual({ "20": 1, "5": 1 });
+    expect([Number(row.card_counted_minor), Number(row.float_minor), row.diff_reason, row.approved_by, row.close_kind, row.closed_by]).toEqual([4500, 20000, "رجّع باقي غلط", boss.body.id, "till", cashier.body.id]);
+    const pay = (await db.query(`SELECT kind, amount_minor FROM payroll_entries WHERE user_id = $1`, [cashier.body.id])).rows;
+    expect(pay.map((x) => [x.kind, Number(x.amount_minor)])).toEqual([["deduction", 5000]]);
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Tripoli" });
+    const list = (await call("GET", `/shifts?from=${today}&to=${today}`, o)).body;
+    expect(list[0]).toMatchObject({ difference_minor: -5000, card_counted_minor: 4500, card_expected_minor: 5000, float_minor: 20000, approved_by_name: "عادل", deducted: true, close_kind: "till" });
+
+    // The owner closes a shift left open, from the dashboard; the till learns it.
+    const s2 = randomUUID();
+    await call("POST", "/shifts/open", t, { id: s2, openingCashMinor: 20000 });
+    expect((await call("POST", `/shifts/${s2}/owner-close`, t, {})).status).toBe(403);
+    const oc = await call("POST", `/shifts/${s2}/owner-close`, o, {});
+    expect(oc.body.error ?? oc.status).toBe(200);
+    expect(oc.body.differenceMinor).toBeNull();
+    expect((await call("GET", "/shifts/current", t)).body.shift).toBeNull();
+    expect((await db.query(`SELECT close_kind FROM shifts WHERE id = $1`, [s2])).rows[0].close_kind).toBe("owner");
+
+    // The clock: a shift opened before today's closing hour closes by itself.
+    const s3 = randomUUID();
+    await call("POST", "/shifts/open", t, { id: s3, openingCashMinor: 0, openedAt: new Date(Date.now() - 2 * 86_400_000).toISOString() });
+    await call("PATCH", "/settings/shift", o, { ...set, autoCloseAt: "00:00" });
+    expect((await call("GET", "/shifts/current", t)).body.shift).toBeNull();
+    expect((await db.query(`SELECT close_kind, closing_cash_minor FROM shifts WHERE id = $1`, [s3])).rows[0]).toEqual({ close_kind: "auto", closing_cash_minor: null });
+    // One opened after the hour stays open.
+    const s4 = randomUUID();
+    await call("POST", "/shifts/open", t, { id: s4, openingCashMinor: 0 });
+    expect((await call("GET", "/shifts/current", t)).body.shift?.id).toBe(s4);
+  });
+});

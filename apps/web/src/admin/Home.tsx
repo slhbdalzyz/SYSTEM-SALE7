@@ -1,3 +1,4 @@
+import { CloseShiftButton } from "./ShiftCard";
 import { useEffect, useState } from "react";
 import { formatMoney, formatQty } from "@pos/shared";
 import type { Call } from "./Admin";
@@ -23,10 +24,11 @@ export function Home({ call, storeId, userName, open }: { call: Call; storeId: s
   const [hawl, setHawl] = useState<{ daysLeft: number; label: string; remind: number } | null>(null);
   // Only the owner can read it; for everyone else the call fails quietly and nothing shows.
   useEffect(() => void call<{ hawl: { daysLeft: number; label: string }; settings: { remindDays: number } }>("/zakat/settings").then((r) => setHawl({ ...r.hawl, remind: r.settings.remindDays })).catch(() => setHawl(null)), [call]);
+  const [tick, setTick] = useState(0);
   useEffect(() => {
     call<Dashboard>(`/dashboard?storeId=${storeId}`).then(setD).catch((e) => setError((e as Error).message));
     call<unknown[]>(`/stock/expiring?storeId=${storeId}&days=7`).then((r) => setExpiring(r.length)).catch(() => setExpiring(null));
-  }, [call, storeId]);
+  }, [call, storeId, tick]);
   if (error) return <div className="error">{error}</div>;
   if (!d) return <div className="muted">جاري التحميل…</div>;
 
@@ -114,7 +116,7 @@ export function Home({ call, storeId, userName, open }: { call: Call; storeId: s
           <div className="panel-head"><b>الكاشيرات المفتوحة توا</b></div>
           {d.openShifts.length === 0 ? <div className="muted">ما فيش وردية مفتوحة.</div> : (
             <table><tbody>{d.openShifts.map((s) => (
-              <tr key={s.id}><td>{s.cashier}<div className="muted">{s.device}</div></td><td className="num muted">{new Date(s.openedAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</td><td className="num">في الدرج {formatMoney(s.expectedCashMinor)}</td></tr>
+              <tr key={s.id}><td>{s.cashier}<div className="muted">{s.device}</div></td><td className="num muted">{new Date(s.openedAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</td><td className="num">في الدرج {formatMoney(s.expectedCashMinor)}</td><td><CloseShiftButton call={call} id={s.id} onDone={() => setTick((t) => t + 1)} /></td></tr>
             ))}</tbody></table>
           )}
         </div>
