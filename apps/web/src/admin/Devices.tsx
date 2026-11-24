@@ -6,14 +6,19 @@ import type { Call } from "./Admin";
 import { DeviceAccess } from "./DeviceAccess";
 import { bankLabel, useBanks } from "./banks";
 
-interface D { id: string; name: string; prefix: string; kind: "pos" | "price_checker" | "kitchen"; active: boolean; backup: boolean; last_seen_at: string | null; card_bank_id?: string | null }
+interface D { id: string; name: string; prefix: string; kind: "pos" | "price_checker" | "kitchen"; active: boolean; backup: boolean; last_seen_at: string | null; card_bank_id?: string | null; pending_count?: number | null; failed_count?: number | null; last_ip?: string | null }
 
 export function Devices({ call, storeId, storeName, stores, go, isOwner }: { call: Call; storeId: string; storeName: string; stores: { id: string; name: string }[]; go: (s: Screen) => void; isOwner: boolean }) {
   const [devices, setDevices] = useState<D[]>([]);
   const [name, setName] = useState("كاشير 1");
   const [error, setError] = useState<string | null>(null);
   const load = () => call<D[]>("/devices").then(setDevices).catch((e) => setError((e as Error).message));
-  useEffect(() => void load(), []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    void load();
+    // Who is connected changes while the page is open.
+    const t = setInterval(() => void call<D[]>("/devices").then(setDevices).catch(() => undefined), 30_000);
+    return () => clearInterval(t);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const thisId = session.device?.id;
   const banks = useBanks(call);
 
@@ -49,13 +54,20 @@ export function Devices({ call, storeId, storeName, stores, go, isOwner }: { cal
       <div className="muted small">«نسخة يومية»: جهاز الكاشير في تطبيق ويندوز يحفظ نسخة من كل بيانات المحل في «المستندات\POS-Backups» مرة في اليوم، ويخلّي آخر 30 نسخة. فعّلها بس على جهاز في مكان آمن.</div>
       <div className="card">
         <table>
-          <thead><tr><th>الجهاز</th><th>الرمز</th><th>آخر ظهور</th><th>الحالة</th><th title="تطبيق ويندوز يحفظ نسخة من كل بيانات المحل على الجهاز كل يوم">نسخة يومية</th>{banks.length > 1 && <th title="فلوس البطاقات في هذا الكاشير تنزل في حساب هذا المصرف">ماكينة البطاقات</th>}<th /></tr></thead>
+          <thead><tr><th>الجهاز</th><th>الرمز</th><th>آخر ظهور</th><th title="فواتير باعها الجهاز وما وصلتش للسيرفر لين توا">فواتير مستنية</th><th>الحالة</th><th title="تطبيق ويندوز يحفظ نسخة من كل بيانات المحل على الجهاز كل يوم">نسخة يومية</th>{banks.length > 1 && <th title="فلوس البطاقات في هذا الكاشير تنزل في حساب هذا المصرف">ماكينة البطاقات</th>}<th /></tr></thead>
           <tbody>
             {devices.map((d) => (
               <tr key={d.id}>
                 <td>{d.name}{d.kind === "price_checker" && <span className="badge off" style={{ marginInlineStart: 8 }}>قارئ أسعار</span>}{d.kind === "kitchen" && <span className="badge off" style={{ marginInlineStart: 8 }}>شاشة مطبخ</span>}{d.id === thisId && <span className="badge ok" style={{ marginInlineStart: 8 }}>هذا الجهاز</span>}</td>
                 <td className="num">{d.prefix}</td>
-                <td className="num">{d.last_seen_at ? new Date(d.last_seen_at).toLocaleString("en-GB") : "—"}</td>
+                <td>
+                  <Seen at={d.last_seen_at} />
+                  {d.last_ip && <div className="muted small num" dir="ltr">{d.last_ip}</div>}
+                </td>
+                <td className="num">
+                  {d.kind !== "pos" || d.pending_count == null ? "—" : d.pending_count === 0 ? <span className="badge ok">ولا وحدة</span> : <span className="badge warn">{d.pending_count}</span>}
+                  {!!d.failed_count && <div className="error small">{d.failed_count} مرفوضة، شوفها على الجهاز</div>}
+                </td>
                 <td>{d.active ? <span className="badge ok">فعال</span> : <span className="badge bad">موقوف</span>}</td>
                 <td>
                   {d.kind === "pos" && (
@@ -89,4 +101,13 @@ export function Devices({ call, storeId, storeName, stores, go, isOwner }: { cal
       </div>
     </div>
   );
+}
+
+/** "متصل" when the device was heard from in the last 2 minutes (tills check in every 20 s while open). */
+function Seen({ at }: { at: string | null }) {
+  if (!at) return <span className="muted">—</span>;
+  const mins = Math.floor((Date.now() - new Date(at).getTime()) / 60_000);
+  if (mins < 2) return <span className="badge ok">متصل</span>;
+  const ago = mins < 60 ? `قبل ${mins} دقيقة` : mins < 1440 ? `قبل ${Math.floor(mins / 60)} ساعة` : new Date(at).toLocaleDateString("en-GB");
+  return <span className="muted" title={new Date(at).toLocaleString("en-GB")}>{ago}</span>;
 }

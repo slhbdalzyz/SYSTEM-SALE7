@@ -21,7 +21,7 @@ import { PgliteDb, pgliteParsers } from "../pglite-db";
 import { localRoutes } from "./routes";
 import { BackupError, copyBeforeUpdate, LocalBackups, open } from "./backup";
 import { LocalLicense, readMachineId } from "./license";
-import { lanAddresses, readNetwork, saveNetwork, serveWeb } from "./network";
+import { lanAddresses, readNetwork, saveNetwork, serveWeb, startFinder } from "./network";
 
 const dataDir: string = process.env.POS_DATA_DIR ?? "";
 if (!dataDir) {
@@ -234,7 +234,13 @@ async function listen(lan: boolean) {
     });
   });
   console.log(`local server on http://${hostFor(lan)}:${port}, data in ${dataDir}`);
+  stopFinder?.();
+  stopFinder = lan ? startFinder(async () => {
+    const t = (await db.query(`SELECT id, name FROM tenants ORDER BY created_at LIMIT 1`)).rows[0];
+    return t ? { shopId: t.id, name: t.name, port } : null;
+  }) : null;
 }
+let stopFinder: (() => void) | null = null;
 /** Turns the shop network on or off: listens again on the new address, without a restart. */
 async function setLan(lan: boolean) {
   saveNetwork(dataDir, { lan });

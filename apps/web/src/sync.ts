@@ -27,7 +27,18 @@ export function onSync(fn: (s: SyncState) => void) {
 
 export async function refreshCounts() {
   const all = await db.outbox.toArray();
-  update({ pending: all.length, failed: all.filter((o) => o.error).length });
+  const counts = { pending: all.length, failed: all.filter((o) => o.error).length };
+  update(counts);
+  return counts;
+}
+
+/** Tells the server this till is there and what it still holds, when that changed or once a minute. */
+let lastBeat = { at: 0, key: "" };
+async function heartbeat(token: string, c: { pending: number; failed: number }) {
+  const key = `${c.pending}/${c.failed}`;
+  if (key === lastBeat.key && Date.now() - lastBeat.at < 60_000) return;
+  await api("/devices/heartbeat", { token, body: c }).catch(() => undefined);
+  lastBeat = { at: Date.now(), key };
 }
 
 /** Pulls catalog changes. A small overlap avoids missing edits committed while the last sync ran. */
@@ -154,6 +165,7 @@ export async function syncNow() {
     await syncExpiry(token);
     await syncTables(token);
     update({ online: true, lastSync: new Date().toISOString(), error: null });
+    await heartbeat(token, await refreshCounts());
   } catch (e) {
     const offline = e instanceof ApiError && e.status === 0;
     update({ online: !offline, error: offline ? null : (e as Error).message });

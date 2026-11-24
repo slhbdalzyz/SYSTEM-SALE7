@@ -9,6 +9,7 @@ import type { Screen } from "./App";
 import { TYPES } from "./Setup";
 import { RestoreUpload } from "./admin/LocalBackup";
 import { invoke, isDesktopApp } from "./hardware/printer";
+import { becomeSecondTill, checkMain, findAgain, findMainPcs, leaveClientMode, mainPc, mainUrl, type MainPc } from "./mainPc";
 
 export function LocalSetup({ go, login }: { go: (s: Screen) => void; login: JSX.Element }) {
   const [status, setStatus] = useState<{ shop: { name: string } | null } | null>(null);
@@ -16,8 +17,18 @@ export function LocalSetup({ go, login }: { go: (s: Screen) => void; login: JSX.
   useEffect(() => {
     api<{ shop: { name: string } | null }>("/local/status").then(setStatus).catch((e) => setError((e as Error).message));
   }, []);
-  if (error) return <StartError error={error} />;
-  if (!status) return <div className="center"><div className="card">جاري تشغيل النظام على الجهاز…</div></div>;
+  if (error) return mainPc() ? <MainAway /> : <StartError error={error} />;
+  if (!status) return <div className="center"><div className="card">{mainPc() ? "جاري الاتصال بالجهاز الرئيسي…" : "جاري تشغيل النظام على الجهاز…"}</div></div>;
+  if (status.shop && mainPc()) {
+    return (
+      <>
+        <div className="card" style={{ margin: "12px auto 0", maxWidth: 560, textAlign: "center" }}>
+          🔗 هذا الجهاز مربوط بالجهاز الرئيسي لـ «{status.shop.name}». ادخل بحساب صاحب المحل، ومن «الأجهزة» اعتمد هذا الجهاز ككاشير.
+        </div>
+        {login}
+      </>
+    );
+  }
   return status.shop ? login : <FirstRun go={go} />;
 }
 
@@ -43,6 +54,97 @@ function StartError({ error }: { error: string }) {
   );
 }
 
+/** A second till whose main computer doesn't answer (off, or on a new address not found yet). */
+function MainAway() {
+  const m = mainPc()!;
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  async function search() {
+    setBusy(true);
+    setNote(null);
+    if (await findAgain(true)) location.reload();
+    else setNote("ما لقيناهش على الشبكة.");
+    setBusy(false);
+  }
+  return (
+    <div className="center">
+      <div className="card stack" style={{ width: "min(480px, 100%)" }}>
+        <h2 style={{ margin: 0 }}>الجهاز الرئيسي مش واصل</h2>
+        <div className="muted">
+          هذا الجهاز كاشير ثاني لـ «{m.shopName}» على <b dir="ltr" className="num">{m.url}</b>. تأكد إن الجهاز الرئيسي شغال، والبرنامج مفتوح عليه، و«شبكة المحل» شغالة، وإن الجهازين على نفس الواي فاي أو الكابل.
+        </div>
+        {note && <div className="error">{note}</div>}
+        <div className="row">
+          <button className="primary" disabled={busy} onClick={() => location.reload()}>إعادة المحاولة</button>
+          <button disabled={busy} onClick={() => void search()}>{busy ? "جاري البحث…" : "دوّر عليه في الشبكة"}</button>
+          <span className="spacer" />
+          <button className="ghost" disabled={busy} onClick={() => confirm("فك ربط هذا الجهاز بالجهاز الرئيسي؟ البرنامج يعاود يفتح كجهاز مستقل.") && void leaveClientMode()}>فك الربط</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** The first screen's other way: this computer is a second till of a main computer already set up. */
+export function ConnectMain({ onCancel }: { onCancel?: () => void }) {
+  const [found, setFound] = useState<MainPc[] | null>(null);
+  const [addr, setAddr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function search() {
+    setBusy(true);
+    setError(null);
+    try {
+      const f = await findMainPcs(2000);
+      setFound(f);
+      if (!f.length) setError("ما لقيناش جهاز رئيسي. شغّل «شبكة المحل» عليه من «الأجهزة»، وتأكد إن الجهازين على نفس الواي فاي أو الكابل. أو اكتب عنوانه تحت.");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  useEffect(() => void search(), []);
+
+  async function connect(url: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      await becomeSecondTill(await checkMain(url));
+    } catch (e) {
+      setError((e as Error).message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card stack">
+      <h3 style={{ margin: 0 }}>🔗 ربط هذا الجهاز بالجهاز الرئيسي</h3>
+      <div className="muted small">الجهاز الرئيسي هو اللي عليه بيانات المحل. هذا الجهاز يولّي كاشير ثاني يشتغل عليه، والطابعة والدرج والميزان يخدموا عليه عادي.</div>
+      {busy && !found && <div className="muted">جاري البحث في الشبكة…</div>}
+      {found?.map((m) => (
+        <button type="button" key={m.url} className="primary" disabled={busy} onClick={() => void connect(m.url)}>
+          {m.shopName} · <span className="num" dir="ltr">{m.url.replace(/^http:\/\//, "")}</span>
+        </button>
+      ))}
+      <div className="row" style={{ alignItems: "end" }}>
+        <label style={{ flex: 1 }}>أو اكتب عنوان الجهاز الرئيسي
+          <input className="num" dir="ltr" value={addr} onChange={(e) => setAddr(e.target.value)} placeholder="192.168.1.10" />
+        </label>
+        <button type="button" disabled={busy || addr.trim().length < 7} onClick={() => void connect(mainUrl(addr))}>اربط</button>
+      </div>
+      <span className="muted small">العنوان مكتوب على الجهاز الرئيسي في «الأجهزة» ← «📶 شبكة المحل».</span>
+      {error && <div className="error">{error}</div>}
+      <div className="row">
+        <button type="button" disabled={busy} onClick={() => void search()}>دوّر من جديد</button>
+        <span className="spacer" />
+        {onCancel && <button type="button" className="ghost" onClick={onCancel}>رجوع</button>}
+      </div>
+    </div>
+  );
+}
+
 function FirstRun({ go }: { go: (s: Screen) => void }) {
   const [step, setStep] = useState(0);
   const [f, setF] = useState({ businessType: "grocery", businessName: "", storeName: "الفرع الرئيسي", city: "", phone: "", ownerName: "", email: "", password: "", pin: "", deviceName: "كاشير 1" });
@@ -50,6 +152,7 @@ function FirstRun({ go }: { go: (s: Screen) => void }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [restoring, setRestoring] = useState(false);
+  const [second, setSecond] = useState(false);
   const set = (patch: Partial<typeof f>) => setF({ ...f, ...patch });
   const STEPS = ["المحل", "حسابك"];
   const ok = [
@@ -94,6 +197,11 @@ function FirstRun({ go }: { go: (s: Screen) => void }) {
         {step > 0 && <button type="button" className="ghost back" onClick={() => setStep(step - 1)}>→ رجوع</button>}
         <h1 style={{ margin: 0 }}>إعداد المحل على هذا الجهاز</h1>
         <div className="muted">النظام يشتغل على هذا الكمبيوتر من غير نت، وكل البيانات تتخزن عليه.</div>
+        {step === 0 && isDesktopApp() && (
+          second ? <ConnectMain onCancel={() => setSecond(false)} /> : (
+            <div className="row"><span className="muted">عندك جهاز رئيسي في المحل عليه البيانات؟</span><button type="button" className="ghost" onClick={() => setSecond(true)}>🔗 اربط هذا الجهاز بيه ككاشير ثاني</button></div>
+          )
+        )}
         <ol className="wizard-steps">
           {STEPS.map((s, i) => <li key={s} className={i === step ? "active" : i < step ? "done" : ""}>{i < step ? "✓" : i + 1} {s}</li>)}
         </ol>
