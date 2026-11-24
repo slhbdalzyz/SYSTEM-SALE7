@@ -1,7 +1,7 @@
 import { formatHijri, formatMoney, formatQty, nextHawl, readZakatSettings } from "@pos/shared";
 import type { Db, Tx } from "./db";
 
-export type AlertKind = "low_stock" | "out_of_stock" | "big_return" | "big_discount" | "cash_diff" | "over_credit_limit" | "zakat_due" | "subscription_due" | "support_reply" | "announcement" | "expiry_soon" | "device_request";
+export type AlertKind = "low_stock" | "out_of_stock" | "big_return" | "big_discount" | "cash_diff" | "over_credit_limit" | "zakat_due" | "subscription_due" | "support_reply" | "announcement" | "expiry_soon" | "device_request" | "shift_forgotten";
 
 /** What a shop wants to hear about. Amounts in dirham; 0 turns that alert off. */
 export interface AlertSettings {
@@ -119,6 +119,25 @@ export async function checkZakatDue(q: Q, tenantId: string, now = new Date()) {
     body: `${s.calendar === "hijri" ? formatHijri(h.date) : date}: وقت جرد المحل وحساب الزكاة من صفحة «الزكاة».`, data: { date },
   });
   return true;
+}
+
+/** A shift open for more than a day: once per shift, so the owner can close it or turn on the timed close. */
+export async function checkForgottenShifts(q: Q, tenantId: string, hours = 24) {
+  const r = await q.query(
+    `SELECT sh.id, sh.store_id, sh.opened_at, COALESCE(u.name, 'كاشير') AS cashier, COALESCE(d.name, 'جهاز') AS device, COALESCE(st.name, '') AS store
+       FROM shifts sh LEFT JOIN users u ON u.id = sh.user_id LEFT JOIN devices d ON d.id = sh.device_id LEFT JOIN stores st ON st.id = sh.store_id
+      WHERE sh.tenant_id = $1 AND sh.closed_at IS NULL AND sh.opened_at < now() - make_interval(hours => $2::int)
+        AND NOT EXISTS (SELECT 1 FROM alerts a WHERE a.tenant_id = $1 AND a.kind = 'shift_forgotten' AND a.data->>'shiftId' = sh.id::text)`,
+    [tenantId, hours],
+  );
+  for (const s of r.rows) {
+    const days = Math.max(1, Math.floor((Date.now() - new Date(s.opened_at).getTime()) / 86_400_000));
+    await raiseAlert(q, {
+      tenantId, storeId: s.store_id, kind: "shift_forgotten", title: `وردية مفتوحة من ${days === 1 ? "يوم" : `${days} أيام`}`,
+      body: `وردية ${s.cashier} على ${s.device}${s.store ? ` (${s.store})` : ""} مازالت مفتوحة. سكّرها من «الرئيسية».`, data: { shiftId: s.id },
+    });
+  }
+  return r.rows.length;
 }
 
 // ---- Phone notifications (Web Push) ----

@@ -1,4 +1,4 @@
-import { CloseShiftButton } from "../admin/ShiftCard";
+import { OpenShifts } from "../admin/ShiftCard";
 import { useCallback, useEffect, useState } from "react";
 import { formatMoney, formatQty } from "@pos/shared";
 import { api, ApiError } from "../api";
@@ -18,7 +18,7 @@ export interface Dashboard {
   week: { day: string; totalMinor: number; salesCount: number; profitMinor: number }[];
   stores: { id: string; name: string; totalMinor: number; salesCount: number }[];
   lowStock: { count: number; items: { id: string; name: string; storeName: string; stockMilli: number; minMilli: number; weighted: boolean }[] };
-  openShifts: { id: string; cashier: string; device: string; storeName: string; openedAt: string; expectedCashMinor: number }[];
+  openShifts: { id: string; cashier: string; device: string; storeName: string; openedAt: string; hoursOpen?: number; expectedCashMinor: number }[];
   customersOweMinor: number;
   weOweMinor: number;
   unreadAlerts: number;
@@ -228,13 +228,7 @@ function Home({ call, storeId, onUnread }: { call: Call; storeId: string | null;
 
       <section className="card stack">
         <b>الكاشيرات المفتوحة</b>
-        {d.openShifts.length === 0 && <span className="muted">ما فيش وردية مفتوحة</span>}
-        {d.openShifts.map((s) => (
-          <div key={s.id} className="kv">
-            <span>{s.cashier} <span className="muted small">· {s.device}{d.stores.length > 1 ? ` · ${s.storeName}` : ""} · فتح {ago(s.openedAt)}</span></span>
-            <span><span className="muted small">في الدرج </span><b className="num">{formatMoney(s.expectedCashMinor)}</b> <CloseShiftButton call={call} id={s.id} onDone={() => void load()} /></span>
-          </div>
-        ))}
+        <OpenShifts call={call} compact onChanged={() => void load()} />
       </section>
 
       <section className="card stack">

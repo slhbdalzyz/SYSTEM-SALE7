@@ -4,6 +4,7 @@ import { readShopSettings, type ShiftSettings } from "@pos/shared";
 import { audit, inTx, type Db, type Tx } from "../db";
 import { HttpError, requireDevice, requireRole, verifyApproval } from "../auth";
 import { alertCashDiff, flushPushes } from "../alerts";
+import { checkOwnerPassword } from "./reset";
 
 type Q = Db | Tx;
 const TZ = "Africa/Tripoli";
@@ -191,4 +192,44 @@ export async function shiftRoutes(app: FastifyInstance) {
     await flushPushes(app.db, req.user.tid);
     return out;
   });
+
+  /** Every open shift in every branch, with how long it has been open; the owner closes them from here. */
+  app.get("/shifts/open", { preHandler: requireRole("owner", "manager") }, async (req) => {
+    await autoCloseShifts(app.db, req.user.tid).catch(() => 0);
+    return { shifts: await openShifts(app.db, req.user.tid), autoCloseAt: (await shiftSettings(app.db, req.user.tid)).autoCloseAt };
+  });
+
+  /** «سكّر الكل»: the owner closes every open shift at once, after their password. */
+  app.post("/shifts/close-all", { preHandler: requireRole("owner") }, async (req) => {
+    const b = z.object({ password: z.string().min(1).max(200) }).parse(req.body);
+    await checkOwnerPassword(app.db, req.user.tid, req.user.sub, b.password);
+    const open = await openShifts(app.db, req.user.tid);
+    for (const s of open) {
+      await closeShiftRow(app.db, req.user.tid, s.id, { countedCashMinor: null, reason: "قفلها المالك (سكّر الكل)" }, { userId: req.user.sub, kind: "owner" });
+    }
+    await flushPushes(app.db, req.user.tid);
+    return { closed: open.length };
+  });
+}
+
+export interface OpenShift { id: string; cashier: string; device: string; storeId: string; storeName: string; openedAt: string; hoursOpen: number; expectedCashMinor: number }
+
+/** Open shifts in all the shop's branches, oldest first. A deleted till or cashier still shows. */
+export async function openShifts(db: Db | Tx, tid: string): Promise<OpenShift[]> {
+  const r = await db.query(
+    `SELECT sh.id, sh.opened_at, sh.store_id, COALESCE(u.name, 'كاشير محذوف') AS cashier, COALESCE(d.name, 'جهاز محذوف') AS device, COALESCE(st.name, '') AS store_name,
+            EXTRACT(EPOCH FROM now() - sh.opened_at) / 3600 AS hours_open,
+            sh.opening_cash_minor
+              + COALESCE((SELECT sum(p.amount_minor) FROM payments p JOIN sales s ON s.id = p.sale_id WHERE s.shift_id = sh.id AND p.method = 'cash'), 0)
+              - COALESCE((SELECT sum(s.change_minor) FROM sales s WHERE s.shift_id = sh.id), 0)
+              + COALESCE((SELECT sum(cp.amount_minor) FROM customer_payments cp WHERE cp.shift_id = sh.id AND cp.method = 'cash'), 0)
+              + COALESCE((SELECT sum(CASE dm.kind WHEN 'in' THEN dm.amount_minor ELSE -dm.amount_minor END) FROM drawer_moves dm WHERE dm.shift_id = sh.id), 0) AS expected_cash_minor
+       FROM shifts sh LEFT JOIN users u ON u.id = sh.user_id LEFT JOIN devices d ON d.id = sh.device_id LEFT JOIN stores st ON st.id = sh.store_id
+      WHERE sh.tenant_id = $1 AND sh.closed_at IS NULL ORDER BY sh.opened_at`,
+    [tid],
+  );
+  return r.rows.map((s) => ({
+    id: s.id, cashier: s.cashier, device: s.device, storeId: s.store_id, storeName: s.store_name, openedAt: s.opened_at,
+    hoursOpen: Math.floor(Number(s.hours_open)), expectedCashMinor: Number(s.expected_cash_minor),
+  }));
 }

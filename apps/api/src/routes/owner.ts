@@ -1,11 +1,11 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { ownBank } from "./money";
-import { autoCloseShifts } from "./shifts";
+import { autoCloseShifts, openShifts } from "./shifts";
 import { checkExpirySoon } from "../expiry";
 import { audit, type Db } from "../db";
 import { HttpError, authenticate, requirePerm, requireRole } from "../auth";
-import { DEFAULT_ALERT_SETTINGS, alertSettings, checkZakatDue, flushPushes, pushPublicKey } from "../alerts";
+import { DEFAULT_ALERT_SETTINGS, alertSettings, checkForgottenShifts, checkZakatDue, flushPushes, pushPublicKey } from "../alerts";
 
 /**
  * Every table that holds a shop's data, in the order a restore would load them, with the
@@ -83,7 +83,8 @@ export async function ownerRoutes(app: FastifyInstance) {
     await ownStore(tid, q.storeId);
     const zakat = await checkZakatDue(app.db, tid).catch(() => false);
     const expiry = await checkExpirySoon(app.db, tid).catch(() => false);
-    if (zakat || expiry) await flushPushes(app.db, tid);
+    const forgotten = await checkForgottenShifts(app.db, tid).catch(() => 0);
+    if (zakat || expiry || forgotten) await flushPushes(app.db, tid);
     const store = q.storeId ?? null;
     const args = [tid, store, q.tz];
     const inStore = (a: string) => `${a}.tenant_id = $1 AND ($2::uuid IS NULL OR ${a}.store_id = $2)`;
@@ -132,17 +133,8 @@ export async function ownerRoutes(app: FastifyInstance) {
          ORDER BY COALESCE(sum(m.qty_milli), 0) <= 0 DESC, p.name`,
         [tid, store],
       ),
-      app.db.query(
-        `SELECT sh.id, sh.opened_at, u.name AS cashier, d.name AS device, st.name AS store_name,
-           sh.opening_cash_minor
-             + COALESCE((SELECT sum(p.amount_minor) FROM payments p JOIN sales s ON s.id = p.sale_id WHERE s.shift_id = sh.id AND p.method = 'cash'), 0)
-             - COALESCE((SELECT sum(s.change_minor) FROM sales s WHERE s.shift_id = sh.id), 0)
-             + COALESCE((SELECT sum(cp.amount_minor) FROM customer_payments cp WHERE cp.shift_id = sh.id AND cp.method = 'cash'), 0)
-             + COALESCE((SELECT sum(CASE dm.kind WHEN 'in' THEN dm.amount_minor ELSE -dm.amount_minor END) FROM drawer_moves dm WHERE dm.shift_id = sh.id), 0) AS expected_cash_minor
-         FROM shifts sh JOIN users u ON u.id = sh.user_id JOIN devices d ON d.id = sh.device_id JOIN stores st ON st.id = sh.store_id
-         WHERE ${inStore("sh")} AND sh.closed_at IS NULL ORDER BY sh.opened_at`,
-        [tid, store],
-      ),
+      // Every branch: a shift forgotten in another branch is the one the owner can't find.
+      openShifts(app.db, tid),
       app.db.query(
         `SELECT COALESCE((SELECT sum(balance_minor) FROM customer_balances WHERE tenant_id = $1 AND balance_minor > 0), 0)::bigint AS customers_owe_minor,
            COALESCE((SELECT sum(balance_minor) FROM supplier_balances WHERE tenant_id = $1 AND balance_minor > 0), 0)::bigint AS we_owe_minor`,
@@ -198,7 +190,7 @@ export async function ownerRoutes(app: FastifyInstance) {
       week,
       stores: stores.rows.map((s) => ({ id: s.id, name: s.name, totalMinor: Number(s.total_minor), salesCount: s.sales_count })),
       lowStock: { count: low.rowCount ?? low.rows.length, items: low.rows.slice(0, 8).map((p) => ({ id: p.id, name: p.name, storeName: p.store_name, stockMilli: Number(p.stock_milli), minMilli: Number(p.min_stock_milli), weighted: p.is_weighted })) },
-      openShifts: shifts.rows.map((s) => ({ id: s.id, cashier: s.cashier, device: s.device, storeName: s.store_name, openedAt: s.opened_at, expectedCashMinor: Number(s.expected_cash_minor) })),
+      openShifts: shifts,
       customersOweMinor: Number(owed.rows[0].customers_owe_minor),
       weOweMinor: Number(owed.rows[0].we_owe_minor),
       unreadAlerts: unread.rows[0].n,
