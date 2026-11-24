@@ -79,3 +79,23 @@ describe("local edition", () => {
     expect(stopped).toBe(1);
   });
 });
+
+describe("finding the main computer on the shop's network", () => {
+  it("answers a till that asks, and only that question", async () => {
+    const { createSocket } = await import("node:dgram");
+    const { startFinder, FIND_ASK } = await import("../src/local/network");
+    const port = 47000 + Math.floor(Math.random() * 1000);
+    const stop = startFinder(async () => ({ shopId: "t1", name: "بقالة الحي", port: 7400 }), port);
+    await new Promise((r) => setTimeout(r, 100));
+    const till = createSocket("udp4");
+    const got: string[] = [];
+    till.on("message", (m) => got.push(m.toString("utf8")));
+    await new Promise<void>((r) => till.bind(0, "127.0.0.1", () => r()));
+    till.send("hello", port, "127.0.0.1");
+    till.send(FIND_ASK, port, "127.0.0.1");
+    await new Promise((r) => setTimeout(r, 300));
+    stop();
+    till.close();
+    expect(got.map((g) => JSON.parse(g))).toEqual([{ app: "sale7-pos", shopId: "t1", name: "بقالة الحي", port: 7400 }]);
+  });
+});

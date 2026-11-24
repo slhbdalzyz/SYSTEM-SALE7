@@ -2,9 +2,11 @@
 //! to the receipt printer (and through it, pulse the cash drawer), and open the customer
 //! display on the second monitor, read the counter scale on a COM port, and keep daily
 //! backups of the shop's data on the till's disk. The local edition also runs the shop's own
-//! server and database on this computer (see local.rs).
+//! server and database on this computer (see local.rs), or, on a second till, uses the shop's
+//! main computer over the network (see client.rs).
 
 mod backup;
+mod client;
 mod local;
 mod printer;
 mod scale;
@@ -102,19 +104,53 @@ fn local_info(state: tauri::State<'_, Option<local::LocalServer>>) -> Option<Loc
     state.as_ref().map(|s| LocalInfo { data_dir: s.data_dir.display().to_string(), log_file: s.log_file.display().to_string(), port: local::PORT })
 }
 
+/// Where the shop's files live on this computer (C:\ProgramData\Sale7).
+struct Root(std::path::PathBuf);
+
+/// The main computer this till uses, when it is a second till; None on the main computer.
+#[tauri::command]
+fn client_mode(root: tauri::State<'_, Root>) -> Option<client::Main> {
+    client::read(&root.0)
+}
+
+/// Makes this computer a second till of `main` (its own server stops), or, with none, the shop's
+/// main computer again (the app restarts to start its server).
+#[tauri::command]
+fn set_client_mode(app: AppHandle, root: tauri::State<'_, Root>, server: tauri::State<'_, Option<local::LocalServer>>, main: Option<client::Main>) -> Result<(), String> {
+    client::write(&root.0, main.as_ref())?;
+    match main {
+        Some(_) => {
+            if let Some(s) = server.as_ref() {
+                s.stop();
+            }
+            Ok(())
+        }
+        None => app.restart(),
+    }
+}
+
+/// Asks the shop's network for main computers (those with «شبكة المحل» on).
+#[tauri::command]
+async fn find_main_pcs(wait_ms: Option<u64>) -> Result<Vec<client::Main>, String> {
+    let wait = Duration::from_millis(wait_ms.unwrap_or(1500).clamp(300, 5000));
+    tauri::async_runtime::spawn_blocking(move || client::find(wait)).await.map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
         .setup(|app| {
-            let fallback = app.path().app_data_dir()?;
-            let server = local::start(&app.path().resource_dir()?, local::data_root(fallback));
+            let root = local::plain(&local::data_root(app.path().app_data_dir()?));
+            // A second till runs no database of its own.
+            let server = if client::read(&root).is_some() { None } else { local::start(&app.path().resource_dir()?, root.clone()) };
             app.manage(server);
+            app.manage(Root(root));
             if update::enabled(app.handle()) {
                 app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![list_printers, print_raw, print_tcp, open_display, list_serial_ports, read_scale, save_backup, local_info, update::check_update, update::install_update])
+        .invoke_handler(tauri::generate_handler![list_printers, print_raw, print_tcp, open_display, list_serial_ports, read_scale, save_backup, local_info, client_mode, set_client_mode, find_main_pcs, update::check_update, update::install_update])
         .build(tauri::generate_context!())
         .expect("error while starting the till");
     app.run(|app, event| {

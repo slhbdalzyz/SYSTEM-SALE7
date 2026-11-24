@@ -99,6 +99,16 @@ describe("grocery POS flow", () => {
     cashierToken = login.body.token;
   });
 
+  it("shows the owner which tills are connected and what they still hold", async () => {
+    expect((await call("POST", "/devices/heartbeat", owner, { pending: 1 })).status).toBe(403);
+    expect((await call("POST", "/devices/heartbeat", cashierToken, { pending: -1 })).status).toBe(400);
+    expect((await call("POST", "/devices/heartbeat", cashierToken, { pending: 3, failed: 1 })).status).toBe(200);
+    const d = (await call("GET", "/devices", owner)).body.find((x: { name: string }) => x.name === "كاشير 1");
+    expect(d).toMatchObject({ pending_count: 3, failed_count: 1 });
+    expect(d.last_ip).toMatch(/^10\.1\./);
+    expect(Date.now() - new Date(d.last_seen_at).getTime()).toBeLessThan(60_000);
+  });
+
   it("does not let a cashier edit products", async () => {
     const r = await call("POST", "/products", cashierToken, { name: "x", units: [{ name: "قطعة", priceMinor: 1, isBase: true }] });
     expect(r.status).toBe(403);

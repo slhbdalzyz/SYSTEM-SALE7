@@ -88,6 +88,21 @@ export async function deviceRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
+  /**
+   * The till says it is still there, how many sales it holds to send and how many the server
+   * turned down. Sent with its regular sync, so the owner sees in «الأجهزة» which tills are
+   * connected and which have sales waiting.
+   */
+  app.post("/devices/heartbeat", { preHandler: requireDevice }, async (req) => {
+    const b = z.object({ pending: z.number().int().min(0).max(1_000_000), failed: z.number().int().min(0).max(1_000_000).default(0) }).parse(req.body);
+    const ip = (req.ip ?? "").replace(/^::ffff:/, "") || null;
+    await app.db.query(
+      `UPDATE devices SET last_seen_at = now(), pending_count = $3, failed_count = $4, last_ip = $5 WHERE id = $1 AND tenant_id = $2`,
+      [req.user.did, req.user.tid, b.pending, b.failed, ip],
+    );
+    return { ok: true };
+  });
+
   // ── A cashier gets a new device in without the owner there ─────────────────────────
 
   /** Step 1: the shop code shows which shop it is, its branches and who can sign in with a PIN. */

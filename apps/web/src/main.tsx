@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { registerSW } from "virtual:pwa-register";
 import { App } from "./App";
 import { matchLocalShop } from "./localGuard";
+import { startClientMode } from "./mainPc";
 import "./styles.css";
 
 // A device opening the app from the shop's main computer (http://192.168.1.10:7400) is not a
@@ -31,6 +32,10 @@ const render = () =>
 if (import.meta.env.VITE_LOCAL === "1") {
   // The first run builds the database, which takes a few seconds: say so meanwhile.
   document.getElementById("root")!.innerHTML = '<div class="center"><div class="card">جاري تشغيل النظام على الجهاز…</div></div>';
-  void matchLocalShop().finally(render);
+  // A second till first points at the shop's main computer.
+  void startClientMode()
+    .catch(() => null)
+    .then(() => matchLocalShop())
+    .finally(render);
 }
 else render();

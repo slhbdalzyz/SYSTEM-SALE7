@@ -1,6 +1,7 @@
 // Shop network mode: the computer with the database also serves the web app to the shop's other
 // devices on the same Wi-Fi or cable (a second till in a browser, the kitchen screen, the owner's
 // phone). Off by default: the server then listens on this computer only.
+import { createSocket } from "node:dgram";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { networkInterfaces } from "node:os";
@@ -48,4 +49,38 @@ export function serveWeb(webDir: string | null, req: IncomingMessage, res: Serve
   const cache = target.includes(`${path.sep}assets${path.sep}`) ? "public, max-age=31536000, immutable" : "no-cache";
   res.writeHead(200, { "content-type": type, "cache-control": cache });
   res.end(req.method === "HEAD" ? undefined : readFileSync(target));
+}
+
+/**
+ * The other Windows tills find this computer by asking on the shop's network (a UDP broadcast
+ * "SALE7-FIND" to port 7401), so a new address from the router after a restart doesn't cut them
+ * off. Answers only while the shop network is on.
+ */
+export const FIND_PORT = 7401;
+export const FIND_ASK = "SALE7-FIND";
+
+export function startFinder(answer: () => Promise<Record<string, unknown> | null>, port = FIND_PORT): () => void {
+  const sock = createSocket({ type: "udp4", reuseAddr: true });
+  let open = true;
+  const close = () => {
+    if (!open) return;
+    open = false;
+    try {
+      sock.close();
+    } catch {
+      /* already closed */
+    }
+  };
+  sock.on("message", (msg, from) => {
+    if (msg.toString("utf8").trim() !== FIND_ASK) return;
+    void answer()
+      .then((a) => a && open && sock.send(JSON.stringify({ app: "sale7-pos", ...a }), from.port, from.address))
+      .catch(() => undefined);
+  });
+  sock.on("error", (e) => {
+    console.error("finding on the shop network unavailable:", e.message);
+    close();
+  });
+  sock.bind(port, "0.0.0.0");
+  return close;
 }

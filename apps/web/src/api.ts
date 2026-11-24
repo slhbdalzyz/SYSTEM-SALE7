@@ -7,7 +7,24 @@ export class ApiError extends Error {
 // The local edition's web app is also opened from the shop's main computer by other devices
 // (http://192.168.1.10:7400): there the API is on the same address, not on 127.0.0.1.
 const servedByShopComputer = import.meta.env.VITE_LOCAL === "1" && typeof location !== "undefined" && location.port === "7400";
-const BASE = servedByShopComputer ? "/api" : (import.meta.env.VITE_API_URL ?? "/api");
+let BASE = servedByShopComputer ? "/api" : (import.meta.env.VITE_API_URL ?? "/api");
+
+/**
+ * A second till in the Windows app (see client.rs): the API is on the shop's main computer,
+ * e.g. http://192.168.1.10:7400. Set before the first screen, and again when the main computer
+ * is found at a new address.
+ */
+let mainServer: string | null = null;
+export function setMainServer(url: string) {
+  mainServer = url.replace(/\/+$/, "");
+  BASE = `${mainServer}/api`;
+}
+export const onMainServer = () => mainServer;
+/** Called when the main computer can't be reached (it may have a new address). */
+let lostMain: (() => void) | null = null;
+export function onLostMain(f: () => void) {
+  lostMain = f;
+}
 
 export const DEMO = import.meta.env.VITE_DEMO === "1";
 /** The Windows app's local edition: the API runs on this computer, with the shop's data on its disk. */
@@ -40,7 +57,8 @@ export async function api<T = unknown>(path: string, opts: { method?: string; bo
     if (r.status >= 400) throw new ApiError(r.status, (r.data as { error?: string }).error ?? `خطأ ${r.status}`);
     return r.data as T;
   }
-  if (LOCAL) await waitForLocalServer();
+  // A second till does not wait for a server of its own: it sells offline when the main computer is away.
+  if (LOCAL && !mainServer) await waitForLocalServer();
   let res: Response;
   try {
     res = await fetch(BASE + path, {
@@ -52,7 +70,8 @@ export async function api<T = unknown>(path: string, opts: { method?: string; bo
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     });
   } catch {
-    throw new ApiError(0, "لا يوجد اتصال بالسيرفر");
+    if (mainServer) lostMain?.();
+    throw new ApiError(0, mainServer ? "الجهاز الرئيسي مش واصل" : "لا يوجد اتصال بالسيرفر");
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new ApiError(res.status, (data as { error?: string }).error ?? `خطأ ${res.status}`);
@@ -61,12 +80,14 @@ export async function api<T = unknown>(path: string, opts: { method?: string; bo
 
 /** Sends a file as it is (a backup to restore), with extra headers. */
 export async function apiUpload<T = unknown>(path: string, file: Blob, headers: Record<string, string> = {}, token?: string | null): Promise<T> {
-  if (LOCAL) await waitForLocalServer();
+  // A second till does not wait for a server of its own: it sells offline when the main computer is away.
+  if (LOCAL && !mainServer) await waitForLocalServer();
   let res: Response;
   try {
     res = await fetch(BASE + path, { method: "POST", headers: { "content-type": "application/octet-stream", ...headers, ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: file });
   } catch {
-    throw new ApiError(0, "لا يوجد اتصال بالسيرفر");
+    if (mainServer) lostMain?.();
+    throw new ApiError(0, mainServer ? "الجهاز الرئيسي مش واصل" : "لا يوجد اتصال بالسيرفر");
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new ApiError(res.status, (data as { error?: string }).error ?? `خطأ ${res.status}`);
