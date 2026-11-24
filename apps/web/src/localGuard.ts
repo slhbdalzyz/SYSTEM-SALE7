@@ -9,16 +9,6 @@ import Dexie from "dexie";
 import { api } from "./api";
 
 const MARK = "pos.localShop";
-const RESET = "pos.localReset";
-
-function write(k: string, v: string | null) {
-  try {
-    if (v) localStorage.setItem(k, v);
-    else localStorage.removeItem(k);
-  } catch {
-    /* storage blocked */
-  }
-}
 
 function read(k: string): string | null {
   try {
@@ -33,7 +23,7 @@ function hasTillData(): boolean {
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (k && k.startsWith("pos.") && k !== MARK && k !== RESET) return true;
+      if (k && k.startsWith("pos.") && k !== MARK) return true;
     }
   } catch {
     /* storage blocked: nothing is kept */
@@ -43,27 +33,17 @@ function hasTillData(): boolean {
 
 export async function matchLocalShop(): Promise<void> {
   let shopId: string;
-  let resetAt = "";
   try {
-    const s = await api<{ shop: { id?: string; name: string; resetAt?: string | null } | null }>("/local/status");
+    const s = await api<{ shop: { id?: string; name: string } | null }>("/local/status");
     shopId = s.shop ? (s.shop.id ?? s.shop.name) : "";
-    resetAt = s.shop?.resetAt ?? "";
   } catch {
     return; // the server did not start: the first screen shows that, with a retry
   }
   const known = read(MARK);
-  if (known === shopId) {
-    // Same shop, but its records were cleared (on this till or another): this till's copy of
-    // them (queued sales, catalogue with old stock) is dropped; its sign-in and device stay.
-    if (resetAt && read(RESET) !== resetAt) {
-      await Dexie.delete("pos").catch(() => undefined);
-      write(RESET, resetAt);
-    }
-    return;
-  }
+  if (known === shopId) return;
   // The browser's data belongs to the same shop when it was set up before this check existed.
   if (known === null && shopId && !hasTillData()) {
-    remember(shopId, resetAt);
+    remember(shopId);
     return;
   }
   if (known === null && shopId) {
@@ -71,7 +51,7 @@ export async function matchLocalShop(): Promise<void> {
     const token = read("pos.deviceToken");
     const kind = read("pos.deviceKind");
     if (!token || (kind && kind !== "pos") || (await deviceKnown(token))) {
-      remember(shopId, resetAt);
+      remember(shopId);
       return;
     }
   }
@@ -82,7 +62,7 @@ export async function matchLocalShop(): Promise<void> {
     /* storage blocked: nothing to drop */
   }
   await Dexie.delete("pos").catch(() => undefined);
-  remember(shopId, resetAt);
+  remember(shopId);
 }
 
 async function deviceKnown(token: string): Promise<boolean> {
@@ -95,8 +75,7 @@ async function deviceKnown(token: string): Promise<boolean> {
   }
 }
 
-function remember(shopId: string, resetAt: string) {
-  write(RESET, resetAt || null);
+function remember(shopId: string) {
   try {
     if (shopId) localStorage.setItem(MARK, shopId);
     else localStorage.removeItem(MARK);

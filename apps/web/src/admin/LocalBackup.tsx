@@ -126,66 +126,6 @@ export function LocalBackup({ call }: { call: Call }) {
         </table>
         <RestoreUpload token={session.adminToken} />
       </div>
-      <ResetDatabase call={call} />
-    </div>
-  );
-}
-
-/** Clearing the database: the records only (the shop stays set up), or everything (back to the first-run setup). */
-function ResetDatabase({ call }: { call: Call }) {
-  const [mode, setMode] = useState<"activity" | "all" | null>(null);
-  const [password, setPassword] = useState("");
-  const [typed, setTyped] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const WORD = "تصفير";
-
-  async function run() {
-    if (!mode) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await call("/local/reset", { body: { mode, password } });
-      if (mode === "all") {
-        try {
-          for (const k of Object.keys(localStorage)) if (k.startsWith("pos.")) localStorage.removeItem(k);
-        } catch {
-          /* storage blocked */
-        }
-      }
-      await afterRestore();
-    } catch (e) {
-      setError((e as Error).message);
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="card stack">
-      <h3 style={{ margin: 0 }}>🧹 تصفير قاعدة البيانات</h3>
-      <div className="muted">قبل التصفير ينعمل نسخة احتياطية وحدها، وتقدر ترجعلها من «استرجاع نسخة» فوق لو غيّرت رأيك.</div>
-      <div className="stack" style={{ gap: 8 }}>
-        <label className="row" style={{ alignItems: "flex-start", gap: 8 }}>
-          <input type="radio" name="reset-mode" checked={mode === "activity"} onChange={() => setMode("activity")} style={{ width: "auto", marginTop: 4 }} />
-          <span><b>مسح الحركات بس</b><br /><small className="muted">تنمسح المبيعات والمشتريات والمخزون والديون والخزينة والورديات والمصروفات. تبقى الأصناف والأسعار والعملاء والموردين والموظفين والأجهزة والإعدادات. مناسب بعد التجربة وقبل ما تبدأ الشغل الحقيقي.</small></span>
-        </label>
-        <label className="row" style={{ alignItems: "flex-start", gap: 8 }}>
-          <input type="radio" name="reset-mode" checked={mode === "all"} onChange={() => setMode("all")} style={{ width: "auto", marginTop: 4 }} />
-          <span><b>مسح كل شي</b><br /><small className="muted">ينمسح المحل بالكامل ويرجع البرنامج لشاشة «إعداد المحل» كأنه جديد. الترخيص يبقى على الجهاز.</small></span>
-        </label>
-      </div>
-      {mode && (
-        <div className="error stack">
-          <b>{mode === "all" ? "كل بيانات المحل حتنمسح." : "كل الحركات حتنمسح، والأصناف تبقى بكمية صفر."}</b>
-          <label>كلمة سر حسابك<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" /></label>
-          <label>اكتب كلمة «{WORD}» للتأكيد<input value={typed} onChange={(e) => setTyped(e.target.value)} /></label>
-          <div className="row">
-            <button className="danger" disabled={busy || !password || typed.trim() !== WORD} onClick={() => void run()}>{busy ? "جاري التصفير…" : "صفّر قاعدة البيانات"}</button>
-            <button onClick={() => { setMode(null); setPassword(""); setTyped(""); setError(null); }}>إلغاء</button>
-          </div>
-          {error && <div>{error}</div>}
-        </div>
-      )}
     </div>
   );
 }
