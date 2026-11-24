@@ -95,7 +95,7 @@ export function receiptRows(d: ReceiptData): Row[] {
     const diff = z.countedCashMinor - z.expectedCashMinor;
     const m = (v: number) => formatMoney(v);
     return [
-      ...head("تقرير قفل الوردية", z.closedAt),
+      ...head(z.x ? "تقرير X (الوردية مازالت مفتوحة)" : "تقرير قفل الوردية", z.closedAt),
       { kind: "pair", right: "فتحت", left: when(z.openedAt) },
       { kind: "pair", right: "قفلت", left: when(z.closedAt) },
       { kind: "rule" },
@@ -108,9 +108,23 @@ export function receiptRows(d: ReceiptData): Row[] {
       ...(z.drawerMoves ?? []).map((v): Row => ({ kind: "pair", right: `${v.kind === "in" ? "إيداع" : "سحب"}: ${v.reason}`, left: `${v.kind === "in" ? "+" : "−"}${m(v.amountMinor)}` })),
       { kind: "rule" },
       { kind: "pair", right: "كاش أول الوردية", left: m(z.openingCashMinor) },
-      { kind: "pair", right: "الكاش المتوقع", left: m(z.expectedCashMinor), bold: true },
-      { kind: "pair", right: "الكاش الموجود", left: m(z.countedCashMinor), bold: true },
-      { kind: "pair", right: diff === 0 ? "مطابق ✓" : diff > 0 ? "زيادة" : "عجز", left: m(Math.abs(diff)), size: 26, bold: true },
+      ...(z.x
+        ? [{ kind: "pair", right: "المفروض في الدرج توا", left: m(z.expectedCashMinor), bold: true } as Row]
+        : [
+          ...(z.blind ? [] : [{ kind: "pair", right: "الكاش المتوقع", left: m(z.expectedCashMinor), bold: true } as Row]),
+          { kind: "pair", right: "الكاش الموجود", left: m(z.countedCashMinor), bold: true } as Row,
+          ...Object.entries(z.notes ?? {}).filter(([, n]) => n > 0).sort((a, b) => Number(b[0]) - Number(a[0]))
+            .map(([d, n]): Row => ({ kind: "pair", right: `  ${n} × ${d}`, left: m(Math.round(Number(d) * 1000) * n) })),
+          ...(z.blind ? [] : [{ kind: "pair", right: diff === 0 ? "مطابق ✓" : diff > 0 ? "زيادة" : "عجز", left: m(Math.abs(diff)), size: 26, bold: true } as Row]),
+          ...(z.card ? [{ kind: "pair", right: "البطاقة (الجهاز)", left: z.blind ? m(z.card.counted) : `${m(z.card.counted)} / ${m(z.card.expected)}` } as Row] : []),
+          ...(z.transfer ? [{ kind: "pair", right: "التحويلات", left: z.blind ? m(z.transfer.counted) : `${m(z.transfer.counted)} / ${m(z.transfer.expected)}` } as Row] : []),
+          ...(z.floatMinor !== null && z.floatMinor !== undefined ? [
+            { kind: "pair", right: "فكّة للوردية الجاية", left: m(z.floatMinor) } as Row,
+            { kind: "pair", right: "للخزنة", left: m(Math.max(0, z.countedCashMinor - z.floatMinor)), bold: true } as Row,
+          ] : []),
+          ...(z.reason ? [{ kind: "pair", right: "سبب الفرق", left: z.reason } as Row] : []),
+          ...(z.approvedBy ? [{ kind: "pair", right: "وافق", left: z.approvedBy } as Row] : []),
+        ]),
       ...(z.items.length ? [{ kind: "rule" } as Row, { kind: "center", text: "الأكثر مبيعاً", bold: true } as Row,
         ...z.items.map((l): Row => ({ kind: "item", name: l.name, detail: `× ${formatQty(l.qtyMilli, l.qtyMilli % 1000 !== 0)}`, amount: formatMoney(l.totalMinor, "") }))] : []),
       { kind: "rule" },

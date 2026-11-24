@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { ownBank } from "./money";
+import { autoCloseShifts } from "./shifts";
 import { checkExpirySoon } from "../expiry";
 import { audit, type Db } from "../db";
 import { HttpError, authenticate, requirePerm, requireRole } from "../auth";
@@ -76,6 +77,7 @@ export async function ownerRoutes(app: FastifyInstance) {
    * Without a storeId it adds up every branch.
    */
   app.get("/dashboard", { preHandler: requirePerm("reports") }, async (req) => {
+    await autoCloseShifts(app.db, req.user.tid).catch(() => 0);
     const q = z.object({ storeId: z.string().uuid().optional(), tz: tzSchema }).parse(req.query);
     const tid = req.user.tid;
     await ownStore(tid, q.storeId);

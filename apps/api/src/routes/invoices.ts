@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { autoCloseShifts } from "./shifts";
 import { PAYMENT_METHODS, readShopSettings } from "@pos/shared";
 import { HttpError, requirePerm } from "../auth";
 import { numberSeq, plainNumber, readNumber } from "../invoice-number";
@@ -147,8 +148,12 @@ export async function invoiceRoutes(app: FastifyInstance) {
   /** The shifts in a period: who worked which till, when, what they sold and how the drawer came out. */
   app.get("/shifts", allowed, async (req) => {
     const q = z.object({ from: z.string().regex(dateRe), to: z.string().regex(dateRe), storeId: z.string().uuid().optional() }).parse(req.query);
+    await autoCloseShifts(app.db, req.user.tid).catch(() => 0);
     const rows = (await app.db.query(
       `SELECT sh.id, sh.user_id, sh.opened_at, sh.closed_at, sh.opening_cash_minor, sh.closing_cash_minor, sh.expected_cash_minor,
+              sh.counted_notes, sh.card_counted_minor, sh.card_expected_minor, sh.transfer_counted_minor, sh.transfer_expected_minor,
+              sh.float_minor, sh.diff_reason, sh.close_kind, (sh.payroll_entry_id IS NOT NULL) AS deducted,
+              (SELECT name FROM users WHERE id = sh.approved_by) AS approved_by_name, (SELECT name FROM users WHERE id = sh.closed_by) AS closed_by_name,
               u.name AS cashier, d.name AS device_name, st.name AS store_name,
               count(s.id) FILTER (WHERE s.kind = 'sale')::int AS sales,
               COALESCE(sum(s.total_minor) FILTER (WHERE s.kind = 'sale'), 0)::bigint AS sales_minor,
@@ -166,6 +171,9 @@ export async function invoiceRoutes(app: FastifyInstance) {
       opening_cash_minor: Number(r.opening_cash_minor), closing_cash_minor: r.closing_cash_minor === null ? null : Number(r.closing_cash_minor),
       expected_cash_minor: r.expected_cash_minor === null ? null : Number(r.expected_cash_minor),
       sales_minor: Number(r.sales_minor), returns_minor: Number(r.returns_minor),
+      card_counted_minor: r.card_counted_minor === null ? null : Number(r.card_counted_minor), card_expected_minor: r.card_expected_minor === null ? null : Number(r.card_expected_minor),
+      transfer_counted_minor: r.transfer_counted_minor === null ? null : Number(r.transfer_counted_minor), transfer_expected_minor: r.transfer_expected_minor === null ? null : Number(r.transfer_expected_minor),
+      float_minor: r.float_minor === null ? null : Number(r.float_minor),
       difference_minor: r.closing_cash_minor === null || r.expected_cash_minor === null ? null : Number(r.closing_cash_minor) - Number(r.expected_cash_minor),
     }));
   });

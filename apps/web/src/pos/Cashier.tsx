@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { creditRoom, formatMoney, formatQty, pointsEarned, pointsFor, readShopSettings, shopModules, type CustomerTier, type CatalogCustomer, type CatalogProduct, type LoyaltySettings, type Offer, type PaymentMethod, type QuickGroup, type QuickKey, type ShopSettings, expiryState, variantBaseName, type Prescription, kitchenDelta, sentSnapshot, ORDER_TYPE_LABELS, ORDER_TYPE_ICONS, type OrderType, type SentLine, serialsMissing } from "@pos/shared";
+import { creditRoom, formatMoney, shiftSettingsSchema, waLink, formatQty, pointsEarned, pointsFor, readShopSettings, shopModules, type CustomerTier, type CatalogCustomer, type CatalogProduct, type LoyaltySettings, type Offer, type PaymentMethod, type QuickGroup, type QuickKey, type ShopSettings, expiryState, variantBaseName, type Prescription, kitchenDelta, sentSnapshot, ORDER_TYPE_LABELS, ORDER_TYPE_ICONS, type OrderType, type SentLine, serialsMissing } from "@pos/shared";
 import { api } from "../api";
 import { db, getMeta, nextInvoiceNumber, setMeta, type HeldCart, type LocalShift } from "../localdb";
 import { alternatives, findByCode, searchProducts, type Found } from "../lookup";
@@ -7,7 +7,7 @@ import { VariantPicker } from "./VariantPicker";
 import { RxDialog } from "./RxDialog";
 import { SerialDialog } from "./SerialDialog";
 import { session, tokenClaims } from "../session";
-import { loadExpiry, loadOffers, loadTables, onSync, refreshCounts, startSyncLoop, syncNow, type DiningTable, type SyncState } from "../sync";
+import { SHIFT_CLOSED, loadExpiry, loadOffers, loadTables, onSync, refreshCounts, startSyncLoop, syncNow, type DiningTable, type SyncState } from "../sync";
 import { NoteDialog, OrderBar, TablesDialog, type Order } from "./restaurant";
 import { autoBackupIfDue } from "../owner/backup";
 import type { Screen } from "../App";
@@ -23,7 +23,8 @@ import { PrinterDialog } from "../hardware/PrinterDialog";
 import { openCustomerDisplay, openDrawer, printReceipt } from "../hardware/printer";
 import { displaySender } from "../display/channel";
 import { sendInvoice } from "../whatsapp";
-import { shiftReport } from "./shiftReport";
+import { nonCash, shiftReport, zText } from "./shiftReport";
+import { CloseShiftDialog, type CloseResult, type OpenThings } from "./closeShift";
 import { CameraScanner, hasCamera } from "../hardware/CameraScanner";
 import { QuickPad, visibleKeys } from "./quickpad";
 
@@ -34,7 +35,7 @@ type Dialog =
   | { kind: "price"; key: string; required?: boolean; open?: boolean }
   | { kind: "discount" }
   | { kind: "openShift" }
-  | { kind: "closeShift"; expected: number }
+  | { kind: "closeShift"; expected: number; card: number; transfer: number; open: OpenThings }
   | { kind: "held"; carts: HeldCart[] }
   | { kind: "customer" }
   | { kind: "return" }
@@ -42,7 +43,8 @@ type Dialog =
   | { kind: "mypay" }
   | { kind: "keys" }
   | { kind: "wa" }
-  | { kind: "zreport"; data: ReceiptData }
+  | { kind: "zreport"; data: ReceiptData; wa?: string }
+  | { kind: "xreport"; data: ReceiptData }
   | { kind: "camera" }
   | { kind: "drawer" }
   | { kind: "prefs" }
@@ -114,6 +116,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [shop, setShop] = useState<Shop | null>(null);
   const till = (shop?.settings ?? readShopSettings({})).till;
+  const shiftSet = shop?.settings?.shift ?? shiftSettingsSchema.parse({});
   // The till follows the shop's features (🧩 مميزات المحل): tables and kitchen, quotes, delivery, kits, price tiers.
   const mods = useMemo(() => shopModules(shop?.type, shop?.settings.modules), [shop]);
   const restaurant = mods.tables;
@@ -123,6 +126,8 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   const [prefs, setPrefs] = useState<TillPrefs>(loadPrefs);
   useEffect(() => applyPrefs(prefs), [prefs]);
   const [tabs, setTabs] = useState<Tab[]>(() => [emptyTab(1)]);
+  /** Change the last shift on this till left in the drawer (when the shop hands over the drawer). */
+  const [handoverFloat, setHandoverFloat] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState(() => tabs[0].id);
   const [mine, setMine] = useState({ count: 0, totalMinor: 0 });
   /** The last sale's change, shown big until the next item goes in (even on another customer's tab). */
@@ -156,6 +161,17 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     setTimeout(() => setMessage(null), 2500);
   };
 
+  // The owner closed this shift from the dashboard, or the shop's closing hour passed.
+  useEffect(() => {
+    const on = () => {
+      setShift(null);
+      setDialog({ kind: "openShift" });
+      flash("الوردية تقفلت من عند المالك. افتح وردية جديدة باش تكمّل البيع", true);
+    };
+    window.addEventListener(SHIFT_CLOSED, on);
+    return () => window.removeEventListener(SHIFT_CLOSED, on);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     startSyncLoop();
     const off = onSync(setSync);
@@ -163,6 +179,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
       setCashierName((await getMeta<string>("staffName")) ?? "");
       const open = (await db.shifts.toArray()).find((s) => !s.closedAt) ?? null;
       setShift(open);
+      setHandoverFloat((await getMeta<number | null>("float")) ?? null);
       if (!open) setDialog({ kind: "openShift" });
       setCatalogSize(await db.products.count());
       setShop((await getMeta<Shop>("shop")) ?? null);
@@ -706,25 +723,56 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     if (!shift) return;
     const sales = await db.sales.where("shiftId").equals(shift.id).toArray();
     const expected = shift.openingCashMinor + sales.reduce((a, s) => a + s.cashInMinor - s.changeMinor, 0);
-    setDialog({ kind: "closeShift", expected });
+    const { card, transfer } = nonCash(shiftReport(shift, sales, 0).byMethod);
+    const open: OpenThings = {
+      held: await db.held.count(),
+      tabs: tabs.filter((t) => (t.id === activeTab ? lines.length : t.lines.length) > 0).length,
+      tables: busyTables.size,
+      pending: sync?.pending ?? 0,
+      failed: sync?.failed ?? 0,
+    };
+    setDialog({ kind: "closeShift", expected, card, transfer, open });
   }
 
-  async function closeShift(countedMinor: number, expected: number) {
+  /** The shift so far, printed without closing it (X report). */
+  async function xReport() {
+    if (!shift) return;
+    const sales = await db.sales.where("shiftId").equals(shift.id).toArray();
+    const z = shiftReport(shift, sales, 0);
+    z.x = true;
+    const store = await getMeta<{ footer?: string }>("store");
+    setDialog({ kind: "xreport", data: { storeName: device?.storeName ?? "", shop, footer: store?.footer, deviceName: device?.name ?? "", cashierName, shift: z } });
+  }
+
+  async function closeShift(r: CloseResult, expected: number, card: number, transfer: number) {
     if (!shift) return;
     const closedAt = new Date().toISOString();
     await db.transaction("rw", db.shifts, db.outbox, async () => {
       await db.shifts.update(shift.id, { closedAt });
-      await db.outbox.add({ kind: "shift_close", refId: shift.id, payload: { shiftId: shift.id, closingCashMinor: countedMinor }, createdAt: closedAt });
+      await db.outbox.add({
+        kind: "shift_close", refId: shift.id, createdAt: closedAt,
+        payload: { shiftId: shift.id, closingCashMinor: r.countedMinor, notes: r.notes, cardCountedMinor: r.cardMinor, transferCountedMinor: r.transferMinor, floatMinor: r.floatMinor, reason: r.reason },
+      });
     });
+    // The next shift on this till opens with the change left in the drawer.
+    await setMeta("float", r.floatMinor);
     // The Z report: printed and shown, worked out from this till's own record of the shift.
     const sales = await db.sales.where("shiftId").equals(shift.id).toArray();
-    const z = shiftReport(shift, sales, countedMinor, closedAt);
+    const z = shiftReport(shift, sales, r.countedMinor, closedAt);
     z.expectedCashMinor = expected;
+    Object.assign(z, {
+      notes: r.notes, floatMinor: r.floatMinor, reason: r.reason, approvedBy: r.approvedBy,
+      card: r.cardMinor === null ? null : { counted: r.cardMinor, expected: card },
+      transfer: r.transferMinor === null ? null : { counted: r.transferMinor, expected: transfer },
+    });
     const store = await getMeta<{ footer?: string }>("store");
-    const data: ReceiptData = { storeName: device?.storeName ?? "", shop, footer: store?.footer, deviceName: device?.name ?? "", cashierName, shift: z };
+    const data: ReceiptData = { storeName: device?.storeName ?? "", shop, footer: store?.footer, deviceName: device?.name ?? "", cashierName, shift: { ...z, blind: shiftSet.blind } };
+    // The owner's copy on WhatsApp always shows the difference.
+    const wa = shiftSet.whatsappZ ? waLink(shiftSet.whatsappPhone || shop?.settings.phone || null, zText(z, { shop: shop?.name ?? "", device: device?.name ?? "", cashier: cashierName })) : undefined;
     setShift(null);
-    setDialog({ kind: "zreport", data });
+    setDialog({ kind: "zreport", data, wa });
     if (till.autoPrint ?? true) void print(data, false);
+    if (wa) window.open(wa, "_blank", "noopener");
     void syncNow();
   }
 
@@ -837,7 +885,8 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
         <button onClick={() => setDialog({ kind: "printer" })}>الطابعة والميزان</button>
         <button onClick={() => void syncNow()}>مزامنة</button>
         <button onClick={() => setDialog({ kind: "mypay" })}>💼 راتبي</button>
-        <button onClick={askCloseShift} disabled={!shift}>قفل الوردية</button>
+        {shiftSet.xReport && <button onClick={() => void xReport()} disabled={!shift} title="حالة الوردية لين توا، من غير قفل">📄 تقرير X</button>}
+        <button onClick={() => void askCloseShift()} disabled={!shift}>قفل الوردية</button>
         <button onClick={logout}>خروج</button>
       </header>
       <div className="pos-status" role="status">
@@ -1167,8 +1216,8 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
       {dialog?.kind === "openShift" && (
         <AmountDialog
           title="فتح وردية"
-          label="الكاش الموجود في الدرج (د.ل)"
-          initial="0"
+          label={handoverFloat !== null ? `الكاش الموجود في الدرج (د.ل) · الوردية اللي قبلك خلّت ${formatMoney(handoverFloat)}` : "الكاش الموجود في الدرج (د.ل)"}
+          initial={handoverFloat !== null ? String(handoverFloat / 1000) : "0"}
           onClose={() => setDialog(null)}
           onDone={(m) => void openShift(m)}
         />
@@ -1178,8 +1227,19 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
           <div className="zreport"><Receipt data={dialog.data} preview /></div>
           <div className="row">
             <button onClick={() => void print({ ...dialog.data, copy: true }, false)}>🖨️ اطبعه</button>
+            {dialog.wa && <a className="button" href={dialog.wa} target="_blank" rel="noopener">📲 ابعته على الواتساب</a>}
             <span className="spacer" />
             <button className="primary" onClick={logout}>تم، خروج</button>
+          </div>
+        </Modal>
+      )}
+      {dialog?.kind === "xreport" && (
+        <Modal title="تقرير X: الوردية لين توا" onClose={() => { setDialog(null); focusScan(); }}>
+          <div className="zreport"><Receipt data={dialog.data} preview /></div>
+          <div className="row">
+            <button onClick={() => void print({ ...dialog.data, copy: true }, false)}>🖨️ اطبعه</button>
+            <span className="spacer" />
+            <button className="primary" onClick={() => { setDialog(null); focusScan(); }}>رجوع للبيع</button>
           </div>
         </Modal>
       )}
@@ -1264,12 +1324,11 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
       {dialog?.kind === "camera" && (
         <CameraScanner onClose={() => { setDialog(null); focusScan(); }} onCode={(c) => { setDialog(null); void scan(c); focusScan(); }} />
       )}
-      {dialog?.kind === "closeShift" && (
-        <AmountDialog
-          title="قفل الوردية"
-          label="عدّ الكاش الموجود في الدرج (د.ل)"
-          onClose={() => setDialog(null)}
-          onDone={(m) => void closeShift(m, dialog.expected)}
+      {dialog?.kind === "closeShift" && shift && (
+        <CloseShiftDialog
+          shiftId={shift.id} set={shiftSet} expected={dialog.expected} card={dialog.card} transfer={dialog.transfer} open={dialog.open}
+          onClose={() => { setDialog(null); focusScan(); }}
+          onDone={(r) => void closeShift(r, dialog.expected, dialog.card, dialog.transfer)}
         />
       )}
       {dialog?.kind === "customer" && (

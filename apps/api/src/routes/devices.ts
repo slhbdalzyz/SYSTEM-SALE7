@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { autoCloseShifts } from "./shifts";
 import { randomBytes } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { audit, type Db, type Tx } from "../db";
@@ -96,6 +97,7 @@ export async function deviceRoutes(app: FastifyInstance) {
   app.post("/devices/heartbeat", { preHandler: requireDevice }, async (req) => {
     const b = z.object({ pending: z.number().int().min(0).max(1_000_000), failed: z.number().int().min(0).max(1_000_000).default(0) }).parse(req.body);
     const ip = (req.ip ?? "").replace(/^::ffff:/, "") || null;
+    await autoCloseShifts(app.db, req.user.tid).catch(() => 0);
     await app.db.query(
       `UPDATE devices SET last_seen_at = now(), pending_count = $3, failed_count = $4, last_ip = $5 WHERE id = $1 AND tenant_id = $2`,
       [req.user.did, req.user.tid, b.pending, b.failed, ip],

@@ -28,6 +28,27 @@ interface Detail {
 interface Shift {
   id: string; user_id: string; opened_at: string; closed_at: string | null; opening_cash_minor: number; closing_cash_minor: number | null; expected_cash_minor: number | null;
   cashier: string; device_name: string; store_name: string; sales: number; sales_minor: number; returns_minor: number; difference_minor: number | null;
+  card_counted_minor?: number | null; card_expected_minor?: number | null; transfer_counted_minor?: number | null; transfer_expected_minor?: number | null;
+  float_minor?: number | null; diff_reason?: string | null; close_kind?: "till" | "owner" | "auto"; approved_by_name?: string | null; closed_by_name?: string | null; deducted?: boolean;
+}
+
+/** How the shift closed, beyond the cash: who closed it, the card machine, the change left, the reason. */
+function closeNotes(s: Shift): string[] {
+  const out: string[] = [];
+  if (s.close_kind === "owner") out.push(`قفلها ${s.closed_by_name ?? "المالك"}`);
+  if (s.close_kind === "auto") out.push("تسكّرت بروحها آخر اليوم");
+  const pair = (label: string, c?: number | null, e?: number | null) => {
+    if (c === null || c === undefined || e === null || e === undefined) return;
+    const d = c - e;
+    out.push(`${label} ${formatMoney(c)}${d ? ` (${d > 0 ? "+" : ""}${formatMoney(d)})` : " ✓"}`);
+  };
+  pair("البطاقة", s.card_counted_minor, s.card_expected_minor);
+  pair("التحويلات", s.transfer_counted_minor, s.transfer_expected_minor);
+  if (s.float_minor !== null && s.float_minor !== undefined) out.push(`فكّة ${formatMoney(s.float_minor)}`);
+  if (s.diff_reason) out.push(`السبب: ${s.diff_reason}`);
+  if (s.approved_by_name) out.push(`وافق ${s.approved_by_name}`);
+  if (s.deducted) out.push("انخصم من الراتب");
+  return out;
 }
 
 const local = (d = new Date()) => new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Tripoli" }).format(d);
@@ -242,7 +263,7 @@ export function Invoices({ call, storeId, stores }: { call: Call; storeId: strin
           {shifts.length === 0 ? <div className="muted">ما فيش ورديات في هذي الفترة.</div> : (
             <div className="table-wrap">
               <table>
-                <thead><tr><th>الكاشير</th><th>الجهاز</th><th>فتحت</th><th>قفلت</th><th>الفواتير</th><th>المبيعات</th><th>المرتجعات</th><th>كاش البداية</th><th>فرق الدرج</th><th /></tr></thead>
+                <thead><tr><th>الكاشير</th><th>الجهاز</th><th>فتحت</th><th>قفلت</th><th>الفواتير</th><th>المبيعات</th><th>المرتجعات</th><th>كاش البداية</th><th>فرق الدرج</th><th>ملاحظات القفل</th><th /></tr></thead>
                 <tbody>
                   {shifts.map((s) => (
                     <tr key={s.id}>
@@ -255,6 +276,7 @@ export function Invoices({ call, storeId, stores }: { call: Call; storeId: strin
                       <td className="num">{s.returns_minor ? formatMoney(s.returns_minor) : "—"}</td>
                       <td className="num">{formatMoney(s.opening_cash_minor)}</td>
                       <td className="num">{s.difference_minor === null ? "—" : <span className={s.difference_minor === 0 ? "badge ok" : s.difference_minor < 0 ? "badge bad" : "badge warn"}>{s.difference_minor > 0 ? "+" : ""}{formatMoney(s.difference_minor)}</span>}</td>
+                      <td className="small">{closeNotes(s).join(" · ") || "—"}</td>
                       <td><button onClick={() => pickShift(s.id)}>فواتيرها</button></td>
                     </tr>
                   ))}

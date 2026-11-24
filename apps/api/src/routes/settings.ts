@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { MODULES, OTHER_METHODS, readShopSettings, shopSettingsSchema, type ModuleKey } from "@pos/shared";
+import { MODULES, OTHER_METHODS, readShopSettings, shiftSettingsSchema, shopSettingsSchema, type ModuleKey } from "@pos/shared";
 import { audit } from "../db";
 import { HttpError, authenticate, requirePerm } from "../auth";
 
@@ -73,6 +73,17 @@ export async function settingsRoutes(app: FastifyInstance) {
     return { payMethods: s.payMethods, hiddenMethods: s.hiddenMethods };
   });
 
+  /** How shifts close («🧾 قفل الوردية»): each option on or off, saved on its own. */
+  app.patch("/settings/shift", { preHandler: requirePerm("settings") }, async (req) => {
+    const b = shiftSettingsSchema.parse(req.body);
+    const t = (await app.db.query(`SELECT settings FROM tenants WHERE id = $1`, [req.user.tid])).rows[0];
+    const s = readShopSettings(t?.settings);
+    s.shift = b;
+    await app.db.query(`UPDATE tenants SET settings = $2 WHERE id = $1`, [req.user.tid, JSON.stringify(s)]);
+    await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "settings.update", entity: "tenant", entityId: req.user.tid, data: { shift: b } });
+    return { shift: s.shift };
+  });
+
   app.put("/settings", { preHandler: requirePerm("settings") }, async (req) => {
     const b = z.object({ name: z.string().trim().min(2).max(120), settings: shopSettingsSchema }).parse(req.body);
     // The shop's features have their own page; saving the settings page never resets them.
@@ -80,6 +91,7 @@ export async function settingsRoutes(app: FastifyInstance) {
     b.settings.modules = old.modules;
     b.settings.payMethods = old.payMethods;
     b.settings.hiddenMethods = old.hiddenMethods;
+    b.settings.shift = old.shift;
     await app.db.query(`UPDATE tenants SET name = $2, settings = $3 WHERE id = $1`, [req.user.tid, b.name, JSON.stringify(b.settings)]);
     await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "settings.update", entity: "tenant", entityId: req.user.tid, data: { name: b.name } });
     return { name: b.name, settings: b.settings };

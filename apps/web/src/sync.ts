@@ -154,11 +154,30 @@ export async function flushOutbox(token: string) {
   }
 }
 
+/** Raised when the owner (or the clock) closed this till's shift on the server. */
+export const SHIFT_CLOSED = "pos:shift-closed";
+
+/**
+ * The owner can close a shift from the dashboard, and the shop can close shifts at a set hour:
+ * the till learns it here and stops selling into that shift.
+ */
+async function checkShift(token: string) {
+  const open = (await db.shifts.toArray()).find((s) => !s.closedAt);
+  if (!open) return;
+  const queued = (await db.outbox.toArray()).some((i) => (i.kind === "shift_open" || i.kind === "shift_close") && i.refId === open.id);
+  if (queued) return;
+  const r = await api<{ shift: { id: string } | null }>("/shifts/current", { token });
+  if (r.shift?.id === open.id) return;
+  await db.shifts.update(open.id, { closedAt: new Date().toISOString() });
+  window.dispatchEvent(new CustomEvent(SHIFT_CLOSED, { detail: { id: open.id } }));
+}
+
 export async function syncNow() {
   const token = session.staffToken;
   if (!token) return;
   try {
     await flushOutbox(token);
+    await checkShift(token);
     await syncCatalog(token);
     await syncCustomers(token);
     await syncOffers(token);
