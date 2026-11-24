@@ -14,7 +14,7 @@ import type { Screen } from "../App";
 import { addLine, cartTotals, lineFor, lineTotal, priceCart, repriceFor, switchUnit, toSaleInput, type CartLine, type Deal } from "./cart";
 import { DealBox, DealDialog, KitDialog, QuoteDialog, loadKits, tierLabel } from "./business";
 import { AmountDialog, DrawerDialog, Modal, PayDialog, type Employee, type Payment, type TillBank } from "./dialogs";
-import { applyPrefs, loadPrefs, savePrefs, sound, type TillPrefs } from "./feel";
+import { applyPrefs, loadPrefs, preloadSaleSound, saleSound, savePrefs, scanSound, sound, type TillPrefs } from "./feel";
 import { MyPay } from "../admin/MyPay";
 import { Receipt, type ReceiptData } from "./Receipt";
 import { CustomerDialog } from "./CustomerDialog";
@@ -151,6 +151,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     const t = setInterval(() => setNow(new Date()), 30_000);
     return () => clearInterval(t);
   }, []);
+  useEffect(() => preloadSaleSound(), []);
   const role = tokenClaims(session.staffToken)?.role;
 
   const [offers, setOffers] = useState<Offer[]>([]);
@@ -384,7 +385,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     const r = addLine(lines, line);
     setLines(r.lines);
     setSelected(r.key);
-    sound("ok", prefs.sound);
+    scanSound(line.isWeighted ? "weighed" : isNew ? "new" : "again", prefs.scanSound, prefs.sound);
     setLastPaid(null);
     // Its number was not scanned: ask for it now, while the box is in the cashier's hand.
     const added = r.lines.find((l) => l.key === r.key);
@@ -595,7 +596,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     finishCart();
     setExchange(null);
     setDialog(null);
-    sound("cash", prefs.sound);
+    saleSound(prefs.sound);
     setLastPaid({ number, changeMinor: change });
     void countMine();
     await refreshCounts();
@@ -1410,9 +1411,22 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
           </label>
           <label>الصوت
             <div className="seg">
-              <button className={prefs.sound ? "active" : ""} onClick={() => { const p = { ...prefs, sound: true }; setPrefs(p); savePrefs(p); sound("ok"); }}>🔊 بيب مع كل مسحة</button>
+              <button className={prefs.sound ? "active" : ""} onClick={() => { const p = { ...prefs, sound: true }; setPrefs(p); savePrefs(p); scanSound("new", p.scanSound); }}>🔊 صوت مع كل مسحة</button>
               <button className={!prefs.sound ? "active" : ""} onClick={() => { const p = { ...prefs, sound: false }; setPrefs(p); savePrefs(p); }}>🔇 بدون صوت</button>
             </div>
+            {prefs.sound && (
+              <div className="seg">
+                <button className={prefs.scanSound !== "beep" ? "active" : ""} onClick={() => { const p = { ...prefs, scanSound: "scanner" as const }; setPrefs(p); savePrefs(p); scanSound("new", "scanner"); }}>📟 صوت الماسح</button>
+                <button className={prefs.scanSound === "beep" ? "active" : ""} onClick={() => { const p = { ...prefs, scanSound: "beep" as const }; setPrefs(p); savePrefs(p); scanSound("new", "beep"); }}>🔔 البيب القديم</button>
+              </div>
+            )}
+            {prefs.sound && (
+              <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+                <button className="small" onClick={() => scanSound("new", prefs.scanSound)}>صنف جديد</button>
+                <button className="small" onClick={() => scanSound("again", prefs.scanSound)}>نفس الصنف مرة ثانية</button>
+                <button className="small" onClick={() => scanSound("weighed", prefs.scanSound)}>صنف بالوزن</button>
+              </div>
+            )}
           </label>
           <label>الأزرار السريعة
             <div className="seg">
@@ -1433,7 +1447,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
               </div>
             </label>
           )}
-          <div className="row"><button onClick={() => sound("bad")}>جرّب صوت الخطأ</button><span className="spacer" /><button className="primary" onClick={() => { setDialog(null); focusScan(); }}>تمام</button></div>
+          <div className="row"><button onClick={() => sound("bad")}>جرّب صوت الخطأ</button><button onClick={() => saleSound()}>جرّب صوت البيع</button><span className="spacer" /><button className="primary" onClick={() => { setDialog(null); focusScan(); }}>تمام</button></div>
         </Modal>
       )}
       {dialog?.kind === "camera" && (
