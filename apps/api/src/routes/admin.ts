@@ -172,8 +172,8 @@ export async function adminRoutes(app: FastifyInstance) {
   app.patch("/devices/:id", owners, async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const b = z.object({ active: z.boolean() }).parse(req.body);
-    const was = (await app.db.query(`SELECT active FROM devices WHERE id = $1 AND tenant_id = $2`, [id, req.user.tid])).rows[0];
-    if (b.active && was && !was.active) await assertWithinPlan(app.db, req.user.tid, "devices");
+    const was = (await app.db.query(`SELECT active, kind FROM devices WHERE id = $1 AND tenant_id = $2`, [id, req.user.tid])).rows[0];
+    if (b.active && was && !was.active) await assertWithinPlan(app.db, req.user.tid, "devices", was.kind);
     await app.db.query(`UPDATE devices SET active = $3 WHERE id = $1 AND tenant_id = $2`, [id, req.user.tid, b.active]);
     await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: b.active ? "device.enable" : "device.disable", entity: "device", entityId: id });
     return { ok: true };

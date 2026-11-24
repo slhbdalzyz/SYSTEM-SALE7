@@ -63,11 +63,12 @@ describe("serving the web app", () => {
 });
 
 describe("devices the licence covers", () => {
-  const db = (devices: number) => ({ query: async () => ({ rows: [{ stores: 1, devices, users: 1 }], rowCount: 1 }) }) as unknown as Db;
+  const db = (devices: number) => ({ query: async () => ({ rows: [{ n: devices }], rowCount: 1 }) }) as unknown as Db;
   it("stops at the licence's count", async () => {
     setLocalDeviceLimit(2);
     await expect(assertWithinPlan(db(1), "t", "devices")).resolves.toBeUndefined();
     await expect(assertWithinPlan(db(2), "t", "devices")).rejects.toThrow("الترخيص يسمح بـ 2");
+    await expect(assertWithinPlan(db(2), "t", "devices", "kitchen")).resolves.toBeUndefined();
     setLocalDeviceLimit(null);
   });
 });

@@ -23,3 +23,4 @@ export * from "./electronics";
 export * from "./business";
 export * from "./modules";
 export * from "./ai";
+export * from "./licensePlans";

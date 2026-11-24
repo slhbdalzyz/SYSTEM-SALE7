@@ -13,7 +13,7 @@ type Kind = "pos" | "price_checker" | "kitchen";
 
 /** Adds a device to a shop under a token hash the device already holds. */
 export async function createDevice(q: Db | Tx, a: { tenantId: string; storeId: string; name: string; kind: Kind; tokenHash: string }) {
-  await assertWithinPlan(q, a.tenantId, "devices");
+  await assertWithinPlan(q, a.tenantId, "devices", a.kind);
   const n = (await q.query(`SELECT count(*)::int AS n FROM devices WHERE tenant_id = $1`, [a.tenantId])).rows[0].n as number;
   const prefix = `P${n + 1}`;
   const r = await q.query(
@@ -240,7 +240,7 @@ export async function deviceRoutes(app: FastifyInstance) {
     const b = z.object({ storeId: z.string().uuid(), name: z.string().trim().min(1).max(60), kind: z.enum(["pos", "price_checker", "kitchen"]).default("pos") }).parse(req.body);
     const store = await app.db.query(`SELECT 1 FROM stores WHERE id = $1 AND tenant_id = $2`, [b.storeId, req.user.tid]);
     if (!store.rowCount) throw new HttpError(404, "الفرع غير موجود");
-    await assertWithinPlan(app.db, req.user.tid, "devices");
+    await assertWithinPlan(app.db, req.user.tid, "devices", b.kind);
     const code = randomBytes(16).toString("hex");
     const r = await app.db.query(
       `INSERT INTO device_links (tenant_id, store_id, name, kind, code_hash, created_by, expires_at) VALUES ($1,$2,$3,$4,$5,$6, now() + interval '15 minutes') RETURNING expires_at`,
