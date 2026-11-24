@@ -17,6 +17,8 @@ export interface LicensePayload {
   until: string;
   devices: number;
   issued: string;
+  /** The package's name (صغير، متوسط، كبير), for the shop's licence screen. Older keys have none. */
+  plan?: string;
 }
 
 export class LicenseError extends Error {

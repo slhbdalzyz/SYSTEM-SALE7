@@ -8,6 +8,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { forgetTenant, setLocalDeviceLimit } from "../billing";
 import { formatMachineId, LicenseError, readLicense, type LicensePayload } from "../license";
+import type { LicensePlans } from "@pos/shared";
 
 interface Store {
   key: string | null;
@@ -16,6 +17,8 @@ interface Store {
   checkedOnlineAt: string | null;
   /** When the first shop on this computer was made: the trial runs from then. */
   trialFrom?: string | null;
+  /** The packages on sale and the seller's WhatsApp, as last read from the platform (when online). */
+  plans?: LicensePlans | null;
 }
 
 interface Q {
@@ -24,7 +27,7 @@ interface Q {
 
 const DAY = 86_400_000;
 export const TRIAL_DAYS = 14;
-/** Devices (tills, kitchen screens, price checkers) during the trial. */
+/** Cashier tills during the trial (kitchen screens and price checkers don't count). */
 export const TRIAL_DEVICES = 3;
 const BACKDATE_SLACK = DAY;
 
@@ -81,7 +84,7 @@ export class LocalLicense {
     const p = readLicense(text, this.publicKeys);
     if (p.machine !== this.machineId) throw new LicenseError(`المفتاح هذا لجهاز ثاني (${p.machine}). رقم هذا الجهاز ${this.machineId}`);
     const cur = this.current();
-    if (cur && cur.until > p.until) throw new LicenseError(`عندك مفتاح أحدث، صالح لين ${cur.until}`);
+    if (cur && (cur.until > p.until || (cur.until === p.until && cur.issued > p.issued))) throw new LicenseError(`عندك مفتاح أحدث، صالح لين ${cur.until}`);
     this.store.key = text.replace(/\s+/g, "");
     this.save();
     return p;
@@ -120,20 +123,33 @@ export class LocalLicense {
     forgetTenant(t.id);
   }
 
-  /** When online and near the end: fetch a renewal the platform already issued for this computer. */
-  async renewOnline(now = Date.now()): Promise<boolean> {
-    const cur = this.current();
-    if (!cur || !this.cloudUrl) return false;
-    if (new Date(`${cur.until}T00:00:00Z`).getTime() - now > 30 * DAY) return false;
-    if (this.store.checkedOnlineAt && now - new Date(this.store.checkedOnlineAt).getTime() < 12 * 3600_000) return false;
+  /**
+   * When online, twice a day: fetch a renewal or an upgrade (a bigger package) the platform already
+   * issued for this computer, and the packages on sale for the licence screen.
+   */
+  async renewOnline(now = Date.now(), force = false): Promise<boolean> {
+    if (!this.cloudUrl) return false;
+    if (!force && this.store.checkedOnlineAt && now - new Date(this.store.checkedOnlineAt).getTime() < 12 * 3600_000) return false;
     this.store.checkedOnlineAt = new Date(now).toISOString();
     this.save();
+    try {
+      const r = await fetch(`${this.cloudUrl}/licenses/plans`, { signal: AbortSignal.timeout(8000) });
+      if (r.ok) {
+        this.store.plans = (await r.json()) as LicensePlans;
+        this.save();
+      }
+    } catch {
+      /* no internet: the last list stays */
+    }
+    const cur = this.current();
+    if (!cur) return false;
     try {
       const r = await fetch(`${this.cloudUrl}/licenses/${cur.id}/latest?machine=${encodeURIComponent(this.machineId)}`, { signal: AbortSignal.timeout(8000) });
       if (!r.ok) return false;
       const { key } = (await r.json()) as { key: string };
       const p = readLicense(key, this.publicKeys);
-      if (p.machine !== this.machineId || p.until <= cur.until) return false;
+      const newer = p.until > cur.until || (p.until === cur.until && p.issued > cur.issued);
+      if (p.machine !== this.machineId || !newer) return false;
       this.store.key = key;
       this.save();
       return true;

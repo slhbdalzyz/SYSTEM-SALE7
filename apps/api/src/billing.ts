@@ -104,9 +104,18 @@ export async function usage(q: Db | Tx, tid: string) {
 let localDeviceLimit: number | null = null;
 export const setLocalDeviceLimit = (n: number | null) => void (localDeviceLimit = n);
 
-export async function assertWithinPlan(q: Db | Tx, tid: string, what: "devices" | "users" | "stores") {
+/** The desktop licence counts cashier tills only: kitchen screens and price checkers come free. */
+export async function localTills(q: Db | Tx, tid: string): Promise<number> {
+  return (await q.query(`SELECT count(*)::int AS n FROM devices WHERE tenant_id = $1 AND active AND kind = 'pos'`, [tid])).rows[0].n as number;
+}
+export const localLimit = () => localDeviceLimit;
+
+export async function assertWithinPlan(q: Db | Tx, tid: string, what: "devices" | "users" | "stores", kind: string = "pos") {
   if (what === "devices" && localDeviceLimit !== null) {
-    if ((await usage(q, tid)).devices >= localDeviceLimit) throw new HttpError(402, `الترخيص يسمح بـ ${localDeviceLimit} أجهزة بس. كلّم البائع باش تزيد.`);
+    if (kind !== "pos") return;
+    if ((await localTills(q, tid)) >= localDeviceLimit) {
+      throw new HttpError(402, `الترخيص يسمح بـ ${localDeviceLimit} ${localDeviceLimit === 1 ? "كاشير" : "أجهزة كاشير"} بس. باقة أكبر من صفحة «⭐ الترخيص». (شاشة المطبخ وقارئ الأسعار ما يتحسبوش)`);
+    }
     return;
   }
   const [l, u] = await Promise.all([planLimits(q, tid), usage(q, tid)]);

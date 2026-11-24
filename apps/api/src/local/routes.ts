@@ -7,7 +7,7 @@ import { checkOwnerPassword } from "../routes/reset";
 import { authenticate, HttpError, requireRole } from "../auth";
 import type { LocalBackups } from "./backup";
 import type { LocalLicense } from "./license";
-import { daysLeft, graceDays, subState } from "../billing";
+import { daysLeft, graceDays, localLimit, localTills, subState } from "../billing";
 
 export interface LocalOptions {
   shutdownToken: string;
@@ -50,12 +50,27 @@ export async function localRoutes(app: FastifyInstance, opts: LocalOptions) {
       return {
         machineId: license.machineId,
         canActivate: license.publicKeys.length > 0,
-        license: cur ? { shop: cur.shop, from: cur.from, until: cur.until, devices: cur.devices } : null,
+        license: cur ? { shop: cur.shop, from: cur.from, until: cur.until, devices: cur.devices, plan: cur.plan ?? null } : null,
+        // Cashier tills in use against what the licence (or the trial) allows.
+        tills: await localTills(app.db, req.user.tid),
+        tillLimit: localLimit(),
+        plans: license.store.plans ?? null,
         state: t ? subState(t, await graceDays(app.db)) : "locked",
         paidUntil: t?.paid_until ?? null,
         daysLeft: t ? daysLeft(t.paid_until) : 0,
         reason: t?.status_reason ?? null,
       };
+    });
+
+    /** «تحقق من التحديث»: asks the platform now for a renewal or upgrade issued for this computer. */
+    app.post("/local/license/check", { preHandler: requireRole("owner"), config: { rateLimit: { max: 6, timeWindow: "1 minute" } } }, async (req) => {
+      const got = await license.renewOnline(Date.now(), true);
+      if (got) {
+        await license.apply(app.db);
+        const p = license.current();
+        await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "license.activate", data: { id: p?.id, until: p?.until, online: true } });
+      }
+      return { updated: got };
     });
 
     app.post("/local/license", { preHandler: requireRole("owner") }, async (req) => {

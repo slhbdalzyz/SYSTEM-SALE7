@@ -9,6 +9,8 @@ import type { Db } from "../src/db";
 import { PgliteDb, pgliteParsers } from "../src/pglite-db";
 import { formatMachineId, newKeyPair, readLicense, signLicense, type LicensePayload } from "../src/license";
 import { LocalLicense } from "../src/local/license";
+import { assertWithinPlan, setLocalDeviceLimit } from "../src/billing";
+import { DEFAULT_LICENSE_PLANS, quoteLicense, upgradePrice } from "@pos/shared";
 
 const keys = newKeyPair();
 const MACHINE = formatMachineId("test-machine");
@@ -37,6 +39,23 @@ describe("licence keys", () => {
   it("formats a computer's ID the same way every time", () => {
     expect(MACHINE).toMatch(/^[0-9A-F]{4}(-[0-9A-F]{4}){3}$/);
     expect(formatMachineId(" TEST-MACHINE\n")).toBe(MACHINE);
+  });
+});
+
+describe("packages", () => {
+  it("prices a package with extra tills and a multi-year discount", () => {
+    expect(quoteLicense(DEFAULT_LICENSE_PLANS, { planId: "small", extra: 0, years: 1 })).toMatchObject({ devices: 1, totalMinor: 700_000 });
+    expect(quoteLicense(DEFAULT_LICENSE_PLANS, { planId: "medium", extra: 1, years: 1 })).toMatchObject({ devices: 4, annualMinor: 1_450_000 });
+    // 3 years of the large package, 15% off.
+    expect(quoteLicense(DEFAULT_LICENSE_PLANS, { planId: "large", extra: 0, years: 3 })).toMatchObject({ discountPct: 15, totalMinor: 3_825_000 });
+  });
+
+  it("charges an upgrade only for the days left", () => {
+    // Half a year left, small → medium: half of the 500 difference.
+    const u = upgradePrice({ oldAnnualMinor: 700_000, newAnnualMinor: 1_200_000, today: "2027-05-21", until: "2027-11-19" });
+    expect(u.days).toBe(183); // the last day counts
+    expect(u.totalMinor).toBe(251_000);
+    expect(upgradePrice({ oldAnnualMinor: 1_200_000, newAnnualMinor: 700_000, today: "2027-05-21", until: "2027-11-19" }).totalMinor).toBe(0);
   });
 });
 
@@ -84,6 +103,28 @@ describe("the shop's computer", () => {
     expect((await tenant()).status).toBe("suspended");
     await lic.apply(db, Date.now() + 10 * 86_400_000);
     expect((await tenant()).status).toBe("active");
+  });
+
+  it("counts cashier tills only against the licence", async () => {
+    const tid = (await pg.query<{ id: string }>(`SELECT id FROM tenants`)).rows[0].id;
+    setLocalDeviceLimit(0);
+    try {
+      await expect(assertWithinPlan(db as unknown as Db, tid, "devices", "pos")).rejects.toThrow("كاشير");
+      await expect(assertWithinPlan(db as unknown as Db, tid, "devices", "kitchen")).resolves.toBeUndefined();
+      await expect(assertWithinPlan(db as unknown as Db, tid, "devices", "price_checker")).resolves.toBeUndefined();
+    } finally {
+      setLocalDeviceLimit(null);
+    }
+  });
+
+  it("takes an upgrade with the same end date when it was issued later", () => {
+    const d = mkdtempSync(path.join(tmpdir(), "pos-lic-"));
+    const lic = new LocalLicense(d, MACHINE, [keys.publicKey], null);
+    lic.activate(signLicense(payload({ issued: "2026-11-20T10:00:00.000Z" }), keys.privateKey));
+    lic.activate(signLicense(payload({ devices: 3, plan: "متوسط", issued: "2027-03-01T10:00:00.000Z" }), keys.privateKey));
+    expect(lic.current()).toMatchObject({ devices: 3, plan: "متوسط" });
+    expect(() => lic.activate(signLicense(payload({ issued: "2026-11-21T10:00:00.000Z" }), keys.privateKey))).toThrow();
+    rmSync(d, { recursive: true });
   });
 
   it("says so when the build has no key to check with", () => {
@@ -135,5 +176,35 @@ describe("the platform", () => {
     expect((await call("GET", `/licenses/${first.id}/latest?machine=AAAA-BBBB-CCCC-DDDD`, undefined, "")).status).toBe(404);
     const list = await call("GET", "/platform/licenses");
     expect(list.body).toHaveLength(2);
+  });
+
+  it("keeps the packages, and issues and upgrades by package", async () => {
+    expect((await call("GET", "/licenses/plans", undefined, "")).body.plans.map((p: { id: string }) => p.id)).toEqual(["small", "medium", "large"]);
+    const mine = { ...DEFAULT_LICENSE_PLANS, plans: DEFAULT_LICENSE_PLANS.plans.map((p) => (p.id === "small" ? { ...p, priceMinor: 800_000 } : p)), sellerPhone: "0912345678" };
+    expect((await call("PUT", "/platform/license-plans", { ...mine, plans: [mine.plans[0], mine.plans[0]] })).status).toBe(400);
+    expect((await call("PUT", "/platform/license-plans", mine)).status).toBe(200);
+    expect((await call("GET", "/licenses/plans", undefined, "")).body).toMatchObject({ sellerPhone: "0912345678", plans: [{ id: "small", priceMinor: 800_000 }, {}, {}] });
+
+    const pub = (await call("GET", "/licenses/public-key", undefined, "")).body.publicKey;
+    const M2 = formatMachineId("plan-machine");
+    const a = await call("POST", "/platform/licenses", { shopName: "محل صغير", machineId: M2, plan: "small", extraDevices: 1, years: 2 });
+    expect(a.status).toBe(200);
+    const k = readLicense(a.body.key, [pub]);
+    expect(k).toMatchObject({ devices: 2, plan: "صغير" });
+    const row = (await call("GET", "/platform/licenses")).body.find((r: { id: string }) => r.id === a.body.id);
+    // (800 + 250) × 2 years − 10%
+    expect(row).toMatchObject({ plan: "small", extra_devices: 1, annual_minor: 1_050_000, amount_minor: 1_890_000 });
+
+    expect((await call("POST", `/platform/licenses/${a.body.id}/upgrade`, { plan: "small", extraDevices: 0 })).status).toBe(400);
+    const u = await call("POST", `/platform/licenses/${a.body.id}/upgrade`, { plan: "large", extraDevices: 0 });
+    expect(u.status).toBe(200);
+    const up = readLicense(u.body.key, [pub]);
+    expect(up).toMatchObject({ devices: 5, until: k.until, root: k.root, plan: "كبير" });
+    const urow = (await call("GET", "/platform/licenses")).body.find((r: { id: string }) => r.id === u.body.id);
+    expect(urow.upgrade_of).toBe(a.body.id);
+    // A whole year (and more) left on a 2-year key: charged for at most a year of the difference.
+    expect(urow.amount_minor).toBe(1_500_000 - 1_050_000);
+    // The app fetching its latest key gets the upgrade.
+    expect((await call("GET", `/licenses/${k.root}/latest?machine=${M2}`, undefined, "")).body.key).toBe(u.body.key);
   });
 });
