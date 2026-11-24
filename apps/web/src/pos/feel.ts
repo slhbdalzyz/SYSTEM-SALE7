@@ -44,7 +44,50 @@ export function applyPrefs(p: TillPrefs, shop: { name: TillTheme; density: strin
   return () => html.classList.remove(...added);
 }
 
+import chaChingUrl from "../assets/cha-ching.mp3";
+
 let ctx: AudioContext | null = null;
+let chaChing: Promise<AudioBuffer | null> | null = null;
+
+/** The «كا-تشينغ» of a finished sale: a real recording, loaded once and kept decoded. */
+function loadChaChing(c: AudioContext) {
+  chaChing ??= fetch(chaChingUrl)
+    .then((r) => r.arrayBuffer())
+    .then((b) => c.decodeAudioData(b))
+    .catch(() => null);
+  return chaChing;
+}
+
+/** Gets the recording ready before the first sale, so it plays the moment the sale is done. */
+export function preloadSaleSound() {
+  try {
+    ctx ??= new AudioContext();
+    void loadChaChing(ctx);
+  } catch {
+    /* no sound card */
+  }
+}
+
+/** The sound of a finished sale. Falls back to the short two-tone chime if the file can't play. */
+export function saleSound(on = true) {
+  if (!on) return;
+  try {
+    ctx ??= new AudioContext();
+    if (ctx.state === "suspended") void ctx.resume();
+    const c = ctx;
+    void loadChaChing(c).then((buf) => {
+      if (!buf) return sound("cash");
+      const src = c.createBufferSource();
+      const g = c.createGain();
+      g.gain.value = 0.9;
+      src.buffer = buf;
+      src.connect(g).connect(c.destination);
+      src.start();
+    });
+  } catch {
+    /* no sound card or blocked: the screen still shows it */
+  }
+}
 
 /** A short beep for an item in the cart, a low buzz for a code the till doesn't know. */
 export function sound(kind: "ok" | "bad" | "cash", on = true) {

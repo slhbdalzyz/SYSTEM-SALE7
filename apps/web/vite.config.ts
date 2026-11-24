@@ -42,7 +42,7 @@ export default defineConfig({
       },
       includeAssets: ["apple-touch-icon.png", "icon.svg"],
       // push-sw.js adds the phone notifications to the generated service worker.
-      workbox: { navigateFallbackDenylist: [/^\/api/], importScripts: ["push-sw.js"] },
+      workbox: { globPatterns: ["**/*.{js,css,html,mp3}"], navigateFallbackDenylist: [/^\/api/], importScripts: ["push-sw.js"] },
     }),
   ],
   server: {

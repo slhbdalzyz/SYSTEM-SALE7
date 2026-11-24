@@ -14,7 +14,7 @@ import type { Screen } from "../App";
 import { addLine, cartTotals, lineFor, lineTotal, priceCart, repriceFor, switchUnit, toSaleInput, type CartLine, type Deal } from "./cart";
 import { DealBox, DealDialog, KitDialog, QuoteDialog, loadKits, tierLabel } from "./business";
 import { AmountDialog, DrawerDialog, Modal, PayDialog, type Employee, type Payment, type TillBank } from "./dialogs";
-import { applyPrefs, loadPrefs, savePrefs, sound, type TillPrefs } from "./feel";
+import { applyPrefs, loadPrefs, preloadSaleSound, saleSound, savePrefs, sound, type TillPrefs } from "./feel";
 import { MyPay } from "../admin/MyPay";
 import { Receipt, type ReceiptData } from "./Receipt";
 import { CustomerDialog } from "./CustomerDialog";
@@ -151,6 +151,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     const t = setInterval(() => setNow(new Date()), 30_000);
     return () => clearInterval(t);
   }, []);
+  useEffect(() => preloadSaleSound(), []);
   const role = tokenClaims(session.staffToken)?.role;
 
   const [offers, setOffers] = useState<Offer[]>([]);
@@ -595,7 +596,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     finishCart();
     setExchange(null);
     setDialog(null);
-    sound("cash", prefs.sound);
+    saleSound(prefs.sound);
     setLastPaid({ number, changeMinor: change });
     void countMine();
     await refreshCounts();
@@ -1433,7 +1434,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
               </div>
             </label>
           )}
-          <div className="row"><button onClick={() => sound("bad")}>جرّب صوت الخطأ</button><span className="spacer" /><button className="primary" onClick={() => { setDialog(null); focusScan(); }}>تمام</button></div>
+          <div className="row"><button onClick={() => sound("bad")}>جرّب صوت الخطأ</button><button onClick={() => saleSound()}>جرّب صوت البيع</button><span className="spacer" /><button className="primary" onClick={() => { setDialog(null); focusScan(); }}>تمام</button></div>
         </Modal>
       )}
       {dialog?.kind === "camera" && (
