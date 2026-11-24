@@ -38,7 +38,8 @@ export async function returnRoutes(app: FastifyInstance) {
     // The full number, or just its count ("123"): this till's invoice first, then the latest one.
     const n = readNumber(number);
     const s = await loadSale(req.user.tid, {
-      ...(n === null ? { number: number.trim().toUpperCase() } : "full" in n ? { number: n.full } : { seq: n.seq }),
+      // Stored numbers are compared without the zeros after the dash, so what was typed loses them too.
+      ...(n === null ? { number: number.trim().toUpperCase().replace(/-0+([0-9])/, "-$1") } : "full" in n ? { number: n.full } : { seq: n.seq }),
       deviceId: (req.user as { did?: string }).did ?? null,
     });
     if (!s) throw new HttpError(404, "الفاتورة غير موجودة");
