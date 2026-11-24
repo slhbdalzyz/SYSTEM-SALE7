@@ -168,6 +168,9 @@ export async function uploadBackup(token: string | null, file: Blob, onProgress?
   return id;
 }
 
-export function commitRestore(token: string | null, id: string, password: string) {
-  return api<{ ok: true; rows: Record<string, number> }>(`/restore/${id}/commit`, { token, body: { password } });
+export type RestorePart = "products" | "customers" | "suppliers" | "moves";
+
+/** Without parts the whole shop is put back as the file had it; with parts, only those are added. */
+export function commitRestore(token: string | null, id: string, password: string, parts?: RestorePart[]) {
+  return api<{ ok: true; rows: Record<string, number> }>(`/restore/${id}/commit`, { token, body: parts?.length ? { password, parts } : { password } });
 }

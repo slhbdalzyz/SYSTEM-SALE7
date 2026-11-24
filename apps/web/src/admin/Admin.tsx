@@ -28,6 +28,7 @@ import { LocalLicense, licNotice, type Lic } from "./LocalLicense";
 import { Expenses } from "./Expenses";
 import { Alerts } from "../owner/Alerts";
 import { AlertSettings, BackupCard, RestoreCard } from "../owner/Settings";
+import { ExportCard, LocalWipeCard, ResetCard } from "../owner/Fresh";
 import { setPreferredView } from "../owner/Owner";
 import { Payroll } from "./Payroll";
 import { Money } from "./Money";
@@ -256,7 +257,14 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
           {shown === "mypay" && !can("settings") && <SecurityCard call={call} />}
           {shown === "alerts" && <><Alerts call={call} /><AlertSettings call={call} isOwner={isOwner} /></>}
           {shown === "expenses" && <Expenses call={call} storeId={store.id} stores={open} />}
-          {shown === "backup" && (isOwner ? LOCAL ? <LocalBackup call={call} /> : <><BackupCard /><RestoreCard /></> : <div className="notice">النسخة الاحتياطية لصاحب المحل فقط</div>)}
+          {shown === "backup" && (isOwner ? (
+            <>
+              {LOCAL ? <><LocalBackup call={call} /><RestoreCard partsOnly /></> : <><BackupCard /><RestoreCard /></>}
+              <ExportCard call={call} storeId={store.id} storeName={store.name} />
+              <ResetCard call={call} storeId={store.id} />
+              {LOCAL && <LocalWipeCard call={call} />}
+            </>
+          ) : <div className="notice">النسخة الاحتياطية لصاحب المحل فقط</div>)}
           {shown === "staff" && <Staff call={call} isOwner={isOwner} mine={me.user.permissions} />}
           {shown === "payroll" && <Payroll call={call} storeId={store.id} />}
           {shown === "money" && <Money call={call} />}

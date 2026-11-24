@@ -167,4 +167,51 @@ export async function importRoutes(app: FastifyInstance) {
     )).rows[0];
     return { ...r, customers_owe: Number(r.customers_owe), suppliers_owed: Number(r.suppliers_owed) };
   });
+
+  /**
+   * The other way: the shop's items, customers and suppliers as rows of the same sheets, so a
+   * file saved now can be brought back later through «من الدفتر للنظام». Amounts stay in minor units.
+   */
+  app.get("/export/products", { preHandler: requirePerm("products") }, async (req) => {
+    const q = z.object({ storeId: z.string().uuid().optional(), qty: z.enum(["0", "1"]).default("1") }).parse(req.query);
+    const tid = req.user.tid;
+    if (q.storeId && !(await app.db.query(`SELECT 1 FROM stores WHERE id = $1 AND tenant_id = $2`, [q.storeId, tid])).rowCount) throw new HttpError(404, "الفرع غير موجود");
+    const r = await app.db.query(
+      `SELECT p.name, c.name AS category, p.is_weighted AS weighted, p.is_service AS service, p.cost_minor, p.min_stock_milli,
+              u.name AS unit, u.price_minor,
+              (SELECT b.code FROM barcodes b WHERE b.unit_id = u.id ORDER BY b.code LIMIT 1) AS barcode,
+              k.name AS pack, k.factor_milli AS pack_factor, k.price_minor AS pack_price,
+              (SELECT b.code FROM barcodes b WHERE b.unit_id = k.id ORDER BY b.code LIMIT 1) AS pack_barcode,
+              CASE WHEN $3 THEN (SELECT COALESCE(sum(m.qty_milli), 0) FROM stock_movements m WHERE m.product_id = p.id AND ($2::uuid IS NULL OR m.store_id = $2)) ELSE 0 END::bigint AS qty
+         FROM products p
+         JOIN product_units u ON u.product_id = p.id AND u.is_base
+         LEFT JOIN categories c ON c.id = p.category_id
+         LEFT JOIN LATERAL (SELECT * FROM product_units x WHERE x.product_id = p.id AND NOT x.is_base ORDER BY x.factor_milli LIMIT 1) k ON true
+        WHERE p.tenant_id = $1 AND p.active
+        ORDER BY c.name NULLS LAST, p.name`,
+      [tid, q.storeId ?? null, q.qty === "1"],
+    );
+    await audit(app.db, { tenantId: tid, userId: req.user.sub, action: "export.products", data: { rows: r.rowCount, qty: q.qty === "1" } });
+    return { rows: r.rows.map((x) => ({ ...x, cost_minor: Number(x.cost_minor), min_stock_milli: Number(x.min_stock_milli), price_minor: Number(x.price_minor), pack_factor: x.pack_factor === null ? null : Number(x.pack_factor), pack_price: x.pack_price === null ? null : Number(x.pack_price), qty: Number(x.qty) })) };
+  });
+
+  app.get("/export/customers", { preHandler: requirePerm("customers") }, async (req) => {
+    const r = await app.db.query(
+      `SELECT c.name, c.phone, b.balance_minor AS balance, c.credit_limit_minor AS limit_minor
+         FROM customers c JOIN customer_balances b ON b.customer_id = c.id WHERE c.tenant_id = $1 AND c.active ORDER BY c.name`,
+      [req.user.tid],
+    );
+    await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "export.customers", data: { rows: r.rowCount } });
+    return { rows: r.rows.map((x) => ({ ...x, balance: Number(x.balance), limit_minor: x.limit_minor === null ? null : Number(x.limit_minor) })) };
+  });
+
+  app.get("/export/suppliers", { preHandler: requirePerm("purchasing") }, async (req) => {
+    const r = await app.db.query(
+      `SELECT s.name, s.phone, b.balance_minor AS balance FROM suppliers s JOIN supplier_balances b ON b.supplier_id = s.id WHERE s.tenant_id = $1 AND s.active ORDER BY s.name`,
+      [req.user.tid],
+    );
+    await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "export.suppliers", data: { rows: r.rowCount } });
+    return { rows: r.rows.map((x) => ({ ...x, balance: Number(x.balance) })) };
+  });
 }
+
