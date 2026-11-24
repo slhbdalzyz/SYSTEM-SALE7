@@ -420,3 +420,34 @@ describe("the cashier screen's layouts", async () => {
     expect(Object.keys(m)).toHaveLength(12);
   });
 });
+
+describe("the cashier screen's frames", async () => {
+  const { STRUCTURES, normalizeStructure, pickStructure, readStructureCode, structureCode, tillLayoutSchema } = await import("@pos/shared");
+  const dev = "11111111-1111-4111-8111-111111111111";
+  const usr = "22222222-2222-4222-8222-222222222222";
+  const own = { id: "c-x", name: "هيكل عربي ✨", icon: "🧩", cols: [{ w: "1fr" as const, blocks: ["cart" as const] }], bottom: [], sheet: false, collapseKeys: false, showGrid: false, sideCats: false };
+
+  it("takes the cashier's frame, else the till's, else the shop's, and forgets one that was deleted", () => {
+    const s = tillLayoutSchema.parse({ frame: { shop: "wide", devices: { [dev]: "tablet" }, users: { [usr]: "c-x" } }, structures: [own] });
+    expect(pickStructure(s, dev, usr).id).toBe("c-x");
+    expect(pickStructure(s, dev, null).id).toBe("tablet");
+    expect(pickStructure(s, null, null).id).toBe("wide");
+    expect(pickStructure({ ...s, structures: [] }, null, usr).id).toBe("wide");
+    expect(pickStructure(tillLayoutSchema.parse({ frame: { shop: "gone" } })).id).toBe("classic");
+  });
+
+  it("puts every part a sale needs on the screen, once", () => {
+    const n = normalizeStructure({ ...own, cols: [{ w: "1fr", blocks: ["cart", "cart"] }], bottom: ["cart", "keys"] });
+    expect(n.cols[0].blocks).toEqual(["cart", "scan", "totals"]);
+    expect(n.bottom).toEqual(["keys"]);
+    for (const st of STRUCTURES) expect(normalizeStructure(st)).toEqual(st);
+  });
+
+  it("passes a frame to another shop as a code, Arabic name and all", () => {
+    const code = structureCode(own);
+    expect(code.startsWith("SALE7-FRAME:")).toBe(true);
+    expect(readStructureCode(code)?.name).toBe("هيكل عربي ✨");
+    expect(readStructureCode("SALE7-FRAME:bm9wZQ==")).toBeNull();
+    expect(readStructureCode("hello")).toBeNull();
+  });
+});

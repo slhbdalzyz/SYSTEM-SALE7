@@ -1,11 +1,12 @@
+import type { TillTheme } from "@pos/shared";
 import { tokenClaims, session } from "../session";
 
 /**
  * How the till looks and sounds for the cashier signed in: text size, a dark screen for long
  * evening shifts, and the scan beep. Kept on this device, per cashier.
  */
-export interface TillPrefs { size: "md" | "lg" | "xl"; dark: boolean; sound: boolean; quickSize: "sm" | "md" | "lg"; quickPlace: "top" | "bottom"; kitchenSlip: boolean }
-export const DEFAULT_PREFS: TillPrefs = { size: "md", dark: false, sound: true, quickSize: "md", quickPlace: "top", kitchenSlip: true };
+export interface TillPrefs { size: "md" | "lg" | "xl"; dark: boolean; sound: boolean; quickSize: "sm" | "md" | "lg"; quickPlace: "top" | "bottom"; kitchenSlip: boolean; /** Colours of their own; "" = the shop's. */ theme: TillTheme | "" }
+export const DEFAULT_PREFS: TillPrefs = { size: "md", dark: false, sound: true, quickSize: "md", quickPlace: "top", kitchenSlip: true, theme: "" };
 
 const key = () => `pos.prefs.${tokenClaims(session.staffToken)?.sub ?? "anon"}`;
 
@@ -25,13 +26,22 @@ export function savePrefs(p: TillPrefs) {
   }
 }
 
-/** Puts the cashier's choices on the whole page (dialogs included); returns the undo. */
-export function applyPrefs(p: TillPrefs) {
+/**
+ * Puts the look on the whole page (dialogs included): the shop's colours, spacing and type, and
+ * over them the cashier's own colours, night screen and text size. Returns the undo.
+ */
+export function applyPrefs(p: TillPrefs, shop: { name: TillTheme; density: string; font: string } = { name: "light", density: "comfortable", font: "system" }) {
   const html = document.documentElement;
-  html.classList.toggle("till-dark", p.dark);
-  html.classList.remove("till-lg", "till-xl");
-  if (p.size !== "md") html.classList.add(`till-${p.size}`);
-  return () => html.classList.remove("till-dark", "till-lg", "till-xl");
+  const theme = p.theme || shop.name;
+  const added = [
+    theme === "dark" || p.dark ? "till-dark" : "",
+    theme !== "dark" && !p.dark ? `till-theme-${theme}` : "",
+    p.size !== "md" ? `till-${p.size}` : "",
+    shop.density === "compact" ? "till-compact" : "",
+    shop.font !== "system" ? `till-font-${shop.font}` : "",
+  ].filter(Boolean);
+  html.classList.add(...added);
+  return () => html.classList.remove(...added);
 }
 
 let ctx: AudioContext | null = null;

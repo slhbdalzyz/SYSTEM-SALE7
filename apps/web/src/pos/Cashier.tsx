@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { creditRoom, formatMoney, shiftSettingsSchema, waLink, LAYOUT_SPECS, FUNCTION_KEYS, TILL_ACTION_LABELS, keyMap, keyOf, pickLayout, tillButtons, tillLayoutSchema, toMinor, type TillAction, type TillButton, formatQty, pointsEarned, pointsFor, readShopSettings, shopModules, type CustomerTier, type CatalogCustomer, type CatalogProduct, type LoyaltySettings, type Offer, type PaymentMethod, type QuickGroup, type QuickKey, type ShopSettings, expiryState, variantBaseName, type Prescription, kitchenDelta, sentSnapshot, ORDER_TYPE_LABELS, ORDER_TYPE_ICONS, type OrderType, type SentLine, serialsMissing } from "@pos/shared";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { creditRoom, formatMoney, shiftSettingsSchema, waLink, LAYOUT_SPECS, FUNCTION_KEYS, TILL_ACTION_LABELS, keyMap, keyOf, pickLayout, pickStructure, tillButtons, type TillBlock, TILL_THEMES, THEME_INFO, type DisplayAds, tillLayoutSchema, toMinor, type TillAction, type TillButton, formatQty, pointsEarned, pointsFor, readShopSettings, shopModules, type CustomerTier, type CatalogCustomer, type CatalogProduct, type LoyaltySettings, type Offer, type PaymentMethod, type QuickGroup, type QuickKey, type ShopSettings, expiryState, variantBaseName, type Prescription, kitchenDelta, sentSnapshot, ORDER_TYPE_LABELS, ORDER_TYPE_ICONS, type OrderType, type SentLine, serialsMissing } from "@pos/shared";
 import { api } from "../api";
 import { db, getMeta, nextInvoiceNumber, setMeta, type HeldCart, type LocalShift } from "../localdb";
 import { alternatives, findByCode, searchProducts, type Found } from "../lookup";
@@ -123,6 +123,9 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   const me = tokenClaims(session.staffToken);
   const layout = pickLayout(layoutSet, shop?.type, me?.did, me?.sub);
   const spec = LAYOUT_SPECS[layout];
+  const frame = useMemo(() => pickStructure(layoutSet, me?.did, me?.sub), [layoutSet, me?.did, me?.sub]);
+  const [moreKeys, setMoreKeys] = useState(false);
+  const [sheetOpen, setSheetOpen] = useState(false);
   const bigTotal = layoutSet.bigTotal ?? spec.bigTotal;
   const keysOn = useMemo(() => keyMap(layoutSet), [layoutSet]);
   const kbd = (a: TillAction) => keyOf(layoutSet, a);
@@ -133,7 +136,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   const scanRef = useRef<HTMLInputElement>(null);
   const device = session.device;
   const [prefs, setPrefs] = useState<TillPrefs>(loadPrefs);
-  useEffect(() => applyPrefs(prefs), [prefs]);
+  useEffect(() => applyPrefs(prefs, layoutSet.theme), [prefs, layoutSet.theme]);
   const [tabs, setTabs] = useState<Tab[]>(() => [emptyTab(1)]);
   /** Change the last shift on this till left in the drawer (when the shop hands over the drawer). */
   const [handoverFloat, setHandoverFloat] = useState<number | null>(null);
@@ -324,6 +327,19 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   useEffect(() => {
     const d = displaySender();
     setDisplay(d);
+    // The shop's slides for between sales: the copy kept here first, then the server's.
+    void (async () => {
+      const send = (a: DisplayAds) => d.ads({ kind: "ads", ...a });
+      const kept = await getMeta<DisplayAds>("displayAds");
+      if (kept) send(kept);
+      try {
+        const fresh = await api<DisplayAds>("/settings/display-ads", { token: session.staffToken });
+        await setMeta("displayAds", fresh);
+        send(fresh);
+      } catch {
+        /* offline: the slides kept last time */
+      }
+    })();
     return () => d.close();
   }, []);
   useEffect(() => {
@@ -924,37 +940,13 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     }
   }
 
-  return (
-    <div className={`pos layout-${layout}${spec.touch ? " touch" : ""}${bigTotal ? " bigtotal" : ""}`}>
-      <header className="pos-top">
-        <b>{device?.storeName}</b>
-        <span>{device?.name}</span>
-        <span>· {cashierName}</span>
-        <span className="spacer" />
-        <button onClick={() => setDialog({ kind: "prefs" })} title="حجم الخط والوضع الليلي والصوت">🎨 العرض</button>
-        <button onClick={() => void openCustomerDisplay()} title="افتحها على الشاشة الثانية">شاشة الزبون</button>
-        <button onClick={() => setDialog({ kind: "printer" })}>الطابعة والميزان</button>
-        <button onClick={() => void syncNow()}>مزامنة</button>
-        <button onClick={() => setDialog({ kind: "mypay" })}>💼 راتبي</button>
-        {shiftSet.xReport && <button onClick={() => void xReport()} disabled={!shift} title="حالة الوردية لين توا، من غير قفل">📄 تقرير X</button>}
-        <button onClick={() => void askCloseShift()} disabled={!shift}>قفل الوردية</button>
-        <button onClick={logout}>خروج</button>
-      </header>
-      <div className="pos-status" role="status">
-        {sync ? (
-          <span className={`st ${sync.online ? "ok" : "off"}`}><i />{sync.online ? "متصل" : "بدون إنترنت، البيع شغال عادي"}</span>
-        ) : <span className="st"><i />…</span>}
-        <span className={sync && sync.pending > 0 ? "st warn" : "st"}>{sync && sync.pending > 0 ? `⏳ ${sync.pending} تستنى المزامنة` : "✓ كل شي متزامن"}</span>
-        {sync && sync.failed > 0 && <span className="st bad">⚠️ {sync.failed} مرفوضة</span>}
-        <span className="st">🧾 مبيعاتك اليوم: <b className="num">{mine.count}</b> فاتورة · <b className="num">{formatMoney(mine.totalMinor)}</b></span>
-        {shift && <span className="st">⏱ الوردية من {hhmm(new Date(shift.openedAt))}</span>}
-        <span className="spacer" />
-        <span className="st muted">{catalogSize} صنف</span>
-        <span className="st num">{hhmm(now)}</span>
-      </div>
-
-      <main className="pos-main">
-        <section className="pos-left">
+  const grand = exchange ? Math.max(0, totals.total - exchange.creditMinor) : totals.total;
+  const btns = tillButtons(layoutSet, layout).map((b) => buttonFor(b)).filter(Boolean);
+  const short = frame.collapseKeys && !moreKeys && btns.length > 5;
+  /** The screen's parts, placed by the frame the owner picked. */
+  const blocks: Record<TillBlock, ReactNode> = {
+    scan: (
+      <>
           <div className="scan">
             <input
               ref={scanRef}
@@ -991,15 +983,17 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
               </div>
             )}
           </div>
-
-          {spec.grid && <ProductGrid onPick={(p) => pick(p)} big={spec.touch} />}
           {spec.customerFirst && !customer && (
             <button className="customer-first" onClick={() => setDialog({ kind: "customer" })}>👤 اختار العميل أولاً (سعر الجملة والدين والفاتورة باسمه) <kbd>{kbd("customer")}</kbd></button>
           )}
-          {quick.keys.length > 0 && prefs.quickPlace !== "bottom" && (
+      </>
+    ),
+    grid: spec.grid || frame.showGrid ? <ProductGrid onPick={(p) => pick(p)} big={spec.touch || frame.sheet} side={frame.sideCats} /> : null,
+    quick: quick.keys.length > 0 ? (
             <QuickPad groups={quick.groups} keys={quick.keys} products={quickProducts} group={qGroup} setGroup={setQGroup} size={prefs.quickSize} onPress={pressKey} />
-          )}
-
+    ) : null,
+    tabs: (
+      <>
           {restaurant && <OrderBar order={order} setType={setOrderType} pickTable={() => setDialog({ kind: "tables" })} pending={pendingKitchen.length} onKitchen={() => void sendKitchen()} />}
           <div className="till-tabs" role="tablist" aria-label="الزبائن المفتوحين">
             {tabs.map((t, i) => {
@@ -1015,7 +1009,9 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
             })}
             <button className="ghost" onClick={() => newTab()} title="Alt+N">{restaurant ? "+ طلب جديد" : "+ زبون جديد"}</button>
           </div>
-
+      </>
+    ),
+    cart: (
           <div className="cart">
             {lines.length === 0 ? (
               <div className="empty">
@@ -1082,12 +1078,9 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
               </table>
             )}
           </div>
-          {quick.keys.length > 0 && prefs.quickPlace === "bottom" && (
-            <QuickPad groups={quick.groups} keys={quick.keys} products={quickProducts} group={qGroup} setGroup={setQGroup} size={prefs.quickSize} onPress={pressKey} />
-          )}
-        </section>
-
-        <aside className="pos-right">
+    ),
+    totals: (
+      <>
           {bigTotal && (
             <div className="big-total" aria-live="polite">
               <span className="num">{formatMoney(exchange ? Math.max(0, totals.total - exchange.creditMinor) : totals.total)}</span>
@@ -1138,13 +1131,74 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
               </button>
             )}
           </div>
-          <div className="keys">
-            {tillButtons(layoutSet, layout).map((b) => buttonFor(b))}
-            <button className="primary pay" disabled={!lines.length || !shift} onClick={startPay}>
-              دفع <kbd>{kbd("pay")}</kbd>
-            </button>
-          </div>
-        </aside>
+      </>
+    ),
+    keys: (
+      <div className="keys">
+        {short ? btns.slice(0, 4) : btns}
+        {frame.collapseKeys && btns.length > 5 && (
+          <button className="ghost more-keys" onClick={() => setMoreKeys((m) => !m)}>{short ? `⋯ المزيد (${btns.length - 4})` : "▲ أقل"}</button>
+        )}
+        <button className="primary pay" disabled={!lines.length || !shift} onClick={startPay}>
+          دفع <kbd>{kbd("pay")}</kbd>
+        </button>
+      </div>
+    ),
+  };
+  // The quick buttons go under the cart when the cashier asked for them there.
+  const placed = (list: TillBlock[]) => {
+    if (prefs.quickPlace !== "bottom" || !list.includes("quick") || !list.includes("cart")) return list;
+    const rest: TillBlock[] = list.filter((b) => b !== "quick");
+    rest.splice(rest.indexOf("cart") + 1, 0, "quick");
+    return rest;
+  };
+  const zone = (list: TillBlock[]) => placed(list).map((b) => <Fragment key={b}>{blocks[b]}</Fragment>);
+
+  return (
+    <div className={`pos layout-${layout}${spec.touch ? " touch" : ""}${bigTotal ? " bigtotal" : ""}`}>
+      <header className="pos-top">
+        <b>{device?.storeName}</b>
+        <span>{device?.name}</span>
+        <span>· {cashierName}</span>
+        <span className="spacer" />
+        <button onClick={() => setDialog({ kind: "prefs" })} title="حجم الخط والوضع الليلي والصوت">🎨 العرض</button>
+        <button onClick={() => void openCustomerDisplay()} title="افتحها على الشاشة الثانية">شاشة الزبون</button>
+        <button onClick={() => setDialog({ kind: "printer" })}>الطابعة والميزان</button>
+        <button onClick={() => void syncNow()}>مزامنة</button>
+        <button onClick={() => setDialog({ kind: "mypay" })}>💼 راتبي</button>
+        {shiftSet.xReport && <button onClick={() => void xReport()} disabled={!shift} title="حالة الوردية لين توا، من غير قفل">📄 تقرير X</button>}
+        <button onClick={() => void askCloseShift()} disabled={!shift}>قفل الوردية</button>
+        <button onClick={logout}>خروج</button>
+      </header>
+      <div className="pos-status" role="status">
+        {sync ? (
+          <span className={`st ${sync.online ? "ok" : "off"}`}><i />{sync.online ? "متصل" : "بدون إنترنت، البيع شغال عادي"}</span>
+        ) : <span className="st"><i />…</span>}
+        <span className={sync && sync.pending > 0 ? "st warn" : "st"}>{sync && sync.pending > 0 ? `⏳ ${sync.pending} تستنى المزامنة` : "✓ كل شي متزامن"}</span>
+        {sync && sync.failed > 0 && <span className="st bad">⚠️ {sync.failed} مرفوضة</span>}
+        <span className="st">🧾 مبيعاتك اليوم: <b className="num">{mine.count}</b> فاتورة · <b className="num">{formatMoney(mine.totalMinor)}</b></span>
+        {shift && <span className="st">⏱ الوردية من {hhmm(new Date(shift.openedAt))}</span>}
+        <span className="spacer" />
+        <span className="st muted">{catalogSize} صنف</span>
+        <span className="st num">{hhmm(now)}</span>
+      </div>
+
+      <main className={`pos-main frame-${frame.id}${frame.bottom.length ? (frame.sheet ? " has-sheet" : " has-bottom") : ""}`} style={{ "--cols": frame.cols.map((c) => c.w).join(" ") } as CSSProperties}>
+        {frame.cols.map((c, i) => (
+          <section key={i} className="zone">{zone(c.blocks)}</section>
+        ))}
+        {frame.bottom.length > 0 && !frame.sheet && <section className="zone bottom">{zone(frame.bottom)}</section>}
+        {frame.bottom.length > 0 && frame.sheet && (
+          <section className={`zone sheet${sheetOpen ? " open" : ""}`} aria-label="السلة والدفع">
+            <div className="sheet-bar">
+              <button className="sheet-handle" onClick={() => setSheetOpen((o) => !o)} aria-expanded={sheetOpen}>
+                {sheetOpen ? "▼" : "▲"} 🛒 <span className="num">{lines.length}</span> صنف · <b className="num">{formatMoney(grand)}</b>
+              </button>
+              {!sheetOpen && <button className="primary pay" disabled={!lines.length || !shift} onClick={startPay}>دفع</button>}
+            </div>
+            {sheetOpen && <div className="sheet-body">{zone(frame.bottom)}</div>}
+          </section>
+        )}
       </main>
 
       <Receipt data={slip ?? receipt} />
@@ -1332,7 +1386,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
       )}
       {dialog?.kind === "prefs" && (
         <Modal title="🎨 شكل الشاشة" onClose={() => { setDialog(null); focusScan(); }}>
-          <div className="muted small">الواجهة: {spec.icon} {spec.label}. يختارها المالك من «⚙ الإعدادات ← 🖥 واجهة الكاشير»، وانت تبدّل الشكل بس.</div>
+          <div className="muted small">الواجهة: {spec.icon} {spec.label} · الهيكل: {frame.icon} {frame.name}. يختارهم المالك من «⚙ الإعدادات ← 🖥 واجهة الكاشير»، وانت تبدّل الشكل بس.</div>
           <span className="muted">يتحفظ لك أنت ({cashierName}) على هذا الجهاز، وكل كاشير يختار اللي يريحه.</span>
           <label>حجم الخط
             <div className="seg">
@@ -1342,9 +1396,16 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
             </div>
           </label>
           <label>الألوان
-            <div className="seg">
-              <button className={!prefs.dark ? "active" : ""} onClick={() => { const p = { ...prefs, dark: false }; setPrefs(p); savePrefs(p); }}>☀️ نهاري</button>
-              <button className={prefs.dark ? "active" : ""} onClick={() => { const p = { ...prefs, dark: true }; setPrefs(p); savePrefs(p); }}>🌙 ليلي</button>
+            <div className="theme-picks">
+              {(["", ...TILL_THEMES] as const).map((t) => {
+                const on = t === "dark" ? prefs.dark || prefs.theme === "dark" : !prefs.dark && prefs.theme === t;
+                const info = THEME_INFO[t || layoutSet.theme.name];
+                return (
+                  <button key={t || "shop"} className={`theme-pick${on ? " active" : ""}`} onClick={() => { const p = { ...prefs, theme: t, dark: false }; setPrefs(p); savePrefs(p); }}>
+                    <i style={{ background: `linear-gradient(135deg, ${info.brand} 50%, ${info.bg} 50%)` }} />{t ? (t === "dark" ? "🌙 ليلي" : info.label) : "زي المحل"}
+                  </button>
+                );
+              })}
             </div>
           </label>
           <label>الصوت

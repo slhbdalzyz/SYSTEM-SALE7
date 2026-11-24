@@ -1,8 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { MODULES, OTHER_METHODS, readShopSettings, shiftSettingsSchema, shopSettingsSchema, tillLayoutSchema, type ModuleKey } from "@pos/shared";
+import { MODULES, OTHER_METHODS, readShopSettings, shiftSettingsSchema, shopSettingsSchema, tillLayoutSchema, displayAdsSchema, structureSchema, normalizeStructure, STRUCTURES, type ModuleKey } from "@pos/shared";
 import { audit } from "../db";
-import { HttpError, authenticate, requirePerm } from "../auth";
+import { HttpError, authenticate, platformGuard, requirePerm } from "../auth";
 
 /** The shop's settings page: its name, contact details, bank account, receipt and till options. */
 export async function settingsRoutes(app: FastifyInstance) {
@@ -93,12 +93,47 @@ export async function settingsRoutes(app: FastifyInstance) {
     const users = (await app.db.query(`SELECT id FROM users WHERE tenant_id = $1`, [tid])).rows.map((r) => r.id as string);
     b.devices = Object.fromEntries(Object.entries(b.devices).filter(([k]) => devices.includes(k)));
     b.users = Object.fromEntries(Object.entries(b.users).filter(([k]) => users.includes(k)));
+    b.frame.devices = Object.fromEntries(Object.entries(b.frame.devices).filter(([k]) => devices.includes(k)));
+    b.frame.users = Object.fromEntries(Object.entries(b.frame.users).filter(([k]) => users.includes(k)));
+    // The shop's own frames can't take a ready one's name, and each is checked whole.
+    const ready = new Set(STRUCTURES.map((x) => x.id));
+    if (b.structures.some((x) => ready.has(x.id))) throw new HttpError(400, "اسم الهيكل محجوز");
+    if (new Set(b.structures.map((x) => x.id)).size !== b.structures.length) throw new HttpError(400, "فيه هيكلين بنفس الرمز");
+    b.structures = b.structures.map(normalizeStructure);
     const t = (await app.db.query(`SELECT settings FROM tenants WHERE id = $1`, [tid])).rows[0];
     const s = readShopSettings(t?.settings);
     s.tillLayout = b;
     await app.db.query(`UPDATE tenants SET settings = $2 WHERE id = $1`, [tid, JSON.stringify(s)]);
     await audit(app.db, { tenantId: tid, userId: req.user.sub, action: "settings.update", entity: "tenant", entityId: tid, data: { tillLayout: b } });
     return { tillLayout: s.tillLayout };
+  });
+
+  /** The customer screen's slides: every till reads them, the owner sets them. */
+  app.get("/settings/display-ads", { preHandler: authenticate }, async (req) => {
+    const r = (await app.db.query(`SELECT display_ads FROM tenants WHERE id = $1`, [req.user.tid])).rows[0];
+    return displayAdsSchema.parse(r?.display_ads ?? {});
+  });
+  app.put("/settings/display-ads", { preHandler: requirePerm("settings"), bodyLimit: 4 * 1024 * 1024 }, async (req) => {
+    const b = displayAdsSchema.parse(req.body);
+    await app.db.query(`UPDATE tenants SET display_ads = $2 WHERE id = $1`, [req.user.tid, JSON.stringify(b)]);
+    await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "settings.update", entity: "tenant", entityId: req.user.tid, data: { displayAds: b.slides.length } });
+    return b;
+  });
+
+  /** Frames the platform offers every shop, to copy into its own. */
+  app.get("/till-structures/library", { preHandler: requirePerm("settings") }, async () => ({ structures: await platformStructures(app) }));
+  app.get("/platform/till-structures", { preHandler: platformGuard("settings") }, async () => ({ structures: await platformStructures(app) }));
+  app.put("/platform/till-structures", { preHandler: platformGuard("settings") }, async (req) => {
+    const b = z.object({ structures: z.array(structureSchema).max(30) }).parse(req.body);
+    const ready = new Set(STRUCTURES.map((x) => x.id));
+    if (b.structures.some((x) => ready.has(x.id))) throw new HttpError(400, "اسم الهيكل محجوز");
+    if (new Set(b.structures.map((x) => x.id)).size !== b.structures.length) throw new HttpError(400, "فيه هيكلين بنفس الرمز");
+    const structures = b.structures.map(normalizeStructure);
+    await app.db.query(
+      `INSERT INTO platform_settings (key, value) VALUES ('till_structures', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+      [JSON.stringify({ structures })],
+    );
+    return { structures };
   });
 
   app.put("/settings", { preHandler: requirePerm("settings") }, async (req) => {
@@ -113,5 +148,13 @@ export async function settingsRoutes(app: FastifyInstance) {
     await app.db.query(`UPDATE tenants SET name = $2, settings = $3 WHERE id = $1`, [req.user.tid, b.name, JSON.stringify(b.settings)]);
     await audit(app.db, { tenantId: req.user.tid, userId: req.user.sub, action: "settings.update", entity: "tenant", entityId: req.user.tid, data: { name: b.name } });
     return { name: b.name, settings: b.settings };
+  });
+}
+
+async function platformStructures(app: FastifyInstance) {
+  const v = (await app.db.query(`SELECT value FROM platform_settings WHERE key = 'till_structures'`)).rows[0]?.value as { structures?: unknown[] } | undefined;
+  return (v?.structures ?? []).flatMap((x) => {
+    const r = structureSchema.safeParse(x);
+    return r.success ? [normalizeStructure(r.data)] : [];
   });
 }

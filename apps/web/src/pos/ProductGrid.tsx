@@ -10,7 +10,7 @@ import { session } from "../session";
 interface Category { id: string; name: string; icon?: string | null }
 const NONE = "none";
 
-export function ProductGrid({ onPick, big }: { onPick: (p: Found) => void; big?: boolean }) {
+export function ProductGrid({ onPick, big, side }: { onPick: (p: Found) => void; big?: boolean; side?: boolean }) {
   const [cats, setCats] = useState<Category[]>([]);
   const [cat, setCat] = useState<string | null>(null);
   const [items, setItems] = useState<Found[]>([]);
@@ -45,7 +45,7 @@ export function ProductGrid({ onPick, big }: { onPick: (p: Found) => void; big?:
 
   if (!shown.length) return null;
   return (
-    <div className={`pgrid ${big ? "big" : ""}`}>
+    <div className={`pgrid${big ? " big" : ""}${side ? " side-cats" : ""}`}>
       <div className="pgrid-cats" role="tablist" aria-label="الأقسام">
         {shown.map((c) => (
           <button key={c.id} role="tab" aria-selected={c.id === current} className={c.id === current ? "active" : ""} onClick={() => setCat(c.id)}>
