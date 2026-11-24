@@ -4,7 +4,7 @@ import { applyOffers, computeLine, computeTotals, normSerial, pointsEarned, poin
 import { addPoints, customerPoints, loyaltySettings } from "../loyalty";
 import { currentOffers } from "./offers";
 import { openPriceProducts } from "./quick";
-import { alertBigDiscount, alertOverCreditLimit, checkLowStock, checkZakatDue, flushPushes } from "../alerts";
+import { alertBigDiscount, alertOverCreditLimit, checkForgottenShifts, checkLowStock, checkZakatDue, flushPushes } from "../alerts";
 import { audit, inTx, type Tx } from "../db";
 import { checkExpirySoon } from "../expiry";
 import { requireDevice } from "../auth";
@@ -40,6 +40,7 @@ export async function salesRoutes(app: FastifyInstance) {
     if (results.some((r) => r.status === "accepted")) {
       await checkZakatDue(app.db, req.user.tid).catch(() => false);
       await checkExpirySoon(app.db, req.user.tid).catch(() => false);
+      await checkForgottenShifts(app.db, req.user.tid).catch(() => 0);
       await flushPushes(app.db, req.user.tid);
     }
     return { results };

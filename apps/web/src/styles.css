@@ -918,3 +918,5 @@ html.till-font-kufi { font-family: "Noto Kufi Arabic", "Droid Arabic Kufi", "Seg
 .pgrid-cats button { flex: 0 0 auto; }
 .sheet-body > .keys:last-child { position: sticky; bottom: 0; background: var(--panel); padding-top: 6px; z-index: 2; }
 .sheet-body > .big-total { display: none; }
+.open-shifts tr.forgotten td { background: var(--danger-soft, #fee2e2); }
+.open-shifts tr.forgotten td:first-child { border-inline-start: 4px solid var(--danger, #dc2626); }

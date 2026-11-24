@@ -1,4 +1,4 @@
-import { CloseShiftButton } from "./ShiftCard";
+import { OpenShifts } from "./ShiftCard";
 import { useEffect, useState } from "react";
 import { formatMoney, formatQty } from "@pos/shared";
 import type { Call } from "./Admin";
@@ -113,12 +113,8 @@ export function Home({ call, storeId, userName, open }: { call: Call; storeId: s
           )}
         </div>
         <div className="card panel">
-          <div className="panel-head"><b>الكاشيرات المفتوحة توا</b></div>
-          {d.openShifts.length === 0 ? <div className="muted">ما فيش وردية مفتوحة.</div> : (
-            <table><tbody>{d.openShifts.map((s) => (
-              <tr key={s.id}><td>{s.cashier}<div className="muted">{s.device}</div></td><td className="num muted">{new Date(s.openedAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}</td><td className="num">في الدرج {formatMoney(s.expectedCashMinor)}</td><td><CloseShiftButton call={call} id={s.id} onDone={() => setTick((t) => t + 1)} /></td></tr>
-            ))}</tbody></table>
-          )}
+          <div className="panel-head"><b>الورديات المفتوحة (كل الفروع)</b></div>
+          <OpenShifts call={call} onChanged={() => setTick((t) => t + 1)} />
         </div>
       </div>
     </div>

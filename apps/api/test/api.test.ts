@@ -3247,3 +3247,45 @@ describe("the cashier screen's frames, colours and customer slides", () => {
     expect(JSON.stringify((await call("GET", "/settings", till)).body)).not.toContain("عرض الأسبوع");
   });
 });
+
+describe("open shifts the owner can't find", () => {
+  it("lists them from every branch, warns about one forgotten for a day, and closes them all with the password", async () => {
+    const reg = await call("POST", "/auth/register", undefined, { businessName: "محل الورديات", storeName: "الرئيسي", ownerName: "سالم", email: "openshifts@test.ly", password: "password123" });
+    const o = reg.body.token;
+    // A second branch (the basic plan allows one, so straight in the database).
+    const branch = { body: (await db.query(`INSERT INTO stores (tenant_id, name) SELECT tenant_id, 'فرع البحر' FROM stores WHERE id = $1 RETURNING id`, [reg.body.storeId])).rows[0] };
+    const till = async (storeId: string, name: string, pin: string) => {
+      const d = await call("POST", "/devices", o, { storeId, name });
+      const u = await call("POST", "/users", o, { name: `كاشير ${name}`, role: "cashier", pin });
+      const t = (await call("POST", "/auth/pin", undefined, { deviceToken: d.body.deviceToken, userId: u.body.id, pin })).body.token;
+      const id = randomUUID();
+      expect((await call("POST", "/shifts/open", t, { id, openingCashMinor: 10000 })).status).toBe(200);
+      return id;
+    };
+    const a = await till(reg.body.storeId, "1", "1111");
+    const b = await till(branch.body.id, "2", "2222");
+    // One of them was left open two days ago.
+    await db.query(`UPDATE shifts SET opened_at = now() - interval '50 hours' WHERE id = $1`, [b]);
+
+    const open = (await call("GET", "/shifts/open", o)).body;
+    expect(open.shifts.map((s: { id: string }) => s.id)).toEqual([b, a]);
+    expect(open.shifts[0]).toMatchObject({ storeName: "فرع البحر", device: "2", expectedCashMinor: 10000 });
+    expect(open.shifts[0].hoursOpen).toBeGreaterThanOrEqual(49);
+    // The dashboard of the main branch still shows the other branch's shift.
+    const dash = (await call("GET", `/dashboard?storeId=${reg.body.storeId}`, o)).body;
+    expect(dash.openShifts.map((s: { id: string }) => s.id).sort()).toEqual([a, b].sort());
+    const alerts = (await db.query(`SELECT title, data FROM alerts WHERE tenant_id = (SELECT tenant_id FROM shifts WHERE id = $1) AND kind = 'shift_forgotten'`, [b])).rows;
+    expect(alerts.map((x) => x.data.shiftId)).toEqual([b]);
+    expect(alerts[0].title).toBe("وردية مفتوحة من 2 أيام");
+    // Once per shift.
+    await call("GET", "/dashboard", o);
+    expect((await db.query(`SELECT count(*)::int AS n FROM alerts WHERE kind = 'shift_forgotten' AND data->>'shiftId' = $1`, [b])).rows[0].n).toBe(1);
+
+    expect((await call("POST", "/shifts/close-all", o, { password: "wrong-pass" })).status).toBe(401);
+    const r = await call("POST", "/shifts/close-all", o, { password: "password123" });
+    expect(r.body.error ?? r.status).toBe(200);
+    expect(r.body.closed).toBe(2);
+    expect((await call("GET", "/shifts/open", o)).body.shifts).toEqual([]);
+    expect((await call("GET", "/reset/preview", o)).body.openShifts).toBe(0);
+  });
+});

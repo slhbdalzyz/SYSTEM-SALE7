@@ -141,3 +141,92 @@ export function CloseShiftButton({ call, id, onDone }: { call: Call; id: string;
     </span>
   );
 }
+
+export interface OpenShiftRow { id: string; cashier: string; device: string; storeId: string; storeName: string; openedAt: string; hoursOpen: number; expectedCashMinor: number }
+
+const since = (h: number) => (h < 1 ? "أقل من ساعة" : h < 24 ? `${h} ساعة` : `${Math.floor(h / 24)} ${Math.floor(h / 24) === 1 ? "يوم" : "أيام"}`);
+
+/**
+ * Every open shift in every branch: who, which till, which branch, since when (red after a day),
+ * the cash it should hold, and a close button; «سكّر الكل» closes them together after the owner's
+ * password. When one was forgotten and no timed close is set, it offers to turn it on.
+ */
+export function OpenShifts({ call, onChanged, compact }: { call: Call; onChanged?: () => void; compact?: boolean }) {
+  const [list, setList] = useState<OpenShiftRow[] | null>(null);
+  const [autoCloseAt, setAutoCloseAt] = useState("");
+  const [all, setAll] = useState(false);
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ text: string; bad?: boolean } | null>(null);
+  const load = () => call<{ shifts: OpenShiftRow[]; autoCloseAt: string }>("/shifts/open")
+    .then((r) => { setList(r.shifts); setAutoCloseAt(r.autoCloseAt); })
+    .catch((e) => setMsg({ text: (e as Error).message, bad: true }));
+  useEffect(() => void load(), [call]);
+  const changed = () => { void load(); onChanged?.(); };
+
+  async function closeAll() {
+    setMsg(null);
+    setBusy(true);
+    try {
+      const r = await call<{ closed: number }>("/shifts/close-all", { body: { password } });
+      setAll(false);
+      setPassword("");
+      setMsg({ text: `تم قفل ${r.closed} وردية ✓` });
+      changed();
+    } catch (e) {
+      setMsg({ text: (e as Error).message, bad: true });
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function turnOnAuto() {
+    setMsg(null);
+    try {
+      const sh = readShopSettings((await call<{ settings: unknown }>("/settings")).settings).shift;
+      const r = await call<{ shift: ShiftSettings }>("/settings/shift", { method: "PATCH", body: { ...sh, autoCloseAt: "23:59" } });
+      setAutoCloseAt(r.shift.autoCloseAt);
+      setMsg({ text: "تم: أي وردية تنسات تتسكّر بروحها الساعة 23:59. تقدر تبدّل الساعة من ⚙ الإعدادات ← 🧾 قفل الوردية." });
+    } catch (e) {
+      setMsg({ text: (e as Error).message, bad: true });
+    }
+  }
+
+  if (!list) return msg ? <div className="error">{msg.text}</div> : <div className="muted">…</div>;
+  const old = list.filter((s) => s.hoursOpen >= 24);
+  return (
+    <div className="stack" style={{ gap: 6 }}>
+      {list.length === 0 && <div className="muted">ما فيش وردية مفتوحة ✓</div>}
+      {list.length > 0 && (
+        <table className="open-shifts">
+          <tbody>
+            {list.map((s) => (
+              <tr key={s.id} className={s.hoursOpen >= 24 ? "forgotten" : ""}>
+                <td><b>{s.cashier}</b><div className="muted small">🖥 {s.device}{s.storeName ? ` · 🏬 ${s.storeName}` : ""}</div></td>
+                {!compact && <td className="num muted small">{new Date(s.openedAt).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</td>}
+                <td className="small">{s.hoursOpen >= 24 ? "⚠️ " : ""}مفتوحة من {since(s.hoursOpen)}</td>
+                <td className="num small">في الدرج {formatMoney(s.expectedCashMinor)}</td>
+                <td><CloseShiftButton call={call} id={s.id} onDone={changed} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {list.length > 1 && !all && <button className="danger" onClick={() => setAll(true)}>🔒 سكّر الكل ({list.length})</button>}
+      {all && (
+        <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+          <input type="password" autoComplete="current-password" placeholder="كلمة السر متاعك" value={password} onChange={(e) => setPassword(e.target.value)} style={{ maxWidth: 220 }} />
+          <button className="danger" disabled={!password || busy} onClick={() => void closeAll()}>{busy ? "…" : `قفل ${list.length} وردية`}</button>
+          <button onClick={() => { setAll(false); setPassword(""); }} disabled={busy}>إلغاء</button>
+          <span className="muted small">تتسكّر من غير عدّ للدرج. لو تبي تعدّ، سكّر كل وحدة بروحها.</span>
+        </div>
+      )}
+      {old.length > 0 && !autoCloseAt && (
+        <div className="notice row" style={{ gap: 8, flexWrap: "wrap" }}>
+          <span style={{ flex: 1 }}>فيه وردية منسية من أكثر من يوم. تبي الورديات المنسية تتسكّر بروحها آخر اليوم؟</span>
+          <button className="primary" onClick={() => void turnOnAuto()}>شغّل القفل التلقائي</button>
+        </div>
+      )}
+      {msg && <div className={msg.bad ? "error" : "badge ok"}>{msg.text}</div>}
+    </div>
+  );
+}

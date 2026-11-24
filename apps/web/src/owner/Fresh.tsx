@@ -7,6 +7,7 @@ import { session } from "../session";
 import type { Call } from "../admin/Admin";
 import { headersOf, writeXlsx } from "../admin/sheet";
 import { buildBackup, downloadBlob } from "./backup";
+import { OpenShifts } from "../admin/ShiftCard";
 
 export type ExportPart = "products_qty" | "products" | "customers" | "suppliers";
 const PART_LABEL: Record<ExportPart, string> = {
@@ -164,7 +165,12 @@ export function ResetCard({ call, storeId }: { call: Call; storeId: string }) {
           <label key={k} className="check"><input type="checkbox" checked={keep[k]} disabled={!!busy} onChange={(e) => setKeep({ ...keep, [k]: e.target.checked })} /> {PART_LABEL[k]} (Excel)</label>
         ))}
       </div>
-      {p && p.openShifts > 0 && <div className="error">فيه {p.openShifts} وردية مفتوحة. سكّرها وخلّي أجهزة الكاشير تبعت مبيعاتها قبل التصفير.</div>}
+      {p && p.openShifts > 0 && (
+        <div className="stack" style={{ gap: 6 }}>
+          <div className="error">فيه {p.openShifts} وردية مفتوحة. سكّرها من هنا، وخلّي أجهزة الكاشير تبعت مبيعاتها قبل التصفير:</div>
+          <OpenShifts call={call} onChanged={() => void call<Preview>("/reset/preview").then(setP).catch(() => undefined)} />
+        </div>
+      )}
       <div className="notice">ما فيش رجعة بعد التصفير إلا من الملفات اللي تنزل. تأكد إن كل أجهزة الكاشير بعتت مبيعاتها.</div>
       <label>
         كلمة السر متاعك
