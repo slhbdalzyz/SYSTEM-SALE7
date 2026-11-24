@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { creditRoom, formatMoney, shiftSettingsSchema, waLink, formatQty, pointsEarned, pointsFor, readShopSettings, shopModules, type CustomerTier, type CatalogCustomer, type CatalogProduct, type LoyaltySettings, type Offer, type PaymentMethod, type QuickGroup, type QuickKey, type ShopSettings, expiryState, variantBaseName, type Prescription, kitchenDelta, sentSnapshot, ORDER_TYPE_LABELS, ORDER_TYPE_ICONS, type OrderType, type SentLine, serialsMissing } from "@pos/shared";
+import { creditRoom, formatMoney, shiftSettingsSchema, waLink, LAYOUT_SPECS, FUNCTION_KEYS, TILL_ACTION_LABELS, keyMap, keyOf, pickLayout, tillButtons, tillLayoutSchema, toMinor, type TillAction, type TillButton, formatQty, pointsEarned, pointsFor, readShopSettings, shopModules, type CustomerTier, type CatalogCustomer, type CatalogProduct, type LoyaltySettings, type Offer, type PaymentMethod, type QuickGroup, type QuickKey, type ShopSettings, expiryState, variantBaseName, type Prescription, kitchenDelta, sentSnapshot, ORDER_TYPE_LABELS, ORDER_TYPE_ICONS, type OrderType, type SentLine, serialsMissing } from "@pos/shared";
 import { api } from "../api";
 import { db, getMeta, nextInvoiceNumber, setMeta, type HeldCart, type LocalShift } from "../localdb";
 import { alternatives, findByCode, searchProducts, type Found } from "../lookup";
@@ -25,6 +25,9 @@ import { displaySender } from "../display/channel";
 import { sendInvoice } from "../whatsapp";
 import { nonCash, shiftReport, zText } from "./shiftReport";
 import { CloseShiftDialog, type CloseResult, type OpenThings } from "./closeShift";
+import { ProductGrid } from "./ProductGrid";
+import { printPage } from "../hardware/pageInvoice";
+import { loadPrinterSettings } from "../hardware/printer";
 import { CameraScanner, hasCamera } from "../hardware/CameraScanner";
 import { QuickPad, visibleKeys } from "./quickpad";
 
@@ -75,9 +78,7 @@ type Shop = { name: string; settings: ShopSettings; type?: string; banks?: TillB
 
 /** The till's keyboard: what each key does, shown on F1. */
 const KEYS: [string, string][] = [
-  ["F1", "هذي القائمة"], ["F2", "خانة الباركود والبحث"], ["F3", "العميل / تسديد دين"], ["F4", "كمية الصنف المختار"],
-  ["F5", "تعديل سعر الصنف المختار"], ["F6", "خصم على الفاتورة"], ["F7", "إعادة طباعة آخر فاتورة"], ["F8", "تعليق الفاتورة"],
-  ["F9", "الفواتير المعلقة"], ["F10", "مرتجع"], ["F11", "فتح الدرج"], ["F12 / Ctrl+Enter", "الدفع"],
+  ["Ctrl+Enter", "الدفع"],
   ["↑ ↓", "التنقل بين أصناف الفاتورة"], ["+ / −", "زيادة أو نقص كمية الصنف المختار"], ["Delete", "حذف الصنف المختار"],
   ["Ctrl+Delete", "إلغاء الفاتورة كلها"], ["3*باركود", "يبيع 3 من نفس الصنف"], ["Esc", "يقفل النافذة أو يمسح البحث"],
   ["Alt+N", "زبون جديد في تبويب ثاني"], ["Alt+T", "الطاولات (مطعم)"], ["Alt+K", "أرسل للمطبخ (مطعم)"], ["Alt+M", "ملاحظة على الصنف (مطعم)"], ["Alt+1 … Alt+9", "التنقل بين الزبائن المفتوحين"], ["Alt+D", "إيداع أو سحب من الدرج"], ["Ctrl+1 … Ctrl+9", "الأزرار السريعة اللي على الشاشة"],
@@ -117,6 +118,14 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   const [shop, setShop] = useState<Shop | null>(null);
   const till = (shop?.settings ?? readShopSettings({})).till;
   const shiftSet = shop?.settings?.shift ?? shiftSettingsSchema.parse({});
+  // The screen's layout: the cashier's, else this till's, else the shop's (set by the owner).
+  const layoutSet = shop?.settings?.tillLayout ?? tillLayoutSchema.parse({});
+  const me = tokenClaims(session.staffToken);
+  const layout = pickLayout(layoutSet, shop?.type, me?.did, me?.sub);
+  const spec = LAYOUT_SPECS[layout];
+  const bigTotal = layoutSet.bigTotal ?? spec.bigTotal;
+  const keysOn = useMemo(() => keyMap(layoutSet), [layoutSet]);
+  const kbd = (a: TillAction) => keyOf(layoutSet, a);
   // The till follows the shop's features (🧩 مميزات المحل): tables and kitchen, quotes, delivery, kits, price tiers.
   const mods = useMemo(() => shopModules(shop?.type, shop?.settings.modules), [shop]);
   const restaurant = mods.tables;
@@ -793,20 +802,22 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     const onKey = (e: KeyboardEvent) => {
       if (dialog) return;
       const inScan = document.activeElement === scanRef.current;
-      const fn: Record<string, () => void> = {
-        F1: () => setDialog({ kind: "keys" }),
-        F2: focusScan,
-        F3: () => setDialog({ kind: "customer" }),
-        F4: () => selected && setDialog({ kind: "qty", key: selected }),
-        F5: () => selected && canOverride && setDialog({ kind: "price", key: selected }),
-        F6: () => lines.length && maxDiscount > 0 && setDialog({ kind: "discount" }),
-        F7: () => receipt && void print({ ...receipt, copy: true }, false),
-        F8: () => void hold(),
-        F9: () => void db.held.toArray().then((carts) => setDialog({ kind: "held", carts })),
-        F10: () => shift && setDialog({ kind: "return" }),
-        F11: () => void drawer(),
-        F12: startPay,
+      const act: Record<TillAction, () => void> = {
+        help: () => setDialog({ kind: "keys" }),
+        search: focusScan,
+        customer: () => setDialog({ kind: "customer" }),
+        qty: () => selected && setDialog({ kind: "qty", key: selected }),
+        price: () => selected && canOverride && setDialog({ kind: "price", key: selected }),
+        discount: () => lines.length && maxDiscount > 0 && setDialog({ kind: "discount" }),
+        reprint: () => receipt && void print({ ...receipt, copy: true }, false),
+        hold: () => void hold(),
+        held: () => void db.held.toArray().then((carts) => setDialog({ kind: "held", carts })),
+        return: () => shift && setDialog({ kind: "return" }),
+        drawerOpen: () => void drawer(),
+        pay: startPay,
       };
+      // F1…F12, as the owner set them.
+      const fn: Record<string, () => void> = Object.fromEntries(Object.entries(keysOn).map(([k, a]) => [k, act[a]]));
       if (e.ctrlKey && !e.altKey && /^(Digit|Numpad)[1-9]$/.test(e.code)) {
         // Ctrl+1 … Ctrl+9: the quick keys on screen, in order.
         e.preventDefault();
@@ -836,7 +847,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
         fn[e.key]();
       } else if (e.key === "Enter" && e.ctrlKey) {
         e.preventDefault();
-        fn.F12();
+        act.pay();
       } else if (e.key === "Delete" && e.ctrlKey) {
         e.preventDefault();
         voidCart();
@@ -873,8 +884,48 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
   /** The biggest invoice discount this person may give, in percent of the bill. */
   const maxDiscount = boss ? 100 : till.cashierMaxDiscountPct;
 
+  /** One tap: the bill paid in cash with exactly this much; the receipt prints and the bill clears. */
+  function fastCash(amountMinor: number) {
+    if (!lines.length || !shift) return;
+    if (lines.some((l) => l.rx) && !prescription) return setDialog({ kind: "rx" });
+    if (lines.some((l) => l.serialized && !l.noSerial && serialsMissing(l) > 0)) return startPay();
+    void pay([{ method: "cash", amountMinor }]);
+  }
+
+  /** The last bill on an A4 (or A5) sheet, for a contractor or a company. */
+  function printA4() {
+    if (!receipt) return;
+    const p = loadPrinterSettings();
+    void printPage({ ...receipt, copy: true }, { size: p.sheet === "A5" ? "A5" : "A4", textScale: p.textScale, marginMm: p.marginMm });
+  }
+
+  /** The cashier's buttons, by id, so the owner can choose and order them. */
+  function buttonFor(b: TillButton) {
+    switch (b) {
+      case "qty": return <button key={b} onClick={() => selected && setDialog({ kind: "qty", key: selected })} disabled={!selected}>الكمية <kbd>{kbd("qty")}</kbd></button>;
+      case "price": return <button key={b} onClick={() => selected && setDialog({ kind: "price", key: selected })} disabled={!selected || !canOverride}>تعديل السعر <kbd>{kbd("price")}</kbd></button>;
+      case "discount": return <button key={b} onClick={() => setDialog({ kind: "discount" })} disabled={!lines.length || maxDiscount <= 0}>خصم على الفاتورة <kbd>{kbd("discount")}</kbd></button>;
+      case "remove": return <button key={b} onClick={() => selectedLine && removeLine(selectedLine.key)} disabled={!selected} className="danger">حذف الصنف <kbd>Del</kbd></button>;
+      case "alternatives": return hasGeneric ? <button key={b} onClick={() => void showAlternatives()} disabled={!selected}>{shop?.type === "auto_parts" ? "🔁 البدائل" : "💊 البدائل"}</button> : null;
+      case "quote": return mods.quotes ? <button key={b} onClick={() => setDialog({ kind: "quote" })}>📄 عرض سعر</button> : null;
+      case "deal": return mods.delivery ? <button key={b} onClick={() => setDialog({ kind: "deal" })}>🏗️ مشروع / 🚚 توصيل</button> : null;
+      case "kit": return hasKits && mods.kits ? <button key={b} onClick={() => setDialog({ kind: "kit" })}>🎒 قائمة جاهزة</button> : null;
+      case "note": return restaurant || selectedLine?.service || layout === "tech" ? <button key={b} onClick={() => selected && setDialog({ kind: "note", key: selected })} disabled={!selected}>📝 ملاحظة{restaurant && <> <kbd>Alt+M</kbd></>}</button> : null;
+      case "hold": return <button key={b} onClick={hold} disabled={!lines.length}>تعليق <kbd>{kbd("hold")}</kbd></button>;
+      case "held": return <button key={b} onClick={async () => setDialog({ kind: "held", carts: await db.held.toArray() })}>الفواتير المعلقة <kbd>{kbd("held")}</kbd></button>;
+      case "customer": return <button key={b} onClick={() => setDialog({ kind: "customer" })}>{customer ? `العميل: ${customer.name}` : "العميل / تسديد"} <kbd>{kbd("customer")}</kbd></button>;
+      case "return": return <button key={b} onClick={() => setDialog({ kind: "return" })} disabled={!shift}>مرتجع <kbd>{kbd("return")}</kbd></button>;
+      case "reprint": return <button key={b} onClick={() => receipt && void print({ ...receipt, copy: true }, false)} disabled={!receipt}>إعادة طباعة <kbd>{kbd("reprint")}</kbd></button>;
+      case "a4": return <button key={b} onClick={printA4} disabled={!receipt?.sale}>🖨 فاتورة A4</button>;
+      case "drawerOpen": return <button key={b} onClick={() => void drawer()}>فتح الدرج <kbd>{kbd("drawerOpen")}</kbd></button>;
+      case "drawerMove": return <button key={b} onClick={() => setDialog({ kind: "drawer" })} disabled={!shift}>💵 إيداع / سحب <kbd>Alt+D</kbd></button>;
+      case "void": return <button key={b} onClick={voidCart} disabled={!lines.length} className="danger">إلغاء الفاتورة</button>;
+      case "keys": return <button key={b} onClick={() => setDialog({ kind: "keys" })} className="ghost">⌨️ الاختصارات <kbd>{kbd("help")}</kbd></button>;
+    }
+  }
+
   return (
-    <div className="pos">
+    <div className={`pos layout-${layout}${spec.touch ? " touch" : ""}${bigTotal ? " bigtotal" : ""}`}>
       <header className="pos-top">
         <b>{device?.storeName}</b>
         <span>{device?.name}</span>
@@ -908,7 +959,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
             <input
               ref={scanRef}
               autoFocus
-              placeholder="امسح الباركود أو اكتب اسم الصنف  (3*باركود = 3 حبات)"
+              placeholder={spec.placeholder ?? "امسح الباركود أو اكتب اسم الصنف  (3*باركود = 3 حبات)"}
               value={code}
               onChange={(e) => void onType(e.target.value)}
               onKeyDown={(e) => {
@@ -941,6 +992,10 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
             )}
           </div>
 
+          {spec.grid && <ProductGrid onPick={(p) => pick(p)} big={spec.touch} />}
+          {spec.customerFirst && !customer && (
+            <button className="customer-first" onClick={() => setDialog({ kind: "customer" })}>👤 اختار العميل أولاً (سعر الجملة والدين والفاتورة باسمه) <kbd>{kbd("customer")}</kbd></button>
+          )}
           {quick.keys.length > 0 && prefs.quickPlace !== "bottom" && (
             <QuickPad groups={quick.groups} keys={quick.keys} products={quickProducts} group={qGroup} setGroup={setQGroup} size={prefs.quickSize} onPress={pressKey} />
           )}
@@ -1033,6 +1088,12 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
         </section>
 
         <aside className="pos-right">
+          {bigTotal && (
+            <div className="big-total" aria-live="polite">
+              <span className="num">{formatMoney(exchange ? Math.max(0, totals.total - exchange.creditMinor) : totals.total)}</span>
+              <small>{lines.length} صنف · {formatQty(lines.reduce((a, l) => a + l.qtyMilli, 0), false)} قطعة{lastPaid?.changeMinor ? ` · الباقي ${formatMoney(lastPaid.changeMinor)}` : ""}</small>
+            </div>
+          )}
           <div className="totals">
             <div className="line"><span>عدد الأصناف</span><span className="num">{lines.length}</span></div>
             <div className="line"><span>المجموع</span><span className="num">{formatMoney(totals.subtotal)}</span></div>
@@ -1049,6 +1110,14 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
             )}
             <div className="grand num">{formatMoney(exchange ? Math.max(0, totals.total - exchange.creditMinor) : totals.total)}</div>
             {exchange && <button className="ghost" onClick={cancelExchange}>إلغاء التبديل ورجّع الفلوس</button>}
+            {spec.fastCash && !exchange && lines.length > 0 && shift && (
+              <div className="fast-cash" role="group" aria-label="دفع كاش سريع">
+                <button className="primary" onClick={() => fastCash(totals.total)}>💵 كاش بالضبط</button>
+                {layoutSet.cashNotes.map((n) => toMinor(n)).filter((m) => m > totals.total).map((m) => (
+                  <button key={m} onClick={() => fastCash(m)} className="num">{formatMoney(m, "")}</button>
+                ))}
+              </div>
+            )}
             {lastPaid && (
               <div className={`change-big ${lastPaid.changeMinor ? "" : "done"}`} onClick={() => setLastPaid(null)}>
                 <span>{lastPaid.changeMinor ? `الباقي للزبون · ${lastPaid.number}` : `✓ تم البيع · ${lastPaid.number}`}</span>
@@ -1070,26 +1139,9 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
             )}
           </div>
           <div className="keys">
-            <button onClick={() => selected && setDialog({ kind: "qty", key: selected })} disabled={!selected}>الكمية <kbd>F4</kbd></button>
-            <button onClick={() => selected && setDialog({ kind: "price", key: selected })} disabled={!selected || !canOverride}>تعديل السعر <kbd>F5</kbd></button>
-            <button onClick={() => setDialog({ kind: "discount" })} disabled={!lines.length || maxDiscount <= 0}>خصم على الفاتورة <kbd>F6</kbd></button>
-            <button onClick={() => selectedLine && removeLine(selectedLine.key)} disabled={!selected} className="danger">حذف الصنف <kbd>Del</kbd></button>
-            {hasGeneric && <button onClick={() => void showAlternatives()} disabled={!selected}>{shop?.type === "auto_parts" ? "🔁 البدائل" : "💊 البدائل"}</button>}
-            {mods.quotes && <button onClick={() => setDialog({ kind: "quote" })}>📄 عرض سعر</button>}
-            {mods.delivery && <button onClick={() => setDialog({ kind: "deal" })}>🏗️ مشروع / 🚚 توصيل</button>}
-            {hasKits && mods.kits && <button onClick={() => setDialog({ kind: "kit" })}>🎒 قائمة جاهزة</button>}
-            {(restaurant || selectedLine?.service) && <button onClick={() => selected && setDialog({ kind: "note", key: selected })} disabled={!selected}>📝 ملاحظة{restaurant && <> <kbd>Alt+M</kbd></>}</button>}
-            <button onClick={hold} disabled={!lines.length}>تعليق <kbd>F8</kbd></button>
-            <button onClick={async () => setDialog({ kind: "held", carts: await db.held.toArray() })}>الفواتير المعلقة <kbd>F9</kbd></button>
-            <button onClick={() => setDialog({ kind: "customer" })}>{customer ? `العميل: ${customer.name}` : "العميل / تسديد"} <kbd>F3</kbd></button>
-            <button onClick={() => setDialog({ kind: "return" })} disabled={!shift}>مرتجع <kbd>F10</kbd></button>
-            <button onClick={() => receipt && void print({ ...receipt, copy: true }, false)} disabled={!receipt}>إعادة طباعة <kbd>F7</kbd></button>
-            <button onClick={() => void drawer()}>فتح الدرج <kbd>F11</kbd></button>
-            <button onClick={() => setDialog({ kind: "drawer" })} disabled={!shift}>💵 إيداع / سحب <kbd>Alt+D</kbd></button>
-            <button onClick={voidCart} disabled={!lines.length} className="danger">إلغاء الفاتورة</button>
-            <button onClick={() => setDialog({ kind: "keys" })} className="ghost">⌨️ الاختصارات <kbd>F1</kbd></button>
+            {tillButtons(layoutSet, layout).map((b) => buttonFor(b))}
             <button className="primary pay" disabled={!lines.length || !shift} onClick={startPay}>
-              دفع <kbd>F12</kbd>
+              دفع <kbd>{kbd("pay")}</kbd>
             </button>
           </div>
         </aside>
@@ -1192,6 +1244,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
       {dialog?.kind === "keys" && (
         <Modal title="⌨️ اختصارات لوحة المفاتيح" onClose={() => { setDialog(null); focusScan(); }}>
           <div className="keys-help">
+            {FUNCTION_KEYS.filter((k) => keysOn[k]).map((k) => <div key={k}><kbd>{k}</kbd><span>{TILL_ACTION_LABELS[keysOn[k]]}</span></div>)}
             {KEYS.map(([k, what]) => <div key={k}><kbd>{k}</kbd><span>{what}</span></div>)}
           </div>
           <div className="row"><span className="spacer" /><button className="primary" onClick={() => { setDialog(null); focusScan(); }}>تمام</button></div>
@@ -1279,6 +1332,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
       )}
       {dialog?.kind === "prefs" && (
         <Modal title="🎨 شكل الشاشة" onClose={() => { setDialog(null); focusScan(); }}>
+          <div className="muted small">الواجهة: {spec.icon} {spec.label}. يختارها المالك من «⚙ الإعدادات ← 🖥 واجهة الكاشير»، وانت تبدّل الشكل بس.</div>
           <span className="muted">يتحفظ لك أنت ({cashierName}) على هذا الجهاز، وكل كاشير يختار اللي يريحه.</span>
           <label>حجم الخط
             <div className="seg">

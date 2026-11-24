@@ -3181,3 +3181,25 @@ describe("closing a shift the way the shop chose", () => {
     expect((await call("GET", "/shifts/current", t)).body.shift?.id).toBe(s4);
   });
 });
+
+describe("the cashier screen the owner sets", () => {
+  it("saves the shop's layout, a till's and a cashier's, drops ids from other shops, and survives the settings page", async () => {
+    const reg = await call("POST", "/auth/register", undefined, { businessName: "مطعم الواجهة", storeName: "الرئيسي", ownerName: "سعاد", email: "layout@test.ly", password: "password123" });
+    const o = reg.body.token;
+    const d = await call("POST", "/devices", o, { storeId: reg.body.storeId, name: "كاشير 1" });
+    const u = await call("POST", "/users", o, { name: "خالد", role: "cashier", pin: "2468" });
+    const stranger = randomUUID();
+    const body = { shop: "restaurant", devices: { [d.body.id]: "touch", [stranger]: "fast" }, users: { [u.body.id]: "fast" }, buttons: { quote: true }, order: ["void", "hold"], keys: { pay: "F10" }, bigTotal: true, cashNotes: [50, 20] };
+    expect((await call("PATCH", "/settings/till-layout", o, { ...body, shop: "nope" })).status).toBe(400);
+    const r = await call("PATCH", "/settings/till-layout", o, body);
+    expect(r.body.error ?? r.status).toBe(200);
+    expect(r.body.tillLayout.devices).toEqual({ [d.body.id]: "touch" });
+    const s = (await call("GET", "/settings", o)).body;
+    await call("PUT", "/settings", o, { name: s.name, settings: { ...s.settings, tillLayout: {} } });
+    const t = (await call("GET", "/settings", o)).body.settings.tillLayout;
+    expect([t.shop, t.users[u.body.id], t.keys.pay, t.bigTotal]).toEqual(["restaurant", "fast", "F10", true]);
+    // A till reads it with the rest of the settings.
+    const till = (await call("POST", "/auth/pin", undefined, { deviceToken: d.body.deviceToken, userId: u.body.id, pin: "2468" })).body.token;
+    expect((await call("GET", "/settings", till)).body.settings.tillLayout.devices[d.body.id]).toBe("touch");
+  });
+});

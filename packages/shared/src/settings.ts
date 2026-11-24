@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { DEFAULT_DEBT_MESSAGE, DEFAULT_INVOICE_MESSAGE } from "./whatsapp";
+import { tillLayoutSchema } from "./tillLayout";
 
 const text = (max: number) => z.string().trim().max(max).default("");
 
@@ -94,6 +95,8 @@ export const shopSettingsSchema = z.object({
   }).default({}),
   /** How a shift closes. Every option is off until the owner turns it on in «🧾 قفل الوردية». */
   shift: shiftSettingsSchema.default({}),
+  /** The cashier screen: its layout for the shop, a till or a cashier, its buttons and keys («🖥 واجهة الكاشير»). */
+  tillLayout: tillLayoutSchema.default({}),
   /** Side-menu pages the owner put away once done with them. */
   menu: z.object({
     /** «من الدفتر للنظام»: hidden after the shop moved off paper. */

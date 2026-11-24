@@ -387,3 +387,36 @@ describe("the shift report with the shop's closing options", async () => {
     expect(t).toContain("فكّة للوردية الجاية");
   });
 });
+
+describe("the cashier screen's layouts", async () => {
+  const { keyMap, layoutForBusiness, pickLayout, tillButtons, tillLayoutSchema } = await import("@pos/shared");
+  const base = tillLayoutSchema.parse({});
+
+  it("follows the kind of shop, unless the owner picked one for the shop, the till or the cashier", () => {
+    expect(layoutForBusiness("grocery")).toBe("fast");
+    expect(layoutForBusiness("restaurant")).toBe("restaurant");
+    expect(layoutForBusiness("other")).toBe("standard");
+    expect(pickLayout(base, "pharmacy", "d1", "u1")).toBe("pharmacy");
+    const s = { ...base, shop: "touch" as const, devices: { d1: "wholesale" as const }, users: { u1: "clothing" as const } };
+    expect(pickLayout(s, "pharmacy", "d2", "u2")).toBe("touch");
+    expect(pickLayout(s, "pharmacy", "d1", "u2")).toBe("wholesale");
+    expect(pickLayout(s, "pharmacy", "d1", "u1")).toBe("clothing");
+  });
+
+  it("puts the layout's buttons first, hides what it leaves out, and lets the owner change both", () => {
+    const fast = tillButtons(base, "fast");
+    expect(fast.slice(0, 2)).toEqual(["qty", "remove"]);
+    expect(fast).not.toContain("quote");
+    const own = tillButtons({ ...base, order: ["void"], buttons: { quote: true, hold: false } }, "fast");
+    expect(own[0]).toBe("void");
+    expect(own).toContain("quote");
+    expect(own).not.toContain("hold");
+  });
+
+  it("moves a key, and the action that had it takes the old one", () => {
+    const m = keyMap({ ...base, keys: { pay: "F10" } });
+    expect(m.F10).toBe("pay");
+    expect(m.F12).toBe("return");
+    expect(Object.keys(m)).toHaveLength(12);
+  });
+});
