@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import type { Call } from "../admin/Admin";
+import { waLink } from "@pos/shared";
 
 export interface Alert { id: number; kind: string; title: string; body: string; created_at: string; read_at: string | null; store_name: string | null }
 
-const ICON: Record<string, string> = { low_stock: "📦", out_of_stock: "⛔", big_return: "↩️", big_discount: "🏷️", cash_diff: "💵", over_credit_limit: "📒", zakat_due: "🕌", subscription_due: "⭐", support_reply: "🛟", announcement: "📢", expiry_soon: "⏳", device_request: "🖥️", shift_forgotten: "🔓", loan_request: "🤝", loan_due: "⏰" };
+const ICON: Record<string, string> = { low_stock: "📦", out_of_stock: "⛔", big_return: "↩️", big_discount: "🏷️", cash_diff: "💵", over_credit_limit: "📒", zakat_due: "🕌", subscription_due: "⭐", support_reply: "🛟", announcement: "📢", expiry_soon: "⏳", device_request: "🖥️", shift_forgotten: "🔓", loan_request: "🤝", loan_due: "⏰", report_digest: "📊" };
 
 export function ago(iso: string): string {
   const min = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
@@ -55,7 +56,8 @@ export function Alerts({ call, onRead }: { call: Call; onRead?: (unread: number)
             <span className="alert-icon" aria-hidden>{ICON[a.kind] ?? "🔔"}</span>
             <div>
               <b>{a.title}</b>
-              <div className="small">{a.body}</div>
+              <div className="small" style={{ whiteSpace: "pre-line" }}>{a.body}</div>
+              {a.kind === "report_digest" && <a className="button small" href={waLink(null, `📊 ${a.title}\n${a.body}`)} target="_blank" rel="noreferrer" style={{ marginTop: 4 }}>📲 ابعته واتساب</a>}
               <div className="muted small">{ago(a.created_at)}{a.store_name ? ` · ${a.store_name}` : ""}</div>
             </div>
           </div>

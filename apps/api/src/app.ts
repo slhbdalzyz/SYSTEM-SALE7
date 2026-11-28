@@ -12,6 +12,7 @@ import { catalogRoutes } from "./routes/catalog";
 import { salesRoutes } from "./routes/sales";
 import { shiftRoutes } from "./routes/shifts";
 import { loanRoutes } from "./routes/loans";
+import { insightRoutes } from "./routes/insights";
 import { stockRoutes } from "./routes/stock";
 import { reportRoutes } from "./routes/reports";
 import { customerRoutes } from "./routes/customers";
@@ -128,6 +129,7 @@ export async function buildApp(opts: AppOptions) {
   await app.register(salesRoutes);
   await app.register(shiftRoutes);
   await app.register(loanRoutes);
+  await app.register(insightRoutes);
   await app.register(stockRoutes);
   await app.register(reportRoutes);
   await app.register(customerRoutes);

@@ -4,11 +4,13 @@ import { formatMoney, formatQty } from "@pos/shared";
 import type { Call } from "./Admin";
 import type { Dashboard } from "../owner/Owner";
 import { TimeChart } from "./charts";
+import { PinnedReports } from "./Insights";
+import type { ReportFav } from "@pos/shared";
 
 const DAYS = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
 
 /** The owner's first screen: today against yesterday, the week, the month, and what needs attention. */
-export function Home({ call, storeId, userName, open }: { call: Call; storeId: string; userName: string; open: (tab: "reports" | "purchasing" | "products" | "alerts" | "customers" | "settings" | "devices" | "staff" | "paper" | "zakat") => void }) {
+export function Home({ call, storeId, userName, open, openReport }: { call: Call; storeId: string; userName: string; open: (tab: "reports" | "purchasing" | "products" | "alerts" | "customers" | "settings" | "devices" | "staff" | "paper" | "zakat") => void; openReport?: (f: ReportFav) => void }) {
   const [d, setD] = useState<Dashboard | null>(null);
   const [expiring, setExpiring] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -78,6 +80,7 @@ export function Home({ call, storeId, userName, open }: { call: Call; storeId: s
         <div className="kpi"><span className="muted">ربح اليوم</span><b className="num ok">{formatMoney(t.profitMinor)}</b><small className="muted">بعد المصروفات {formatMoney(t.netMinor)}</small></div>
         <div className="kpi"><span className="muted">هذا الشهر</span><b className="num">{formatMoney(d.month.totalMinor)}</b><small className="muted">صافي الربح {formatMoney(d.month.netMinor)}</small></div>
       </div>
+      {openReport && <PinnedReports call={call} storeId={storeId} openFav={openReport} />}
 
       <div className="grid-main">
         <div className="card panel">

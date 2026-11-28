@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { ownBank } from "./money";
 import { autoCloseShifts, openShifts } from "./shifts";
+import { checkDigest } from "./insights";
 import { checkExpirySoon } from "../expiry";
 import { audit, type Db } from "../db";
 import { HttpError, authenticate, requirePerm, requireRole } from "../auth";
@@ -88,7 +89,8 @@ export async function ownerRoutes(app: FastifyInstance) {
     const expiry = await checkExpirySoon(app.db, tid).catch(() => false);
     const forgotten = await checkForgottenShifts(app.db, tid).catch(() => 0);
     const dueLoans = await checkDueLoans(app.db, tid).catch(() => 0);
-    if (zakat || expiry || forgotten || dueLoans) await flushPushes(app.db, tid);
+    const digest = await checkDigest(app.db, tid).catch(() => 0);
+    if (zakat || expiry || forgotten || dueLoans || digest) await flushPushes(app.db, tid);
     const store = q.storeId ?? null;
     const args = [tid, store, q.tz];
     const inStore = (a: string) => `${a}.tenant_id = $1 AND ($2::uuid IS NULL OR ${a}.store_id = $2)`;

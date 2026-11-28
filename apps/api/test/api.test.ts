@@ -3415,3 +3415,146 @@ describe("money lent from the drawer and money left with the shop", () => {
     expect(backup.status).toBe(200);
   });
 });
+
+describe("deeper reports: customers, debts, expenses, margins, suppliers, controls, forecast, summary", () => {
+  let o: string;
+  let till: string;
+  let shift: string;
+  let store: string;
+  let tid: string;
+  let tea: { id: string; piece: string };
+  let cola: { id: string; piece: string };
+  let ahmed: string;
+  let supplier: string;
+  const day = new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Tripoli" }).format(new Date());
+  const sale = (lines: { p: { id: string; piece: string }; qty: number; price: number; discount?: number }[], pay: string, customerId: string | null = null, at = new Date()) => {
+    const total = lines.reduce((a, l) => a + l.qty * l.price - (l.discount ?? 0), 0);
+    return {
+      id: randomUUID(), number: `R-${randomUUID().slice(0, 6).toUpperCase()}`, shiftId: shift, createdAt: at.toISOString(), customerId,
+      lines: lines.map((l) => ({ productId: l.p.id, unitId: l.p.piece, name: "x", qtyMilli: l.qty * 1000, priceMinor: l.price, discountMinor: l.discount ?? 0 })),
+      payments: [{ method: pay, amountMinor: total }], totalMinor: total,
+    };
+  };
+  const sell = async (s: ReturnType<typeof sale>) => (await call("POST", "/sales/batch", till, { sales: [s] })).body.results[0];
+
+  it("sets up a shop with two items, a supplier and customers", async () => {
+    const own = async (url: string, body: object) => (await app.inject({ method: "POST", url, payload: body, remoteAddress: "10.0.0.145" })).json();
+    const reg = await own("/auth/register", { businessName: "محل التقارير", storeName: "الرئيسي", ownerName: "سعاد", email: "reports2@test.ly", password: "password123" });
+    o = reg.token;
+    store = reg.storeId;
+    tid = (await db.query(`SELECT tenant_id FROM stores WHERE id = $1`, [store])).rows[0].tenant_id;
+    const p1 = (await call("POST", "/products", o, { name: "شاهي", costMinor: 3000, units: [{ name: "علبة", priceMinor: 5000, isBase: true }] })).body;
+    tea = { id: p1.id, piece: p1.units[0].id };
+    // Sold under its cost: the margins report must catch it.
+    const p2 = (await call("POST", "/products", o, { name: "كولا", costMinor: 2000, units: [{ name: "علبة", priceMinor: 1500, isBase: true }] })).body;
+    cola = { id: p2.id, piece: p2.units[0].id };
+    supplier = (await call("POST", "/suppliers", o, { name: "مورد الشاهي", phone: "0911000000" })).body.id;
+    const old = new Date(Date.now() - 40 * 864e5).toISOString().slice(0, 10);
+    await call("POST", "/purchases", o, { storeId: store, supplierId: supplier, invoiceDate: old, paidMinor: 0, lines: [{ unitId: tea.piece, qtyMilli: 50000, unitCostMinor: 3000 }] });
+    await call("POST", "/purchases", o, { storeId: store, supplierId: supplier, paidMinor: 10000, lines: [{ unitId: tea.piece, qtyMilli: 10000, unitCostMinor: 3300 }, { unitId: cola.piece, qtyMilli: 30000, unitCostMinor: 2000 }] });
+    ahmed = (await call("POST", "/customers", o, { name: "أحمد", phone: "0912000001" })).body.id;
+    const d = await call("POST", "/devices", o, { storeId: store, name: "كاشير" });
+    const u = await call("POST", "/users", o, { name: "منى", role: "cashier", pin: "1357" });
+    till = (await own("/auth/pin", { deviceToken: d.body.deviceToken, userId: u.body.id, pin: "1357" })).token;
+    shift = randomUUID();
+    expect((await call("POST", "/shifts/open", till, { id: shift, openingCashMinor: 0 })).status).toBe(200);
+  });
+
+  it("tells new customers from returning ones, and finds the regular who stopped coming", async () => {
+    // Ahmed bought 50 days ago (on credit) and twice today; Salem twice long ago, never since.
+    const salem = (await call("POST", "/customers", o, { name: "سالم", phone: "0912000002" })).body.id;
+    expect((await sell(sale([{ p: tea, qty: 2, price: 5000 }], "credit", ahmed, new Date(Date.now() - 50 * 864e5)))).status).toBe("accepted");
+    await sell(sale([{ p: tea, qty: 1, price: 5000 }], "cash", salem, new Date(Date.now() - 70 * 864e5)));
+    await sell(sale([{ p: tea, qty: 1, price: 5000 }], "cash", salem, new Date(Date.now() - 65 * 864e5)));
+    await sell(sale([{ p: tea, qty: 3, price: 5000, discount: 2000 }], "cash", ahmed));
+    await sell(sale([{ p: tea, qty: 1, price: 5000 }, { p: cola, qty: 4, price: 1500 }], "credit", ahmed));
+    const newbie = (await call("POST", "/customers", o, { name: "جديد", phone: "0912000003" })).body.id;
+    await sell(sale([{ p: tea, qty: 1, price: 5000 }], "cash", newbie));
+    await sell(sale([{ p: cola, qty: 2, price: 1500 }], "cash"));
+    const r = (await call("GET", `/reports/customers?from=${day}&to=${day}`, o)).body;
+    expect(r.summary).toMatchObject({ customers: 2, newCustomers: 1, returning: 1, walkInMinor: 3000, walkInCount: 1 });
+    expect(r.top[0]).toMatchObject({ name: "أحمد", visits: 2, totalMinor: 13000 + 11000 });
+    expect(r.lapsed.map((c: { name: string }) => c.name)).toEqual(["سالم"]);
+    expect((await call("GET", `/reports/customers?from=${day}&to=${day}`, till)).status).toBe(403);
+  });
+
+  it("ages what customers owe: the old credit sale is past 30 days, the new one is fresh", async () => {
+    const r = (await call("GET", `/reports/debts?from=${day}&to=${day}`, o)).body;
+    const a = r.rows.find((x: { name: string }) => x.name === "أحمد");
+    expect(a.balanceMinor).toBe(10000 + 11000);
+    expect(a.buckets).toEqual([11000, 10000, 0, 0]);
+    // A payment clears the oldest first: 12 paid leaves 9 of today's sale.
+    await call("POST", `/customers/${ahmed}/payments`, till, { id: randomUUID(), method: "cash", amountMinor: 12000 });
+    const b = (await call("GET", `/reports/debts?from=${day}&to=${day}`, o)).body;
+    expect(b.rows.find((x: { name: string }) => x.name === "أحمد").buckets).toEqual([9000, 0, 0, 0]);
+    expect(b.collected).toMatchObject({ amountMinor: 12000, count: 1, givenMinor: 11000 });
+  });
+
+  it("lays expenses out month by month and flags a heading that jumped", async () => {
+    const m = (back: number) => {
+      const d = new Date(Date.UTC(Number(day.slice(0, 4)), Number(day.slice(5, 7)) - 1 - back, 5));
+      return d.toISOString().slice(0, 10);
+    };
+    for (const b of [3, 2, 1]) await call("POST", "/expenses", o, { storeId: store, category: "كهرباء", amountMinor: 50000, spentOn: m(b) });
+    await call("POST", "/expenses", o, { storeId: store, category: "كهرباء", amountMinor: 90000, spentOn: day });
+    await call("POST", "/expenses", o, { storeId: store, category: "نقل", amountMinor: 20000, spentOn: day });
+    const r = (await call("GET", "/reports/expenses?months=4", o)).body;
+    expect(r.months).toHaveLength(4);
+    expect(r.categories[0]).toMatchObject({ name: "كهرباء", byMonth: [50000, 50000, 50000, 90000], totalMinor: 240000 });
+    expect(r.totalByMonth[3]).toBe(110000);
+    expect(r.jumps).toEqual([expect.objectContaining({ category: "كهرباء", nowMinor: 90000, avgMinor: 50000, pct: 80 })]);
+    expect(r.salesByMonth[3]).toBeGreaterThan(0);
+  });
+
+  it("finds the item sold at a loss and the one priced under its cost", async () => {
+    const r = (await call("GET", `/reports/margins?from=${day}&to=${day}`, o)).body;
+    const c = r.items.find((i: { id: string }) => i.id === cola.id);
+    expect(c).toMatchObject({ qtyMilli: 6000, totalMinor: 9000, costMinor: 12000, profitMinor: -3000 });
+    expect(r.underCost).toEqual([expect.objectContaining({ name: "كولا", costMinor: 2000, priceMinor: 1500 })]);
+  });
+
+  it("shows what is owed to suppliers and the buying price that went up", async () => {
+    const r = (await call("GET", `/reports/suppliers?from=${day}&to=${day}`, o)).body;
+    expect(r.owed[0]).toMatchObject({ name: "مورد الشاهي", balanceMinor: 150000 + 33000 + 60000 - 10000 });
+    expect(r.priceMoves).toEqual([expect.objectContaining({ name: "شاهي", wasMinor: 3000, nowMinor: 3300, pct: 10 })]);
+    expect(r.upCount).toBe(1);
+  });
+
+  it("counts discounts, returns and carts cancelled at the till per person", async () => {
+    // A cart cancelled at the till, sent twice by a bad line: counted once.
+    const v = { id: randomUUID(), at: new Date().toISOString(), totalMinor: 25000, lines: 3, items: "شاهي، كولا" };
+    const first = await call("POST", "/sales/voids", till, v);
+    expect(first.body).toEqual({ ok: true });
+    await call("POST", "/sales/voids", till, v);
+    expect((await call("POST", "/sales/voids", o, v)).status).toBe(403);
+    const r = (await call("GET", `/reports/controls?from=${day}&to=${day}&storeId=${store}`, o)).body;
+    const mona = r.people.find((p: { name: string }) => p.name === "منى");
+    expect(mona).toMatchObject({ discounts: 1, discountedMinor: 2000, voids: 1, voidedMinor: 25000 });
+    expect(r.events.map((e: { kind: string }) => e.kind)).toEqual(expect.arrayContaining(["void", "discount"]));
+  });
+
+  it("projects the month and lists items about to run out", async () => {
+    const r = (await call("GET", `/reports/forecast?storeId=${store}`, o)).body;
+    expect(r.soFar.totalMinor).toBeGreaterThan(0);
+    expect(r.projectedMinor).toBeGreaterThanOrEqual(r.soFar.totalMinor);
+    expect(r.daysInMonth).toBeGreaterThanOrEqual(28);
+    expect(Array.isArray(r.runningOut)).toBe(true);
+    const b = (await call("GET", `/reports/branches-full?from=${day}&to=${day}`, o)).body;
+    expect(b[0]).toMatchObject({ name: "الرئيسي", salesCount: 4 });
+    const t = (await call("GET", `/reports/totals?from=${day}&to=${day}`, o)).body;
+    expect(t.totalMinor).toBe(b[0].totalMinor);
+  });
+
+  it("sends the daily summary once after the chosen hour, and saves favourite reports", async () => {
+    const { checkDigest } = await import("../src/routes/insights");
+    expect((await call("PATCH", "/settings/report-digest", o, { daily: true, hour: 0 })).body.reportDigest).toMatchObject({ daily: true, weekly: false, hour: 0 });
+    expect(await checkDigest(db, tid)).toBe(1);
+    expect(await checkDigest(db, tid)).toBe(0);
+    const a = (await call("GET", "/alerts", o)).body.alerts.find((x: { kind: string }) => x.kind === "report_digest");
+    expect(a.title).toContain("ملخص اليوم");
+    expect(a.body).toContain("المبيعات");
+    const favs = [{ id: "f1", name: "مبيعات الشهر", kind: "overview", preset: "هذا الشهر", compare: "prev", pinned: true }];
+    expect((await call("PUT", "/settings/report-favs", o, favs)).body.reportFavs[0]).toMatchObject({ scope: "store", pinned: true });
+    expect((await call("PUT", "/settings/report-favs", till, favs)).status).toBe(403);
+  });
+});
