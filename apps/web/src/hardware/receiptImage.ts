@@ -2,6 +2,7 @@
 // so the printer only ever gets black and white dots.
 import { METHOD_LABELS, ORDER_TYPE_LABELS, computeLine, computeTotals, formatMoney, formatQty, warrantyLabel, warrantyUntil } from "@pos/shared";
 import type { ReceiptData } from "../pos/Receipt";
+import { loanLines } from "../pos/shiftReport";
 
 export type Row =
   | { kind: "image"; src: string }
@@ -72,6 +73,23 @@ export function receiptRows(d: ReceiptData): Row[] {
       { kind: "space", h: 20 },
     ];
   }
+  if (d.loan) {
+    const l = d.loan;
+    const title = l.move === "open" ? (l.kind === "loan" ? "إيصال سلفة" : "إيصال أمانة") : l.kind === "loan" ? "رجوع سلفة" : "رفع من الأمانة";
+    const day = (s: string) => s.split("-").reverse().join("/");
+    return [
+      ...head(title, l.at),
+      { kind: "pair", right: "الاسم", left: l.personName, size: 24, bold: true },
+      ...(l.phone ? [{ kind: "pair", right: "التلفون", left: l.phone } as Row] : []),
+      { kind: "pair", right: l.move === "open" ? (l.kind === "loan" ? "خذا من المحل" : "حط عند المحل") : l.kind === "loan" ? "رجّع" : "رفع", left: formatMoney(l.amountMinor), size: 28, bold: true },
+      { kind: "pair", right: l.kind === "loan" ? "الباقي عليه" : "الباقي عند المحل", left: formatMoney(l.leftMinor) },
+      ...(l.dueOn && l.kind === "loan" && l.leftMinor > 0 ? [{ kind: "pair", right: "يرجّعها يوم", left: day(l.dueOn) } as Row] : []),
+      ...(l.note ? [{ kind: "pair", right: "ملاحظة", left: l.note } as Row] : []),
+      ...(l.sign ? [{ kind: "space", h: 40 } as Row, { kind: "pair", right: "التوقيع", left: "........................" } as Row, { kind: "space", h: 20 } as Row] : []),
+      { kind: "rule" },
+      ...tail,
+    ];
+  }
   if (d.ret) {
     const r = d.ret;
     return [
@@ -106,6 +124,7 @@ export function receiptRows(d: ReceiptData): Row[] {
       ...(z.returns ? [{ kind: "pair", right: `المرتجعات (${z.returns})`, left: `−${m(z.returnsMinor)}` } as Row] : []),
       ...(z.debtPaidCashMinor ? [{ kind: "pair", right: "تسديد ديون (كاش)", left: m(z.debtPaidCashMinor) } as Row] : []),
       ...(z.drawerMoves ?? []).map((v): Row => ({ kind: "pair", right: `${v.kind === "in" ? "إيداع" : "سحب"}: ${v.reason}`, left: `${v.kind === "in" ? "+" : "−"}${m(v.amountMinor)}` })),
+      ...loanLines(z).map((t): Row => { const [right, left] = t.split(": "); return { kind: "pair", right, left }; }),
       { kind: "rule" },
       { kind: "pair", right: "كاش أول الوردية", left: m(z.openingCashMinor) },
       ...(z.x

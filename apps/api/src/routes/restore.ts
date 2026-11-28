@@ -51,7 +51,7 @@ const PART_TABLES: Record<Part, string[]> = {
   moves: [
     "shifts", "sales", "sale_lines", "payments", "loyalty_entries", "customer_payments", "purchase_invoices", "purchase_lines",
     "supplier_payments", "stock_transfers", "stock_transfer_lines", "stock_movements", "product_serials", "repairs", "quotes",
-    "installment_plans", "expenses", "payroll_months", "payroll_entries", "money_movements", "alerts",
+    "installment_plans", "expenses", "payroll_months", "payroll_entries", "money_movements", "loans", "loan_moves", "alerts",
   ],
 };
 

@@ -134,6 +134,17 @@ export async function flushOutbox(token: string) {
       else throw e;
     }
   }
+  // Loans and deposits made while the line was down, then money back on them.
+  for (const item of items.filter((i) => i.kind === "loan" || i.kind === "loan_move")) {
+    const p = item.payload as { loanId?: string; body: unknown };
+    try {
+      await api(item.kind === "loan" ? "/loans" : `/loans/${p.loanId}/moves`, { token, body: p.body });
+      await db.outbox.delete(item.seq!);
+    } catch (e) {
+      if (e instanceof ApiError && e.status > 0) await db.outbox.update(item.seq!, { error: e.message });
+      else throw e;
+    }
+  }
   for (const item of items.filter((i) => i.kind === "drawer")) {
     try {
       await api("/shifts/drawer", { token, body: item.payload });

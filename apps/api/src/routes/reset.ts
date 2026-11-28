@@ -33,7 +33,7 @@ export const KEEP_TABLES = [
 
 /** Children before parents: each delete runs after the rows that point at it are gone. */
 export const MOVES_TABLES = [
-  "loyalty_entries", "payments", "product_serials", "payroll_entries", "payroll_months", "sale_lines",
+  "loan_moves", "loans", "loyalty_entries", "payments", "product_serials", "payroll_entries", "payroll_months", "sale_lines",
   "customer_payments", "drawer_moves", "installment_plans", "supplier_payments", "purchase_lines",
   "purchase_invoices", "stock_counts", "stock_transfer_lines", "stock_transfers", "stock_movements",
   "breakdowns", "kitchen_tickets", "repairs", "quotes", "expenses", "money_movements", "money_cleared",

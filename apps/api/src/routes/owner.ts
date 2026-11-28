@@ -5,6 +5,7 @@ import { autoCloseShifts, openShifts } from "./shifts";
 import { checkExpirySoon } from "../expiry";
 import { audit, type Db } from "../db";
 import { HttpError, authenticate, requirePerm, requireRole } from "../auth";
+import { checkDueLoans } from "./loans";
 import { DEFAULT_ALERT_SETTINGS, alertSettings, checkForgottenShifts, checkZakatDue, flushPushes, pushPublicKey } from "../alerts";
 
 /**
@@ -46,6 +47,8 @@ export const BACKUP_TABLES: { name: string; key: "uuid" | "bigint"; omit?: strin
   { name: "payroll_months", key: "uuid" },
   { name: "payroll_entries", key: "uuid" },
   { name: "money_movements", key: "uuid" },
+  { name: "loans", key: "uuid" },
+  { name: "loan_moves", key: "uuid" },
   { name: "subscription_payments", key: "uuid" },
   { name: "alerts", key: "bigint" },
   { name: "audit_log", key: "bigint" },
@@ -84,7 +87,8 @@ export async function ownerRoutes(app: FastifyInstance) {
     const zakat = await checkZakatDue(app.db, tid).catch(() => false);
     const expiry = await checkExpirySoon(app.db, tid).catch(() => false);
     const forgotten = await checkForgottenShifts(app.db, tid).catch(() => 0);
-    if (zakat || expiry || forgotten) await flushPushes(app.db, tid);
+    const dueLoans = await checkDueLoans(app.db, tid).catch(() => 0);
+    if (zakat || expiry || forgotten || dueLoans) await flushPushes(app.db, tid);
     const store = q.storeId ?? null;
     const args = [tid, store, q.tz];
     const inStore = (a: string) => `${a}.tenant_id = $1 AND ($2::uuid IS NULL OR ${a}.store_id = $2)`;

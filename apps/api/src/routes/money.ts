@@ -58,6 +58,11 @@ export const FLOWS = `
          CASE dm.kind WHEN 'in' THEN dm.amount_minor ELSE -dm.amount_minor END, d.name, dm.reason, NULL, 'd:' || dm.id
     FROM drawer_moves dm LEFT JOIN devices d ON d.id = dm.device_id WHERE dm.tenant_id = $1
   UNION ALL
+  SELECT lm.created_at, (lm.created_at AT TIME ZONE '${TZ}')::date, 'cash', NULL,
+         CASE WHEN l.kind = 'loan' THEN (CASE lm.kind WHEN 'open' THEN 'loan_out' ELSE 'loan_back' END) ELSE (CASE lm.kind WHEN 'open' THEN 'deposit_in' ELSE 'deposit_out' END) END,
+         CASE WHEN (l.kind = 'loan') = (lm.kind = 'open') THEN -lm.amount_minor ELSE lm.amount_minor END, l.person_name, lm.note, NULL, 'l:' || lm.id
+    FROM loan_moves lm JOIN loans l ON l.id = lm.loan_id WHERE lm.tenant_id = $1 AND lm.drawer_move_id IS NULL
+  UNION ALL
   SELECT m.created_at, m.on_date, m.account, ${bank("m.bank_account_id", "m.account")}, m.kind, m.amount_minor, NULL, m.note, m.id, 'm:' || m.id
     FROM money_movements m WHERE m.tenant_id = $1`;
 
