@@ -44,7 +44,7 @@ import { Zakat } from "./Zakat";
 import { AuditLog } from "./AuditLog";
 import { SecurityCard } from "./Security";
 import { FromPaper } from "./FromPaper";
-import { ROLE_NAMES, shopModules, type Feature, type ModuleKey, type Permission } from "@pos/shared";
+import { ROLE_NAMES, shopModules, type Feature, type ModuleKey, type Permission, type ReportFav } from "@pos/shared";
 import { Features } from "./Features";
 import { TYPES } from "../Setup";
 import { Announcements, Support } from "./Support";
@@ -96,6 +96,7 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
   const [error, setError] = useState<string | null>(null);
   const [sub, setSub] = useState<Sub | null>(null);
   const [labelDraft, setLabelDraft] = useState<LabelDraft[] | null>(null);
+  const [reportFav, setReportFav] = useState<ReportFav | null>(null);
   const [storeId, setStoreId] = useState<string | null>(() => {
     try {
       return localStorage.getItem("pos.adminStore");
@@ -233,8 +234,8 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
         {LOCAL && isOwner && <AppUpdate call={call} />}
         <Announcements call={call} />
         <div className="stack" key={store.id}>
-          {shown === "home" && <Home call={call} storeId={store.id} userName={me.user.name} open={setTab} />}
-          {shown === "reports" && <Reports call={call} storeId={store.id} stores={open} />}
+          {shown === "home" && <Home call={call} storeId={store.id} userName={me.user.name} open={setTab} openReport={(f) => { setReportFav(f); setTab("reports"); }} />}
+          {shown === "reports" && <Reports key={reportFav?.id ?? "reports"} call={call} storeId={store.id} stores={open} fav={reportFav} shopName={me.tenant.name} />}
           {shown === "products" && <Products call={call} storeId={store.id} mods={mods} onLabels={(d) => { setLabelDraft(d); setTab("labels"); }} />}
           {shown === "purchasing" && <Purchasing call={call} storeId={store.id} onLabels={(d) => { setLabelDraft(d); setTab("labels"); }} />}
           {shown === "paper" && <FromPaper call={call} storeId={store.id} open={setTab} onHide={async () => { await call("/settings/menu", { method: "PATCH", body: { hidePaper: true } }); await loadMe(); setTab("home"); }} />}

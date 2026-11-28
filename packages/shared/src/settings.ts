@@ -40,6 +40,28 @@ export type ShiftSettings = z.infer<typeof shiftSettingsSchema>;
 export const DEFAULT_LOAN_MESSAGE = "السلام عليكم {name}،\nسجّلنا عندنا في {shop}: {what} بقيمة {amount}{due}.\nالباقي: {left}. شكراً 🌹";
 export const DEFAULT_LOAN_REMINDER = "السلام عليكم {name}،\nنذكّركم بالسلفة اللي عند {shop}: الباقي {left}{due}.\nشكراً لتعاملكم معنا 🌹";
 
+/** The summary the owner gets on the phone: each one once, after this hour (Libya time). */
+export const reportDigestSchema = z.object({
+  daily: z.boolean().default(false),
+  weekly: z.boolean().default(false),
+  monthly: z.boolean().default(false),
+  hour: z.number().int().min(0).max(23).default(22),
+});
+export type ReportDigest = z.infer<typeof reportDigestSchema>;
+
+/** A report saved with its choices; a pinned one shows on the home page. */
+export const reportFavSchema = z.object({
+  id: z.string().min(1).max(40),
+  name: z.string().trim().min(1).max(60),
+  kind: z.string().min(1).max(30),
+  preset: z.string().max(30).default(""),
+  scope: z.enum(["store", "all"]).default("store"),
+  compare: z.enum(["none", "prev", "year"]).default("none"),
+  pinned: z.boolean().default(false),
+});
+export const reportFavsSchema = z.array(reportFavSchema).max(20);
+export type ReportFav = z.infer<typeof reportFavSchema>;
+
 export const loanSettingsSchema = z.object({
   /** A cashier lends more than this (in dirham) only with a manager's PIN or the owner's yes from the phone; 0 = no limit. */
   cashierLimitMinor: z.number().int().min(0).max(1e12).default(0),
@@ -116,6 +138,10 @@ export const shopSettingsSchema = z.object({
   shift: shiftSettingsSchema.default({}),
   /** Cash lent from the drawer and money left with the shop («🤝 السلف والأمانات»). */
   loans: loanSettingsSchema.default({}),
+  /** The summary on the phone (📊 التقارير). */
+  reportDigest: reportDigestSchema.default({}),
+  /** Saved reports (⭐ in 📊 التقارير); pinned ones show on the home page. */
+  reportFavs: reportFavsSchema.default([]),
   /** The cashier screen: its layout for the shop, a till or a cashier, its buttons and keys («🖥 واجهة الكاشير»). */
   tillLayout: tillLayoutSchema.default({}),
   /** Side-menu pages the owner put away once done with them. */

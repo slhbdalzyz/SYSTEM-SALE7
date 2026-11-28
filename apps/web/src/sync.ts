@@ -145,6 +145,15 @@ export async function flushOutbox(token: string) {
       else throw e;
     }
   }
+  // Carts cancelled at the till: only for the owner's report, so a refusal just drops them.
+  for (const item of items.filter((i) => i.kind === "void")) {
+    try {
+      await api("/sales/voids", { token, body: item.payload });
+    } catch (e) {
+      if (!(e instanceof ApiError && e.status > 0)) throw e;
+    }
+    await db.outbox.delete(item.seq!);
+  }
   for (const item of items.filter((i) => i.kind === "drawer")) {
     try {
       await api("/shifts/drawer", { token, body: item.payload });

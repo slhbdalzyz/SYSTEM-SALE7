@@ -459,6 +459,10 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     if (exchange) return cancelExchange();
     if (!lines.length) return;
     if (till.confirmClear && !confirm(`نلغي الفاتورة (${lines.length} أصناف · ${formatMoney(totals.total)})؟`)) return;
+    // The owner sees cancelled carts in «🕵️ الخصومات والمرتجعات والإلغاء».
+    const at = new Date().toISOString();
+    const id = crypto.randomUUID();
+    void db.outbox.add({ kind: "void", refId: id, payload: { id, at, totalMinor: totals.total, lines: lines.length, items: lines.map((l) => l.name).join("، ").slice(0, 500) }, createdAt: at });
     finishCart();
     flash("تم إلغاء الفاتورة");
     focusScan();

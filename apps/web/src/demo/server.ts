@@ -41,6 +41,7 @@ import m040 from "../../../api/migrations/040_shift_close.sql?raw";
 import m042 from "../../../api/migrations/042_display_ads.sql?raw";
 import m043 from "../../../api/migrations/043_shift_forgotten.sql?raw";
 import m044 from "../../../api/migrations/044_loans.sql?raw";
+import m045 from "../../../api/migrations/045_reports.sql?raw";
 import { setGateway } from "../../../api/src/payments/gateway";
 import { fakeGateway } from "../../../api/src/payments/fake";
 import { authRoutes } from "../../../api/src/routes/auth";
@@ -66,6 +67,7 @@ import { invoiceRoutes } from "../../../api/src/routes/invoices";
 import { restoreRoutes } from "../../../api/src/routes/restore";
 import { resetRoutes } from "../../../api/src/routes/reset";
 import { loanRoutes } from "../../../api/src/routes/loans";
+import { insightRoutes } from "../../../api/src/routes/insights";
 import { countRoutes } from "../../../api/src/routes/counts";
 import { zakatRoutes } from "../../../api/src/routes/zakat";
 import { loyaltyRoutes } from "../../../api/src/routes/loyalty";
@@ -153,7 +155,7 @@ async function boot(): Promise<MiniApp> {
   }
   await pg.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY)`);
   const done = new Set((await pg.query<{ name: string }>(`SELECT name FROM schema_migrations`)).rows.map((r) => r.name));
-  for (const [name, sql] of [["001_init.sql", m001], ["002_customers_returns.sql", m002], ["003_device_kinds.sql", m003], ["004_saas.sql", m004], ["005_purchasing.sql", m005], ["006_branches.sql", m006], ["007_offers.sql", m007], ["008_online_payments.sql", m008], ["009_owner.sql", m009], ["010_restore.sql", m010], ["011_loyalty.sql", m011], ["012_departments_purchases.sql", m012], ["013_loyalty_cleanup.sql", m013], ["014_payroll_permissions.sql", m014], ["015_money.sql", m015], ["016_item_card.sql", m016], ["017_settings.sql", m017], ["018_pro.sql", m018], ["019_opening.sql", m019], ["020_zakat.sql", m020], ["021_till.sql", m021], ["022_loyalty.sql", m022], ["023_quick_keys.sql", m023], ["024_platform.sql", m024], ["025_pharmacy.sql", m025], ["026_butcher.sql", m026], ["027_restaurant.sql", m027], ["028_electronics.sql", m028], ["029_business_pack.sql", m029], ["030_services.sql", m030], ["034_device_requests.sql", m034], ["035_payment_labels.sql", m035], ["036_bank_accounts.sql", m036], ["037_ai_helper.sql", m037], ["038_barcode_unit_index.sql", m038], ["039_device_heartbeat.sql", m039], ["040_shift_close.sql", m040], ["042_display_ads.sql", m042], ["043_shift_forgotten.sql", m043], ["044_loans.sql", m044]] as const) {
+  for (const [name, sql] of [["001_init.sql", m001], ["002_customers_returns.sql", m002], ["003_device_kinds.sql", m003], ["004_saas.sql", m004], ["005_purchasing.sql", m005], ["006_branches.sql", m006], ["007_offers.sql", m007], ["008_online_payments.sql", m008], ["009_owner.sql", m009], ["010_restore.sql", m010], ["011_loyalty.sql", m011], ["012_departments_purchases.sql", m012], ["013_loyalty_cleanup.sql", m013], ["014_payroll_permissions.sql", m014], ["015_money.sql", m015], ["016_item_card.sql", m016], ["017_settings.sql", m017], ["018_pro.sql", m018], ["019_opening.sql", m019], ["020_zakat.sql", m020], ["021_till.sql", m021], ["022_loyalty.sql", m022], ["023_quick_keys.sql", m023], ["024_platform.sql", m024], ["025_pharmacy.sql", m025], ["026_butcher.sql", m026], ["027_restaurant.sql", m027], ["028_electronics.sql", m028], ["029_business_pack.sql", m029], ["030_services.sql", m030], ["034_device_requests.sql", m034], ["035_payment_labels.sql", m035], ["036_bank_accounts.sql", m036], ["037_ai_helper.sql", m037], ["038_barcode_unit_index.sql", m038], ["039_device_heartbeat.sql", m039], ["040_shift_close.sql", m040], ["042_display_ads.sql", m042], ["043_shift_forgotten.sql", m043], ["044_loans.sql", m044], ["045_reports.sql", m045]] as const) {
     if (done.has(name)) continue;
     await pg.exec(sql);
     await pg.query(`INSERT INTO schema_migrations (name) VALUES ($1)`, [name]);
@@ -161,7 +163,7 @@ async function boot(): Promise<MiniApp> {
   const db = new Db(pg);
   const app = new MiniApp(db);
   setGateway(fakeGateway()); // Sadad and Edfali that accept the sandbox codes, no money involved
-  for (const r of [authRoutes, adminRoutes, catalogRoutes, salesRoutes, shiftRoutes, stockRoutes, reportRoutes, customerRoutes, returnRoutes, deviceRoutes, platformRoutes, subscriptionRoutes, purchasingRoutes, branchRoutes, offerRoutes, ownerRoutes, restoreRoutes, resetRoutes, payrollRoutes, moneyRoutes, settingsRoutes, invoiceRoutes, countRoutes, importRoutes, zakatRoutes, loyaltyRoutes, quickRoutes, platformProRoutes, supportRoutes, butcherRoutes, restaurantRoutes, electronicsRoutes, businessRoutes, loanRoutes]) {
+  for (const r of [authRoutes, adminRoutes, catalogRoutes, salesRoutes, shiftRoutes, stockRoutes, reportRoutes, customerRoutes, returnRoutes, deviceRoutes, platformRoutes, subscriptionRoutes, purchasingRoutes, branchRoutes, offerRoutes, ownerRoutes, restoreRoutes, resetRoutes, payrollRoutes, moneyRoutes, settingsRoutes, invoiceRoutes, countRoutes, importRoutes, zakatRoutes, loyaltyRoutes, quickRoutes, platformProRoutes, supportRoutes, butcherRoutes, restaurantRoutes, electronicsRoutes, businessRoutes, loanRoutes, insightRoutes]) {
     await app.register(r);
   }
   await seedDemo(db);

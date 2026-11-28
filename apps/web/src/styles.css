@@ -293,9 +293,27 @@ button.ghost:hover:not(:disabled) { color: var(--ink); border-color: var(--line)
 .report-icon { font-size: 1.3rem; }
 .report-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .report-head h2 { margin: 0; font-size: 1.2rem; flex: 1; }
+.report-menu { max-height: calc(100vh - 96px); overflow-y: auto; }
+.report-favs { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 4px 8px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+.report-menu .report-favs button.chip { padding: 3px 10px; background: var(--brand-soft); border-radius: 999px; font-size: .8rem; }
+.delta { font-weight: 700; font-size: .85em; white-space: nowrap; }
+.delta.ok { color: var(--ok); }
+.delta.bad { color: var(--danger); }
+.num.bad, td.bad { color: var(--danger); }
+.num.ok, td.ok { color: var(--ok); }
+.compare-bar .chips button { padding: 4px 10px; font-size: .85rem; }
+.aging { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.aging-cell { display: grid; gap: 2px; text-align: start; border: 1px solid var(--line); border-radius: 12px; padding: 10px; background: var(--panel); border-top-width: 4px; }
+.aging-cell b { font-size: 1.15rem; }
+.aging-cell.b0 { border-top-color: var(--ok); }
+.aging-cell.b1 { border-top-color: #eda100; }
+.aging-cell.b2 { border-top-color: #eb6834; }
+.aging-cell.b3 { border-top-color: var(--danger); }
+.aging-cell.active { background: var(--brand-soft); }
+@media (max-width: 600px) { .aging { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 900px) {
   .reports { grid-template-columns: 1fr; }
-  .report-menu { position: static; display: flex; overflow-x: auto; }
+  .report-menu { position: static; display: flex; overflow-x: auto; max-height: none; }
   .report-menu button { flex: none; }
   .report-menu small { display: none; }
 }
@@ -920,3 +938,5 @@ html.till-font-kufi { font-family: "Noto Kufi Arabic", "Droid Arabic Kufi", "Seg
 .sheet-body > .big-total { display: none; }
 .open-shifts tr.forgotten td { background: var(--danger-soft, #fee2e2); }
 .open-shifts tr.forgotten td:first-child { border-inline-start: 4px solid var(--danger, #dc2626); }
+.pinned-report { text-align: start; cursor: pointer; } .pinned-report:hover { border-color: var(--brand); }
+.panel td.num { white-space: nowrap; }

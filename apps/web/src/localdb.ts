@@ -1,7 +1,7 @@
 import Dexie, { type Table } from "dexie";
 import type { CatalogCustomer, CatalogProduct, SaleInput } from "@pos/shared";
 
-export type OutboxKind = "shift_open" | "sale" | "shift_close" | "drawer" | "kitchen" | "loan" | "loan_move";
+export type OutboxKind = "shift_open" | "sale" | "shift_close" | "drawer" | "kitchen" | "loan" | "loan_move" | "void";
 
 export interface OutboxItem {
   seq?: number;
