@@ -4,6 +4,21 @@ import { receiptRows } from "../hardware/receiptImage";
 import type { ReturnDone } from "./ReturnDialog";
 import type { ShiftReport } from "./shiftReport";
 
+export interface LoanSlip {
+  kind: "loan" | "deposit";
+  /** The money handed over first, or a payment back / a withdrawal. */
+  move: "open" | "back";
+  personName: string;
+  phone?: string | null;
+  amountMinor: number;
+  leftMinor: number;
+  dueOn?: string | null;
+  note?: string | null;
+  at: string;
+  /** Leave a line for the person to sign. */
+  sign: boolean;
+}
+
 export interface ReceiptData {
   /** The branch's name (the shop's own name comes from `shop` when known). */
   storeName: string;
@@ -27,6 +42,8 @@ export interface ReceiptData {
   points?: { earned: number; spent: number; balance: number };
   /** The shift-close (Z) report. */
   shift?: ShiftReport;
+  /** A loan or deposit slip, or money back on one: signed by the person when it is big. */
+  loan?: LoanSlip;
   /** A slip for the kitchen: what to make, with no prices. */
   kitchen?: { label: string; orderType: OrderType; at: string; lines: KitchenLine[] };
 }

@@ -3289,3 +3289,129 @@ describe("open shifts the owner can't find", () => {
     expect((await call("GET", "/reset/preview", o)).body.openShifts).toBe(0);
   });
 });
+
+describe("money lent from the drawer and money left with the shop", () => {
+  let o: string;
+  let till: string;
+  let shift: string;
+  let manager: string;
+  let tid: string;
+  const drawerOf = async () => Number((await db.query(`SELECT COALESCE(sum(CASE kind WHEN 'in' THEN amount_minor ELSE -amount_minor END), 0)::bigint AS s FROM drawer_moves WHERE shift_id = $1`, [shift])).rows[0].s);
+
+  it("sets up a shop with a cashier on a till and a manager", async () => {
+    // Sign-ups and PIN logins are limited per address; this shop comes from its own.
+    const own = async (url: string, body: object) => ({ body: (await app.inject({ method: "POST", url, payload: body, remoteAddress: "10.0.0.144" })).json() });
+    const reg = await own("/auth/register", { businessName: "محل السلف", storeName: "الرئيسي", ownerName: "علي", email: "loans@test.ly", password: "password123" });
+    o = reg.body.token;
+    tid = (await db.query(`SELECT tenant_id FROM stores WHERE id = $1`, [reg.body.storeId])).rows[0].tenant_id;
+    const d = await call("POST", "/devices", o, { storeId: reg.body.storeId, name: "كاشير 1" });
+    const u = await call("POST", "/users", o, { name: "هاجر", role: "cashier", pin: "1357" });
+    manager = (await call("POST", "/users", o, { name: "المدير", role: "manager", pin: "2468" })).body.id;
+    till = (await own("/auth/pin", { deviceToken: d.body.deviceToken, userId: u.body.id, pin: "1357" })).body.token;
+    shift = randomUUID();
+    expect((await call("POST", "/shifts/open", till, { id: shift, openingCashMinor: 100000 })).status).toBe(200);
+    await call("POST", "/customers", o, { name: "خالد الجار", phone: "0921112233" });
+  });
+
+  it("lends 40 from the drawer under the person's name, and takes it back in two goes", async () => {
+    const id = randomUUID();
+    const r = await call("POST", "/loans", till, { id, kind: "loan", personName: "خالد", phone: "+218 92 111 2233", amountMinor: 40000, dueOn: "2030-01-01", shiftId: shift });
+    expect(r.body).toMatchObject({ status: "open", leftMinor: 40000, openedMinor: 40000, overdue: false });
+    // The phone matched a customer the shop already has.
+    expect(r.body.customerId).toBeTruthy();
+    // Sent twice by a till on a bad line: still one loan, one drawer move.
+    expect((await call("POST", "/loans", till, { id, kind: "loan", personName: "خالد", amountMinor: 40000, shiftId: shift })).body.id).toBe(id);
+    expect(await drawerOf()).toBe(-40000);
+    expect((await db.query(`SELECT reason FROM drawer_moves WHERE loan_id = $1`, [id])).rows[0].reason).toBe("سلفة: خالد");
+
+    const back1 = randomUUID();
+    expect((await call("POST", `/loans/${id}/moves`, till, { id: back1, amountMinor: 15000, shiftId: shift })).body).toMatchObject({ status: "open", leftMinor: 25000 });
+    expect((await call("POST", `/loans/${id}/moves`, till, { id: back1, amountMinor: 15000, shiftId: shift })).body.leftMinor).toBe(25000);
+    expect((await call("POST", `/loans/${id}/moves`, till, { id: randomUUID(), amountMinor: 30000, shiftId: shift })).status).toBe(400);
+    expect((await call("POST", `/loans/${id}/moves`, till, { id: randomUUID(), amountMinor: 25000, shiftId: shift })).body).toMatchObject({ status: "closed", leftMinor: 0 });
+    expect(await drawerOf()).toBe(0);
+    expect((await call("POST", `/loans/${id}/moves`, till, { id: randomUUID(), amountMinor: 1000, shiftId: shift })).status).toBe(409);
+    const one = (await call("GET", `/loans/${id}`, o)).body;
+    expect(one.moves.map((m: { kind: string; amountMinor: number }) => [m.kind, m.amountMinor])).toEqual([["open", 40000], ["back", 15000], ["back", 25000]]);
+  });
+
+  it("keeps a deposit apart from sales, gives part of it back, and lists each person once", async () => {
+    const id = randomUUID();
+    expect((await call("POST", "/loans", till, { id, kind: "deposit", personName: "أم محمد", amountMinor: 100000, shiftId: shift })).body).toMatchObject({ status: "open", leftMinor: 100000 });
+    expect(await drawerOf()).toBe(100000);
+    await call("POST", `/loans/${id}/moves`, till, { id: randomUUID(), amountMinor: 30000, shiftId: shift });
+    expect(await drawerOf()).toBe(70000);
+    await call("POST", "/loans", till, { id: randomUUID(), kind: "loan", personName: "أم محمد", amountMinor: 5000, shiftId: shift });
+    const list = (await call("GET", "/loans", o)).body;
+    expect(list.totals).toMatchObject({ lentMinor: 5000, heldMinor: 70000, overdue: 0, pending: 0 });
+    expect(list.people).toEqual([expect.objectContaining({ name: "أم محمد", oweMinor: 5000, heldMinor: 70000, count: 2 })]);
+    // The till sees the same list, to take money back.
+    expect((await call("GET", "/loans?q=" + encodeURIComponent("محمد"), till)).body.rows).toHaveLength(2);
+    // Not a sale: the shift's sales stay at zero, but the drawer it expects counts it.
+    const z = await call("POST", `/shifts/${shift}/close`, till, { closingCashMinor: 100000 + 70000 - 5000 });
+    expect(z.body).toMatchObject({ expectedCashMinor: 165000 });
+    shift = randomUUID();
+    await call("POST", "/shifts/open", till, { id: shift, openingCashMinor: 0 });
+  });
+
+  it("asks for a manager's PIN, or the owner's yes from the phone, over the cashier's limit", async () => {
+    expect((await call("PATCH", "/settings/loans", till, { cashierLimitMinor: 50000 })).status).toBe(403);
+    expect((await call("PATCH", "/settings/loans", o, { cashierLimitMinor: 50000 })).body.loans).toMatchObject({ cashierLimitMinor: 50000, defaultDays: 7 });
+    const big = () => ({ id: randomUUID(), kind: "loan", personName: "سالم", amountMinor: 80000, shiftId: shift });
+    const no = await call("POST", "/loans", till, big());
+    expect(no.status).toBe(403);
+    expect(no.body.error).toContain("50.000");
+    expect((await call("POST", "/loans", till, { ...big(), approval: { userId: manager, pin: "0000" } })).status).toBe(403);
+    expect((await call("POST", "/loans", till, { ...big(), approval: { userId: manager, pin: "2468" } })).body).toMatchObject({ status: "open", approvedByName: "المدير" });
+    // A deposit has no limit.
+    expect((await call("POST", "/loans", till, { ...big(), kind: "deposit" })).body.status).toBe("open");
+
+    const ask = big();
+    expect((await call("POST", "/loans", till, { ...ask, ask: true })).body).toMatchObject({ status: "pending", leftMinor: 0 });
+    expect(await drawerOf()).toBe(-80000 + 80000);
+    expect((await db.query(`SELECT title FROM alerts WHERE tenant_id = $1 AND kind = 'loan_request'`, [tid])).rows[0].title).toBe("هاجر يبي يسلّف 80.000 د.ل");
+    expect((await call("POST", `/loans/${ask.id}/pay`, till, { shiftId: shift })).status).toBe(409);
+    expect((await call("POST", `/loans/${ask.id}/decide`, till, { approve: true })).status).toBe(403);
+    expect((await call("GET", "/loans", o)).body.totals.pending).toBe(1);
+    expect((await call("POST", `/loans/${ask.id}/decide`, o, { approve: true })).body.status).toBe("approved");
+    expect((await call("POST", `/loans/${ask.id}/decide`, o, { approve: false })).status).toBe(409);
+    expect((await call("POST", `/loans/${ask.id}/pay`, till, { shiftId: shift })).body).toMatchObject({ status: "open", leftMinor: 80000 });
+    expect((await call("POST", `/loans/${ask.id}/pay`, till, { shiftId: shift })).body.leftMinor).toBe(80000);
+    expect(await drawerOf()).toBe(-80000);
+  });
+
+  it("counts money taken back on the owner's page in the treasury's cash, not in a drawer", async () => {
+    const before = (await call("GET", "/money/summary", o)).body;
+    const cash = (b: { accounts: { cash: { balanceMinor: number } } }) => b.accounts.cash.balanceMinor;
+    const l = (await call("GET", "/loans?q=" + encodeURIComponent("سالم"), o)).body.rows.find((x: { kind: string; status: string; approvedByName: string }) => x.kind === "loan" && x.approvedByName === "المدير");
+    expect((await call("POST", `/loans/${l.id}/moves`, o, { id: randomUUID(), amountMinor: 20000 })).body.leftMinor).toBe(60000);
+    const after = (await call("GET", "/money/summary", o)).body;
+    expect(cash(after) - cash(before)).toBe(20000);
+  });
+
+  it("tells the owner's phone once when a loan's day came, and again after the day changes", async () => {
+    const id = randomUUID();
+    await call("POST", "/loans", till, { id, kind: "loan", personName: "منير", phone: "0911234567", amountMinor: 10000, shiftId: shift });
+    await db.query(`UPDATE loans SET due_on = CURRENT_DATE - 2 WHERE id = $1`, [id]);
+    const list = (await call("GET", "/loans", o)).body;
+    expect(list.rows[0], JSON.stringify(list.rows[0])).toMatchObject({ id, overdue: true });
+    expect(list.totals).toMatchObject({ overdue: 1, overdueMinor: 10000 });
+    await call("GET", "/dashboard", o);
+    const due = async () => (await db.query(`SELECT title FROM alerts WHERE tenant_id = $1 AND kind = 'loan_due' AND data->>'loanId' = $2`, [tid, id])).rows;
+    expect((await due()).map((x) => x.title)).toEqual(["سلفة منير فات موعدها"]);
+    expect((await call("PATCH", `/loans/${id}`, o, { dueOn: "2031-05-05" })).body).toMatchObject({ dueOn: "2031-05-05", overdue: false });
+    expect(await due()).toEqual([]);
+  });
+
+  it("reports what was lent and brought back, and puts the new tables in backups and resets", async () => {
+    const day = new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Tripoli" });
+    const r = (await call("GET", `/loans/report?from=${day}&to=${day}`, o)).body;
+    expect(r.lent.amountMinor).toBe(40000 + 5000 + 80000 + 80000 + 10000);
+    expect(r.back.amountMinor).toBe(40000 + 20000);
+    expect(r.depositsIn.amountMinor).toBe(100000 + 80000);
+    expect(r.depositsOut.amountMinor).toBe(30000);
+    expect(r.closed).toBe(1);
+    const backup = await call("GET", "/backup", o);
+    expect(backup.status).toBe(200);
+  });
+});

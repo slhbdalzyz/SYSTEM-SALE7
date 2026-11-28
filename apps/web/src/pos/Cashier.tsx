@@ -30,6 +30,8 @@ import { printPage } from "../hardware/pageInvoice";
 import { loadPrinterSettings } from "../hardware/printer";
 import { CameraScanner, hasCamera } from "../hardware/CameraScanner";
 import { QuickPad, visibleKeys } from "./quickpad";
+import { LoanDialog } from "./loans";
+import type { LoanMoveKind } from "../localdb";
 
 type Dialog =
   | { kind: "pay" }
@@ -50,6 +52,7 @@ type Dialog =
   | { kind: "xreport"; data: ReceiptData }
   | { kind: "camera" }
   | { kind: "drawer" }
+  | { kind: "loans" }
   | { kind: "prefs" }
   | { kind: "variant"; groupId: string; times: number }
   | { kind: "rx" }
@@ -550,6 +553,15 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
     focusScan();
   }
 
+  /** A loan or deposit moved cash: kept for the shift (the server records the drawer move itself). */
+  async function loanMove(loan: LoanMoveKind, amountMinor: number, reason: string) {
+    const at = new Date().toISOString();
+    const into = loan === "loan_back" || loan === "deposit_in";
+    await db.sales.put({ id: crypto.randomUUID(), number: into ? "إيداع" : "سحب", shiftId: shift?.id ?? null, createdAt: at, totalMinor: 0, cashInMinor: into ? amountMinor : -amountMinor, changeMinor: 0, cashierName, input: null, kind: "drawer", reason, loan });
+    void openDrawer().catch(() => undefined);
+    void syncNow();
+  }
+
   function pickCustomer(c: CatalogCustomer | null) {
     const from = tierOf(customer), to = tierOf(c);
     if (from !== to) setLines((ls) => repriceFor(ls, from, to));
@@ -935,6 +947,7 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
       case "reprint": return <button key={b} onClick={() => receipt && void print({ ...receipt, copy: true }, false)} disabled={!receipt}>إعادة طباعة <kbd>{kbd("reprint")}</kbd></button>;
       case "a4": return <button key={b} onClick={printA4} disabled={!receipt?.sale}>🖨 فاتورة A4</button>;
       case "drawerOpen": return <button key={b} onClick={() => void drawer()}>فتح الدرج <kbd>{kbd("drawerOpen")}</kbd></button>;
+      case "loans": return mods.loans ? <button key={b} onClick={() => setDialog({ kind: "loans" })} disabled={!shift}>🤝 سلف وأمانات</button> : null;
       case "drawerMove": return <button key={b} onClick={() => setDialog({ kind: "drawer" })} disabled={!shift}>💵 إيداع / سحب <kbd>Alt+D</kbd></button>;
       case "void": return <button key={b} onClick={voidCart} disabled={!lines.length} className="danger">إلغاء الفاتورة</button>;
       case "keys": return <button key={b} onClick={() => setDialog({ kind: "keys" })} className="ghost">⌨️ الاختصارات <kbd>{kbd("help")}</kbd></button>;
@@ -1350,6 +1363,17 @@ export function Cashier({ go }: { go: (s: Screen) => void }) {
             <button className="primary" onClick={() => { setDialog(null); focusScan(); }}>رجوع للبيع</button>
           </div>
         </Modal>
+      )}
+      {dialog?.kind === "loans" && (
+        <LoanDialog shiftId={shift?.id ?? null} customer={customer} shop={shop} onMoved={loanMove}
+          onPrint={(loan) => void (async () => {
+            const data: ReceiptData = { storeName: device?.storeName ?? "", shop, deviceName: device?.name ?? "", cashierName, loan };
+            setSlip(data);
+            await new Promise((ok) => setTimeout(ok, 60));
+            await print(data, false);
+            setSlip(null);
+          })()}
+          onClose={() => { setDialog(null); focusScan(); }} />
       )}
       {dialog?.kind === "drawer" && <DrawerDialog onDone={(k, m, r) => void drawerMove(k, m, r)} onClose={() => { setDialog(null); focusScan(); }} />}
       {dialog?.kind === "rx" && (

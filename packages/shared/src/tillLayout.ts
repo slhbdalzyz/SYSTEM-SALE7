@@ -13,14 +13,14 @@ export type TillLayout = (typeof TILL_LAYOUTS)[number];
 /** The cashier's buttons, by id, in the default order. */
 export const TILL_BUTTONS = [
   "qty", "price", "discount", "remove", "alternatives", "quote", "deal", "kit", "note", "hold", "held",
-  "customer", "return", "reprint", "a4", "drawerOpen", "drawerMove", "void", "keys",
+  "customer", "return", "reprint", "a4", "drawerOpen", "drawerMove", "loans", "void", "keys",
 ] as const;
 export type TillButton = (typeof TILL_BUTTONS)[number];
 export const TILL_BUTTON_LABELS: Record<TillButton, string> = {
   qty: "الكمية", price: "تعديل السعر", discount: "خصم على الفاتورة", remove: "حذف الصنف", alternatives: "البدائل",
   quote: "عرض سعر", deal: "مشروع / توصيل", kit: "قائمة جاهزة", note: "ملاحظة", hold: "تعليق", held: "الفواتير المعلقة",
   customer: "العميل / تسديد", return: "مرتجع", reprint: "إعادة طباعة", a4: "طباعة A4", drawerOpen: "فتح الدرج",
-  drawerMove: "إيداع / سحب", void: "إلغاء الفاتورة", keys: "الاختصارات",
+  drawerMove: "إيداع / سحب", loans: "سلف وأمانات", void: "إلغاء الفاتورة", keys: "الاختصارات",
 };
 
 /** Keyboard actions the owner can move to another key. */

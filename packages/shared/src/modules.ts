@@ -20,6 +20,7 @@ export const MODULES = [
   { key: "quotes", group: "selling", icon: "📄", label: "عروض الأسعار", hint: "عرض سعر يتطبع أو يتبعت واتساب، ويتفتح برقمه وقت الشراء." },
   { key: "delivery", group: "selling", icon: "🚚", label: "المشاريع والتوصيل", hint: "المشروع وعنوان التوصيل على الفاتورة، ومتابعة التوصيل." },
   { key: "installments", group: "selling", icon: "📆", label: "الأقساط", hint: "البيع بالتقسيط، الأقساط المتأخرة، والتذكير بالواتساب." },
+  { key: "loans", group: "selling", icon: "🤝", label: "السلف والأمانات", hint: "فلوس تطلع من الدرج سلفة وترجع، أو فلوس يحطها حد عندك ويرفعها بعدين، كل واحدة باسم صاحبها." },
   { key: "kits", group: "selling", icon: "🎒", label: "القوائم الجاهزة", hint: "قائمة مدرسية، طقم، بوكس هدية: تنزل على الفاتورة بضغطة." },
   { key: "recipes", group: "making", icon: "🧪", label: "الوصفات والتركيبات", hint: "مكونات كل صنف أو خدمة: البيع ينقص المكونات وتعرف التكلفة الحقيقية." },
   { key: "orders", group: "making", icon: "📝", label: "الطلبيات المسبقة", hint: "طلبية بعربون وموعد تسليم، ورسالة للزبون لما تجهز." },
@@ -51,6 +52,7 @@ const STARTER: Record<string, ModuleKey[]> = {
 
 /** The shop's features: what its kind starts with, changed by what the owner turned on or off. */
 export function shopModules(businessType: string | null | undefined, saved?: Partial<Record<string, boolean>> | null): Modules {
-  const start = new Set<string>(STARTER[businessType ?? "grocery"] ?? STARTER.other);
+  // Lending from the drawer and keeping money for people happens in every kind of shop.
+  const start = new Set<string>([...(STARTER[businessType ?? "grocery"] ?? STARTER.other), "loans"]);
   return Object.fromEntries(MODULES.map((m) => [m.key, typeof saved?.[m.key] === "boolean" ? !!saved[m.key] : start.has(m.key)])) as Modules;
 }

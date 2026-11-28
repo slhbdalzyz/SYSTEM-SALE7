@@ -1,7 +1,7 @@
 import Dexie, { type Table } from "dexie";
 import type { CatalogCustomer, CatalogProduct, SaleInput } from "@pos/shared";
 
-export type OutboxKind = "shift_open" | "sale" | "shift_close" | "drawer" | "kitchen";
+export type OutboxKind = "shift_open" | "sale" | "shift_close" | "drawer" | "kitchen" | "loan" | "loan_move";
 
 export interface OutboxItem {
   seq?: number;
@@ -27,7 +27,11 @@ export interface LocalSale {
   kind?: "sale" | "return" | "payment" | "drawer";
   /** A drawer move: why the money went in or out. */
   reason?: string;
+  /** A drawer move that is a loan's or a deposit's: counted apart in the shift report. */
+  loan?: LoanMoveKind;
 }
+
+export type LoanMoveKind = "loan_out" | "loan_back" | "deposit_in" | "deposit_out";
 
 export interface LocalShift {
   id: string;

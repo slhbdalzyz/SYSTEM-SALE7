@@ -35,6 +35,7 @@ import { ExportCard, LocalWipeCard, ResetCard } from "../owner/Fresh";
 import { setPreferredView } from "../owner/Owner";
 import { Payroll } from "./Payroll";
 import { Money } from "./Money";
+import { Loans } from "./Loans";
 import { MyPay } from "./MyPay";
 import { ShopSettings } from "./ShopSettings";
 import { Invoices } from "./Invoices";
@@ -61,7 +62,7 @@ const NAV = [
   { group: "", items: { home: ["🏠", "لوحة التحكم"], paper: ["📒", "من الدفتر للنظام"], reports: ["📊", "التقارير"], alerts: ["🔔", "التنبيهات"] } },
   { group: "المخزون", items: { products: ["📦", "الأصناف والأقسام"], purchasing: ["🚚", "المشتريات والموردين"], branches: ["🏬", "الفروع والتحويلات"], counts: ["📋", "جرد المخزون"], labels: ["🏷️", "ملصقات الباركود"], quick: ["🔘", "أزرار الكاشير"], butcher: ["🔪", "أسعار اليوم والتقطيع"], restaurant: ["🍽️", "المطعم: الطاولات والوصفات"], electronics: ["📱", "الأجهزة والصيانة"], blends: ["🧪", "التركيبات والوصفات"], kits: ["🎒", "القوائم الجاهزة"] } },
   { group: "المبيعات", items: { invoices: ["🧾", "المبيعات والفواتير"], customers: ["👥", "العملاء والديون"], offers: ["🎁", "العروض"], quotes: ["📄", "عروض الأسعار"], orders: ["📝", "الطلبيات المسبقة"], installments: ["📆", "الأقساط"], deliveries: ["🚚", "التوصيل"] } },
-  { group: "المال", items: { money: ["🏦", "الخزينة والأرصدة"], expenses: ["💸", "المصروفات"], zakat: ["🕌", "الزكاة"] } },
+  { group: "المال", items: { money: ["🏦", "الخزينة والأرصدة"], loans: ["🤝", "السلف والأمانات"], expenses: ["💸", "المصروفات"], zakat: ["🕌", "الزكاة"] } },
   { group: "الموظفين", items: { staff: ["🧑‍💼", "الموظفين والصلاحيات"], payroll: ["💰", "الرواتب"], mypay: ["💼", "راتبي"] } },
   { group: "الإدارة", items: { features: ["🧩", "مميزات المحل"], settings: ["⚙️", "الإعدادات"], devices: ["🖥️", "الأجهزة"], audit: ["🕵️", "سجل العمليات"], backup: ["💾", "النسخ الاحتياطي"], subscription: ["⭐", "الاشتراك"], support: ["🛟", "الدعم الفني"] } },
 ] as const;
@@ -72,13 +73,13 @@ const TABS = Object.assign({}, ...NAV.map((g) => g.items), LOCAL ? { subscriptio
 /** What opens each screen. "owner" = the shop owner only; null = everyone (their own pay). */
 const NEEDS: Record<Tab, Permission | "owner" | null> = {
   home: "reports", paper: "owner", reports: "reports", alerts: "alerts", products: "products", purchasing: "purchasing", branches: "branches", counts: "products", labels: "products", quick: "products", butcher: "products", restaurant: "products", electronics: null, blends: "products", kits: "products", quotes: "sales", orders: "sales", installments: "customers", deliveries: "sales",
-  invoices: "sales", features: "settings", settings: "settings", customers: "customers", offers: "offers", expenses: "expenses", money: "money", staff: "staff", payroll: "payroll", mypay: null, devices: "devices",
+  invoices: "sales", features: "settings", settings: "settings", customers: "customers", offers: "offers", expenses: "expenses", money: "money", loans: "money", staff: "staff", payroll: "payroll", mypay: null, devices: "devices",
   backup: "owner", subscription: "owner", audit: "owner", zakat: "owner", support: "settings",
 };
 /** Screens that follow one of the shop's features (🧩 مميزات المحل). */
 const MODULE_OF: Partial<Record<Tab, ModuleKey[]>> = {
   butcher: ["butcher"], restaurant: ["tables"], electronics: ["serials", "repairs"], blends: ["recipes"], kits: ["kits"],
-  quotes: ["quotes"], orders: ["orders"], installments: ["installments"], deliveries: ["delivery"],
+  quotes: ["quotes"], orders: ["orders"], installments: ["installments"], deliveries: ["delivery"], loans: ["loans"],
 };
 /** Screens the platform can close for a plan or a shop. */
 const FEATURE_OF: Partial<Record<Tab, Feature>> = { zakat: "zakat", quick: "quick_keys", payroll: "payroll", offers: "offers", counts: "counts" };
@@ -272,6 +273,7 @@ export function Admin({ go }: { go: (s: Screen) => void }) {
           {shown === "staff" && <Staff call={call} isOwner={isOwner} mine={me.user.permissions} />}
           {shown === "payroll" && <Payroll call={call} storeId={store.id} />}
           {shown === "money" && <Money call={call} />}
+          {shown === "loans" && <Loans call={call} shopName={me.tenant.name} />}
           {shown === "mypay" && <MyPay token={session.adminToken} />}
           {shown === "subscription" && (LOCAL ? <LocalLicense call={call} onChange={loadLic} /> : <Subscription call={call} />)}
           {shown === "support" && <Support call={call} isOwner={isOwner} />}

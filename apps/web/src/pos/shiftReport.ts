@@ -1,6 +1,6 @@
 import { formatMoney } from "@pos/shared";
 import { computeLine, computeTotals, type PaymentMethod } from "@pos/shared";
-import type { LocalSale } from "../localdb";
+import type { LoanMoveKind, LocalSale } from "../localdb";
 
 /** What a shift did, worked out on the till from its own sales, so it prints even offline. */
 export interface ShiftReport {
@@ -18,6 +18,8 @@ export interface ShiftReport {
   debtPaidCashMinor: number;
   /** Money put into or taken out of the drawer during the shift. */
   drawerMoves?: { kind: "in" | "out"; amountMinor: number; reason: string }[];
+  /** Loans out and back, deposits in and out: in the drawer's count, but not a shortage or a sale. */
+  loans?: Record<LoanMoveKind, number>;
   expectedCashMinor: number;
   countedCashMinor: number;
   items: { name: string; qtyMilli: number; totalMinor: number }[];
@@ -58,6 +60,7 @@ export function zText(z: ShiftReport, who: { shop: string; device: string; cashi
     `من ${t(z.openedAt)} لين ${t(z.closedAt)}`,
     `المبيعات: ${z.sales} فاتورة · ${m(z.salesMinor)}`,
     ...(z.returns ? [`المرتجعات: ${z.returns} · ${m(z.returnsMinor)}`] : []),
+    ...loanLines(z),
     `الكاش المتوقع: ${m(z.expectedCashMinor)}`,
     `الكاش الموجود: ${m(z.countedCashMinor)}`,
     diff === 0 ? "الدرج مطابق ✓" : `${diff > 0 ? "زيادة" : "عجز"}: ${m(Math.abs(diff))}`,
@@ -70,16 +73,29 @@ export function zText(z: ShiftReport, who: { shop: string; device: string; cashi
   return lines.join("\n");
 }
 
+export const LOAN_MOVE_LABELS: Record<LoanMoveKind, string> = { loan_out: "سلف طلعت", loan_back: "سلف رجعت", deposit_in: "أمانات دخلت", deposit_out: "أمانات انرفعت" };
+
+/** The shift's loans and deposits, one line each, with the sign they had on the drawer. */
+export function loanLines(z: Pick<ShiftReport, "loans">): string[] {
+  if (!z.loans) return [];
+  return (Object.entries(z.loans) as [LoanMoveKind, number][]).filter(([, v]) => v).map(([k, v]) => `${LOAN_MOVE_LABELS[k]}: ${k === "loan_out" || k === "deposit_out" ? "−" : "+"}${formatMoney(v)}`);
+}
+
 export function shiftReport(shift: { openedAt: string; openingCashMinor: number }, list: LocalSale[], countedCashMinor: number, closedAt = new Date().toISOString()): ShiftReport {
   const byMethod: Partial<Record<PaymentMethod, number>> = {};
   const items = new Map<string, { name: string; qtyMilli: number; totalMinor: number }>();
   const drawerMoves: NonNullable<ShiftReport["drawerMoves"]> = [];
+  const loans: Record<LoanMoveKind, number> = { loan_out: 0, loan_back: 0, deposit_in: 0, deposit_out: 0 };
   let sales = 0, salesMinor = 0, discountMinor = 0, promoMinor = 0, returns = 0, returnsMinor = 0, debtPaidCashMinor = 0, cash = 0;
   for (const s of list) {
     cash += s.cashInMinor - s.changeMinor;
     if (s.kind === "return") {
       returns++;
       returnsMinor += -s.totalMinor;
+      continue;
+    }
+    if (s.kind === "drawer" && s.loan) {
+      loans[s.loan] += Math.abs(s.cashInMinor);
       continue;
     }
     if (s.kind === "drawer") {
@@ -108,7 +124,7 @@ export function shiftReport(shift: { openedAt: string; openingCashMinor: number 
   }
   return {
     openedAt: shift.openedAt, closedAt, openingCashMinor: shift.openingCashMinor, sales, salesMinor, byMethod, discountMinor, promoMinor,
-    returns, returnsMinor, debtPaidCashMinor, drawerMoves, expectedCashMinor: shift.openingCashMinor + cash, countedCashMinor,
+    returns, returnsMinor, debtPaidCashMinor, drawerMoves, ...(Object.values(loans).some(Boolean) ? { loans } : {}), expectedCashMinor: shift.openingCashMinor + cash, countedCashMinor,
     items: [...items.values()].sort((a, b) => b.totalMinor - a.totalMinor).slice(0, 10),
   };
 }

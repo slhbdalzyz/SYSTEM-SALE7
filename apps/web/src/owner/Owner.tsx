@@ -1,6 +1,6 @@
 import { OpenShifts } from "../admin/ShiftCard";
 import { useCallback, useEffect, useState } from "react";
-import { formatMoney, formatQty } from "@pos/shared";
+import { formatMoney, formatQty, shopModules } from "@pos/shared";
 import { api, ApiError } from "../api";
 import { session } from "../session";
 import type { Screen } from "../App";
@@ -10,6 +10,7 @@ import { Reports } from "../admin/Reports";
 import { Alerts, ago } from "./Alerts";
 import { DeviceAccess, PendingDevices } from "../admin/DeviceAccess";
 import { AlertSettings, BackupCard, RestoreCard } from "./Settings";
+import { PhoneLoans } from "./PhoneLoans";
 
 export interface Dashboard {
   date: string;
@@ -111,6 +112,7 @@ export function Owner({ go }: { go: (s: Screen) => void }) {
       </header>
       <main className="owner-main">
         {tab === "home" && me.user.role === "owner" && <PendingDevices call={call} />}
+        {tab === "home" && (me.user.role === "owner" || me.user.permissions?.includes("money")) && shopModules(me.tenant.business_type, me.tenant.settings?.modules).loans && <PhoneLoans call={call} shopName={me.tenant.name} />}
         {tab === "home" && <Home call={call} storeId={current} onUnread={setUnread} />}
         {tab === "reports" && <Reports call={call} storeId={current ?? open[0].id} stores={open} />}
         {tab === "alerts" && <Alerts call={call} onRead={setUnread} />}

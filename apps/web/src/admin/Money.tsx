@@ -22,6 +22,7 @@ const SOURCE: Record<string, string> = {
   sale: "مبيعات", refund: "مرتجعات", customer: "تحصيل من العملاء", supplier: "دفع للموردين", purchase: "مشتريات نقدية",
   expense: "مصروفات", opening: "رصيد افتتاحي", deposit: "إيداع", withdrawal: "سحب", transfer: "تحويل بين الحسابات", adjust: "تسوية بعد الجرد",
   drawer_in: "إيداع في درج الكاشير", drawer_out: "سحب من درج الكاشير", settlement: "تسوية بطاقات",
+  loan_out: "سلفة طلعت من الخزينة", loan_back: "رجوع سلفة للخزينة", deposit_in: "أمانة دخلت الخزينة", deposit_out: "أمانة انرفعت من الخزينة",
 };
 
 const today = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Tripoli" }).format(new Date());

@@ -37,6 +37,25 @@ export const shiftSettingsSchema = z.object({
 });
 export type ShiftSettings = z.infer<typeof shiftSettingsSchema>;
 
+export const DEFAULT_LOAN_MESSAGE = "السلام عليكم {name}،\nسجّلنا عندنا في {shop}: {what} بقيمة {amount}{due}.\nالباقي: {left}. شكراً 🌹";
+export const DEFAULT_LOAN_REMINDER = "السلام عليكم {name}،\nنذكّركم بالسلفة اللي عند {shop}: الباقي {left}{due}.\nشكراً لتعاملكم معنا 🌹";
+
+export const loanSettingsSchema = z.object({
+  /** A cashier lends more than this (in dirham) only with a manager's PIN or the owner's yes from the phone; 0 = no limit. */
+  cashierLimitMinor: z.number().int().min(0).max(1e12).default(0),
+  /** Days a loan is given when the cashier doesn't pick a day; 0 = no due day. */
+  defaultDays: z.number().int().min(0).max(365).default(7),
+  /** Loans at or over this (in dirham) print a slip to be signed; 0 = only when the cashier asks. */
+  slipOverMinor: z.number().int().min(0).max(1e12).default(0),
+  /** The owner's phone hears of a loan whose day came and that isn't back. */
+  alertOverdue: z.boolean().default(true),
+  /** The WhatsApp message after a loan or a deposit; {name} {shop} {what} {amount} {due} {left}. */
+  message: z.string().trim().min(1).max(600).default(DEFAULT_LOAN_MESSAGE).catch(DEFAULT_LOAN_MESSAGE),
+  /** The WhatsApp reminder of a loan that is due. */
+  reminder: z.string().trim().min(1).max(600).default(DEFAULT_LOAN_REMINDER).catch(DEFAULT_LOAN_REMINDER),
+});
+export type LoanSettings = z.infer<typeof loanSettingsSchema>;
+
 /**
  * The shop's own settings: who it is (printed on every receipt), its bank account, what the
  * receipt shows, and how the till behaves. One document per shop; every field has a default so
@@ -95,6 +114,8 @@ export const shopSettingsSchema = z.object({
   }).default({}),
   /** How a shift closes. Every option is off until the owner turns it on in «🧾 قفل الوردية». */
   shift: shiftSettingsSchema.default({}),
+  /** Cash lent from the drawer and money left with the shop («🤝 السلف والأمانات»). */
+  loans: loanSettingsSchema.default({}),
   /** The cashier screen: its layout for the shop, a till or a cashier, its buttons and keys («🖥 واجهة الكاشير»). */
   tillLayout: tillLayoutSchema.default({}),
   /** Side-menu pages the owner put away once done with them. */
